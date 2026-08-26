@@ -1192,7 +1192,7 @@ function AddressSearch({ value, onChange, picked, onPick, compact }) {
 
 function Onboarding() {
   const { state, dispatch } = useStore();
-  const [step, setStep] = useState(0); // 0 welcome, 1 map, 2 contact, 3 pay
+  const [step, setStep] = useState(state.userId ? 1 : 0); // signed-in users skip the welcome hero
   const [prop, setProp] = useState(null); // { address, center, features, sqft, mapImg }
   const [profile, setProfile] = useState({ name: "", phone: "", email: "" });
   const [card, setCard] = useState({ num: "", exp: "", cvc: "" });
@@ -1202,6 +1202,7 @@ function Onboarding() {
   const setV = (k, v) => setValid((s) => ({ ...s, [k]: v }));
 
   const finish = () => {
+    const fp = state.userId ? state.profile : profile; // signed-in users reuse their account details
     const property = {
       id: "p" + Date.now(), label: "Home",
       addr: prop?.address || "Your property",
@@ -1211,8 +1212,8 @@ function Onboarding() {
       features: prop?.features || [], sqft: prop?.sqft || 0, center: prop?.center, mapImg: prop?.mapImg,
       zones: [],
     };
-    dispatch({ type: "ONBOARD_DONE", profile, property, payment: { brand: "Visa", last4: card.num.replace(/\D/g,"").slice(-4) || "4242" } });
-    dispatch({ type: "TOAST", msg: `Welcome, ${profile.name.split(" ")[0]}! You're all set.` });
+    dispatch({ type: "ONBOARD_DONE", profile: fp, property, payment: { brand: "Visa", last4: card.num.replace(/\D/g,"").slice(-4) || "4242" } });
+    dispatch({ type: "TOAST", msg: `Welcome${fp?.name ? ", " + fp.name.split(" ")[0] : ""}! You're all set.` });
   };
 
   const TOTAL = 4;
@@ -1287,7 +1288,7 @@ function Onboarding() {
           <div style={{ height: 14 }} />
           <MapPropertyDesigner existing={prop} saveLabel="Continue"
             onQuote={(sqft) => quoteJob({ jobType: "driveway", sqft }).riderTotal}
-            onDone={(data) => { setProp(data); go(2); }} />
+            onDone={(data) => { setProp(data); go(state.userId ? 3 : 2); }} />
         </Fade>
       )}
 
@@ -3097,6 +3098,7 @@ function IncomingJob({ order }) {
   const toolMatch = state.driver.tools?.includes(order.tool || jt.tool);
   const hazards = (prop?.hazards || []).map(h => MODIFIERS.hazards[h]?.label).filter(Boolean);
   const steep = prop?.grade === "steep";
+  const markedHazards = (prop?.features || []).filter(f => f.geometry?.type === "Point").map(f => f.properties?.label).filter(Boolean);
 
   // 15s auto-decline countdown (jobs are time-sensitive in a storm)
   const [secs, setSecs] = useState(15);
@@ -3171,6 +3173,20 @@ function IncomingJob({ order }) {
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               {steep && <Chip color={C.danger}>Steep hillside</Chip>}
               {hazards.map((h, i) => <Chip key={i} color={C.danger}>{h}</Chip>)}
+            </div>
+          </div>
+        )}
+
+        {/* customer-marked hazards (dropped pins) — avoid these */}
+        {markedHazards.length > 0 && (
+          <div style={{ padding: "11px 12px", borderRadius: 11, marginBottom: 12,
+            background: C.danger + "12", border: `1px solid ${C.danger}44` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 7 }}>
+              <span style={{ fontSize: 14 }}>🚧</span>
+              <span style={{ font: `700 11px ${FB}`, color: C.danger, letterSpacing: ".05em" }}>AVOID — CUSTOMER-MARKED</span>
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {markedHazards.map((h, i) => <Chip key={i} color={C.danger}>🚧 {h}</Chip>)}
             </div>
           </div>
         )}
