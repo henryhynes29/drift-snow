@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, createContext, useContext, useReducer } from "react";
+import MapPropertyDesigner, { staticMapUrl } from "./PropertyMap.jsx";
 
 // ============================================================
 // DRIFT — two-sided snowplow marketplace prototype
@@ -210,7 +211,7 @@ function areaQuote(sqft, surge = BACKEND_SURGE, property = null) {
 }
 
 function quoteProperty(property, surge = BACKEND_SURGE) {
-  const sqft = zonesToSqFt(property?.zones);
+  const sqft = property?.sqft || zonesToSqFt(property?.zones);
   if (sqft > 0) return quoteJob({ jobType: "driveway", sqft, property, surge });
   return quote(property?.size || SIZES[1], surge);
 }
@@ -914,7 +915,12 @@ const canvasBtn = { font: `600 11px ${FB}`, padding: "8px 12px", borderRadius: 9
   background: "rgba(10,22,38,.88)", backdropFilter: "blur(6px)", color: C.ice, border: `1px solid ${C.line}` };
 
 // small read-only property thumbnail
-function PropertyThumb({ zones }) {
+function PropertyThumb({ zones, img }) {
+  if (img) return (
+    <div style={{ width: 58, height: 40, borderRadius: 8, overflow: "hidden", border: `1px solid ${C.line}`, flexShrink: 0 }}>
+      <img src={img} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+    </div>
+  );
   const poly = pts => pts.map(p => `${p.x},${p.y}`).join(" ");
   const norm = (z) => {
     const legacy = Math.max(...z.pts.map(p => p.x)) <= 100 && !z._n;
@@ -1175,11 +1181,8 @@ function AddressSearch({ value, onChange, picked, onPick, compact }) {
 
 function Onboarding() {
   const { state, dispatch } = useStore();
-  const [step, setStep] = useState(0); // 0 welcome,1 addr,2 size,3 outline,4 contact,5 pay
-  const [addr, setAddr] = useState("");
-  const [picked, setPicked] = useState(null);
-  const [size, setSize] = useState(SIZES[1]);
-  const [zones, setZones] = useState(null);
+  const [step, setStep] = useState(0); // 0 welcome, 1 map, 2 contact, 3 pay
+  const [prop, setProp] = useState(null); // { address, center, features, sqft, mapImg }
   const [profile, setProfile] = useState({ name: "", phone: "", email: "" });
   const [card, setCard] = useState({ num: "", exp: "", cvc: "" });
   const [valid, setValid] = useState({});
@@ -1190,16 +1193,18 @@ function Onboarding() {
   const finish = () => {
     const property = {
       id: "p" + Date.now(), label: "Home",
-      addr: picked ? picked.full : addr,
-      lat: picked?.lat, lng: picked?.lng, hood: picked?.hoodLabel,
-      grade: picked?.gradeHint || "flat", hazards: [], shared: false,
-      size, zones: zones || SEED_PROPERTIES[0].zones,
+      addr: prop?.address || "Your property",
+      lat: prop?.center?.lat, lng: prop?.center?.lng,
+      grade: "flat", hazards: [], shared: false,
+      size: SIZES[1],
+      features: prop?.features || [], sqft: prop?.sqft || 0, center: prop?.center, mapImg: prop?.mapImg,
+      zones: [],
     };
     dispatch({ type: "ONBOARD_DONE", profile, property, payment: { brand: "Visa", last4: card.num.replace(/\D/g,"").slice(-4) || "4242" } });
     dispatch({ type: "TOAST", msg: `Welcome, ${profile.name.split(" ")[0]}! You're all set.` });
   };
 
-  const TOTAL = 6;
+  const TOTAL = 4;
 
   return (
     <div style={{ padding: "0 20px", flex: 1, display: "flex", flexDirection: "column" }}>
@@ -1264,64 +1269,20 @@ function Onboarding() {
       )}
 
       {step === 1 && (
-        <Fade k="a">
-          <Eyebrow>Step 1 · Your address</Eyebrow>
-          <h2 style={h2}>Where do we plow?</h2>
-          <p style={sub}>Start typing — we'll find it and read the terrain.</p>
-          <div style={{ marginTop: 16 }}>
-            <AddressSearch value={addr} onChange={(v) => { setAddr(v); setPicked(null); }}
-              picked={picked} onPick={(a) => { setPicked(a); setAddr(a.full); }} />
-          </div>
-          <div style={{ position: "sticky", bottom: 16, marginTop: 24 }}>
-            <Btn full onClick={() => go(2)} disabled={!picked}>
-              {picked ? "Continue" : "Pick your address"}</Btn>
-          </div>
+        <Fade k="map">
+          <Eyebrow>Step 1 · Map your property</Eyebrow>
+          <h2 style={h2}>Draw what needs clearing</h2>
+          <p style={sub}>Search your address, then outline the plow &amp; push zones right on the satellite image. We measure it and set the price automatically.</p>
+          <div style={{ height: 14 }} />
+          <MapPropertyDesigner existing={prop} saveLabel="Continue"
+            onQuote={(sqft) => quoteJob({ jobType: "driveway", sqft }).riderTotal}
+            onDone={(data) => { setProp(data); go(2); }} />
         </Fade>
       )}
 
       {step === 2 && (
-        <Fade k="s">
-          <Eyebrow>Step 2 · Driveway size</Eyebrow>
-          <h2 style={h2}>How big is it?</h2>
-          <p style={sub}>Pick the closest match. You can change this anytime.</p>
-          <div style={{ display: "grid", gap: 10, margin: "16px 0" }}>
-            {SIZES.map(s => {
-              const sq = quote(s);
-              return (
-                <Card key={s.id} active={size.id === s.id} onClick={() => setSize(s)}
-                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: 14 }}>
-                  <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                    <span style={{ fontSize: 22 }}>{s.id === "s" ? "🚗" : s.id === "m" ? "🚙" : s.id === "l" ? "🚐" : "🏢"}</span>
-                    <div><div style={{ font: `700 15px ${FB}` }}>{s.label}</div>
-                      <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 2 }}>{s.desc}</div></div>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <div style={{ font: `700 18px ${FD}`, color: size.id === s.id ? C.amber : C.ice }}>${sq.riderTotal}</div>
-                    <div style={{ font: `500 11px ${FB}`, color: C.mistDim }}>~{s.mins} min</div></div>
-                </Card>
-              );
-            })}
-          </div>
-          <div style={{ position: "sticky", bottom: 16 }}><Btn full onClick={() => go(3)}>Continue</Btn></div>
-        </Fade>
-      )}
-
-      {step === 3 && (
-        <Fade k="o">
-          <Eyebrow>Step 3 · Map it once</Eyebrow>
-          <h2 style={h2}>Draw your zones</h2>
-          <p style={sub}>Outline where to plow and where to push the snow. Drivers follow this exactly — every storm.</p>
-          <div style={{ height: 12 }} />
-          <PropertyDesigner existing={zones} onDone={(z) => { setZones(z); go(4); }} />
-          <button onClick={() => { setZones(SEED_PROPERTIES[0].zones); go(4); }}
-            style={{ width: "100%", marginTop: 10, background: "transparent", border: "none", color: C.mist,
-              font: `600 13px ${FB}`, cursor: "pointer", padding: 8 }}>Skip — I'll map it later</button>
-        </Fade>
-      )}
-
-      {step === 4 && (
         <Fade k="c">
-          <Eyebrow>Step 4 · Contact</Eyebrow>
+          <Eyebrow>Step 2 · Contact</Eyebrow>
           <h2 style={h2}>Who's it for?</h2>
           <p style={sub}>So your driver can reach you and you get updates.</p>
           <div style={{ display: "grid", gap: 12, margin: "16px 0" }}>
@@ -1336,14 +1297,14 @@ function Onboarding() {
               placeholder="jane@email.com" onValid={(v) => setV("email", v)} />
           </div>
           <div style={{ position: "sticky", bottom: 16 }}>
-            <Btn full onClick={() => go(5)} disabled={!(valid.name && valid.phone && valid.email)}>Continue</Btn>
+            <Btn full onClick={() => go(3)} disabled={!(valid.name && valid.phone && valid.email)}>Continue</Btn>
           </div>
         </Fade>
       )}
 
-      {step === 5 && (
+      {step === 3 && (
         <Fade k="p">
-          <Eyebrow>Step 5 · Payment</Eyebrow>
+          <Eyebrow>Step 3 · Payment</Eyebrow>
           <h2 style={h2}>Add a card</h2>
           <p style={sub}>You're only charged after a job is done. No storm, no charge.</p>
           {/* live card preview */}
@@ -1487,7 +1448,7 @@ function RiderHome({ go }) {
   const [showSched, setShowSched] = useState(false);
   const [salt, setSalt] = useState(false);
 
-  const sqft = zonesToSqFt(prop?.zones);
+  const sqft = prop?.sqft || zonesToSqFt(prop?.zones);
   // sidewalk length: derive a sensible default from the property, editable later
   const linearFt = prop?.sidewalkFt || 80;
   const q = quoteJob({ jobType, sqft, linearFt, property: prop, salt });
@@ -1634,7 +1595,7 @@ function RiderHome({ go }) {
       {/* property selector */}
       <Card style={{ marginTop: 14, display: "flex", alignItems: "center", justifyContent: "space-between" }} onClick={() => go("props")}>
         <div style={{ display: "flex", gap: 12, alignItems: "center", minWidth: 0 }}>
-          {prop ? <PropertyThumb zones={prop.zones} /> : <span style={{ fontSize: 22 }}>➕</span>}
+          {prop ? <PropertyThumb zones={prop.zones} img={prop.mapImg} /> : <span style={{ fontSize: 22 }}>➕</span>}
           <div style={{ minWidth: 0 }}>
             <div style={{ font: `700 14px ${FB}` }}>{prop ? prop.label : "Add a property"}</div>
             <div style={{ font: `500 12px ${FB}`, color: C.mist, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -2090,7 +2051,7 @@ function RiderProperties() {
   const startNew = () => { setLabel(""); setAddr(""); setGrade("flat"); setHazards([]); setShared(false); setEditing("new"); };
 
   if (editing) {
-    const existing = editing === "new" ? null : editing.zones;
+    const existing = editing === "new" ? null : { center: editing.center, features: editing.features, sqft: editing.sqft, address: editing.addr };
     return (
       <Fade k="edit"><section style={{ paddingTop: 4 }}>
         <button onClick={() => setEditing(null)} style={{ ...miniBtn, marginBottom: 12 }}>‹ Back</button>
@@ -2106,19 +2067,23 @@ function RiderProperties() {
         <SiteDetails grade={grade} setGrade={setGrade} hazards={hazards} setHazards={setHazards} shared={shared} setShared={setShared} />
 
         <div style={{ marginTop: 18 }}>
-          <Eyebrow color={C.plow}>Outline the area</Eyebrow>
+          <Eyebrow color={C.plow}>Map &amp; outline the property</Eyebrow>
           <div style={{ height: 10 }} />
-          <PropertyDesigner existing={existing} onDone={(zones) => {
-            const details = { grade, hazards, shared };
-            if (editing === "new") {
-              const p = { id: "p" + Date.now(), label: label || "Property", addr: addr || "Address", size: SIZES[1], zones, ...details };
-              dispatch({ type: "ADD_PROPERTY", p });
-            } else {
-              dispatch({ type: "UPDATE_PROPERTY", p: { ...editing, zones, ...details } });
-            }
-            dispatch({ type: "TOAST", msg: "Property saved" });
-            setEditing(null);
-          }} />
+          <MapPropertyDesigner existing={existing}
+            onQuote={(sqft) => quoteJob({ jobType: "driveway", sqft, property: { grade, hazards, shared } }).riderTotal}
+            onDone={(data) => {
+              const details = { grade, hazards, shared };
+              const base = { addr: data.address || addr || "Property", center: data.center,
+                features: data.features, sqft: data.sqft, mapImg: data.mapImg, zones: [] };
+              if (editing === "new") {
+                const p = { id: "p" + Date.now(), label: label || "Property", size: SIZES[1], ...base, ...details };
+                dispatch({ type: "ADD_PROPERTY", p });
+              } else {
+                dispatch({ type: "UPDATE_PROPERTY", p: { ...editing, ...base, ...details } });
+              }
+              dispatch({ type: "TOAST", msg: "Property saved" });
+              setEditing(null);
+            }} />
         </div>
       </section></Fade>
     );
@@ -2143,7 +2108,7 @@ function RiderProperties() {
               <Card key={p.id} active={isActive} onClick={() => dispatch({ type: "SET_PROPERTY", p })}
                 style={{ display: "flex", gap: 12, alignItems: "center", justifyContent: "space-between" }}>
                 <div style={{ display: "flex", gap: 12, alignItems: "center", minWidth: 0 }}>
-                  <PropertyThumb zones={p.zones} />
+                  <PropertyThumb zones={p.zones} img={p.mapImg} />
                   <div style={{ minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
                       <span style={{ font: `700 15px ${FB}` }}>{p.label}</span>
@@ -2304,7 +2269,7 @@ function RiderHistory() {
                 <Card key={job.id} style={{ borderColor: C.plow + "44" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
                     <div style={{ display: "flex", gap: 12, alignItems: "center", minWidth: 0 }}>
-                      <PropertyThumb zones={job.property?.zones} />
+                      <PropertyThumb zones={job.property?.zones} img={job.property?.mapImg} />
                       <div style={{ minWidth: 0 }}>
                         <div style={{ font: `700 15px ${FB}` }}>{job.label}</div>
                         <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{job.property?.addr}</div>
@@ -3166,7 +3131,7 @@ function IncomingJob({ order }) {
 
         {/* property map + zones */}
         <div style={{ display: "flex", gap: 12, alignItems: "center", background: C.slate, borderRadius: 12, padding: 12, marginBottom: 12 }}>
-          <PropertyThumb zones={prop?.zones} />
+          <PropertyThumb zones={prop?.zones} img={prop?.mapImg} />
           <div style={{ font: `500 12px ${FB}`, color: C.mist }}>
             <span style={{ color: C.plow }}>{prop?.zones?.filter(z => z.mode === "plow").length || 0} plow</span> ·
             <span style={{ color: C.push }}> {prop?.zones?.filter(z => z.mode === "push").length || 0} push</span> zones mapped
@@ -3330,6 +3295,9 @@ function DriverActiveJob() {
       {/* property map with zones — the driver's instructions */}
       <div style={{ marginTop: 14 }}>
         <Eyebrow color={C.plow}>Property map</Eyebrow>
+        {o.property?.mapImg ? (
+        <img src={o.property.mapImg} alt="Property outline" style={{ marginTop: 8, width: "100%", borderRadius: 14, border: `1px solid ${C.line}`, display: "block" }} />
+        ) : (
         <div style={{ marginTop: 8, position: "relative", borderRadius: 14, overflow: "hidden", border: `1px solid ${C.line}` }}>
           <div style={{ position: "absolute", inset: 0, background: "linear-gradient(115deg,#2c3a2a,#38472f 40%,#2a3526)" }} />
           <svg viewBox="0 0 150 100" preserveAspectRatio="xMidYMid slice" style={{ position: "relative", width: "100%", aspectRatio: "1.7", display: "block" }}>
@@ -3348,6 +3316,7 @@ function DriverActiveJob() {
             })}
           </svg>
         </div>
+        )}
         <div style={{ display: "flex", gap: 12, marginTop: 8, font: `600 11px ${FB}` }}>
           <span style={{ color: C.plow }}>■ Plow these</span><span style={{ color: C.push }}>■ Push snow here</span>
         </div>
