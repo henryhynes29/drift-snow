@@ -57,9 +57,9 @@ const FORECAST = { low: 3, high: 5, when: "Friday night" };
 // basis: "area" (per sqft), "linear" (per ft of walk/curb), or "flat".
 const JOB_TYPES = {
   driveway: { id: "driveway", label: "Driveway plow", icon: "🚜", tool: "Plow truck",
-    basis: "area", base: 35, rate: 0.06, minsPer1000: 22, minMins: 18, blurb: "Clear your drive & apron" },
+    basis: "area", base: 23, rate: 0.03, minsPer1000: 22, minMins: 18, blurb: "Clear your drive & apron" },
   sidewalk: { id: "sidewalk", label: "Sidewalk clear", icon: "🧹", tool: "Snowblower",
-    basis: "linear", base: 20, rate: 0.55, minsPerFt: 0.5, minMins: 15, blurb: "24-hr city ordinance compliance" },
+    basis: "linear", base: 15, rate: 0.35, minsPerFt: 0.5, minMins: 15, blurb: "24-hr city ordinance compliance" },
   digout: { id: "digout", label: "Car dig-out", icon: "🚗", tool: "Snowblower / shovel",
     basis: "flat", base: 45, mins: 25, blurb: "Free your street-parked car after a plow berm" },
   commercial: { id: "commercial", label: "Commercial lot", icon: "🏢", tool: "Skid steer",
@@ -104,7 +104,7 @@ function modifierMultiplier(property) {
 // residential lot so polygon area maps to believable square feet.
 const CANVAS_W = 150, CANVAS_H = 100;
 const PRICING = {
-  base: 35, perSqFt: 0.06, minTotal: 45,
+  base: 23, perSqFt: 0.03, minTotal: 30,
   lotWidthFt: 90, lotHeightFt: 60, minsPer1000: 14,
 };
 
@@ -113,7 +113,7 @@ const PRICING = {
 // the same whether it's a dusting or a blizzard. Riders toggle it on; drivers
 // with salt on their profile see it called out on the job card.
 const SALT = {
-  base: 15, perSqFt: 0.02, perFt: 0.18, mins: 6,
+  rate: 0.15, mins: 6,   // salting adds 15% of the job price
   appliesTo: ["driveway", "sidewalk", "commercial"],
   tool: "Salt / ice-melt",
 };
@@ -166,71 +166,67 @@ const SEED_PROPERTIES = [
 
 const DRIVE_OVERHEAD_MIN = 12;
 
-// ---- Unified quote: composes job type + area/linear + modifiers + depth ----
-// Consumer sees ONE number (riderTotal). All multipliers are folded in silently.
-function quoteJob({ jobType = "driveway", sqft = 0, linearFt = 0, property = null, surge = BACKEND_SURGE, salt = false }) {
+// Your platform cut — taken transparently out of the job total; the driver keeps
+// the rest. This ONE number sets your take rate. No hidden surge, no add-on fee:
+// the customer pays exactly the price they see, and it equals the line items.
+const PLATFORM_RATE = 0.15; // 15% — change this single value to set your cut
+
+// ---- Unified quote: honest, transparent pricing ---------------------------
+// riderTotal = base + area/linear (× site factors) + optional salt. That's it —
+// what the customer sees is what they pay, and the breakdown adds up to it.
+function quoteJob({ jobType = "driveway", sqft = 0, linearFt = 0, property = null, salt = false }) {
   const jt = JOB_TYPES[jobType] || JOB_TYPES.driveway;
-  let preSurge, mins;
+  let base, mins;
   if (jt.basis === "area") {
-    preSurge = jt.base + sqft * jt.rate;
+    base = jt.base + sqft * jt.rate;
     mins = Math.max(jt.minMins, Math.round((sqft / 1000) * jt.minsPer1000));
   } else if (jt.basis === "linear") {
-    preSurge = jt.base + linearFt * jt.rate;
+    base = jt.base + linearFt * jt.rate;
     mins = Math.max(jt.minMins, Math.round(linearFt * jt.minsPerFt));
   } else { // flat
-    preSurge = jt.base;
+    base = jt.base;
     mins = jt.mins;
   }
   const mod = modifierMultiplier(property);
-  preSurge = Math.max(PRICING.minTotal, preSurge * mod);
-  const surgedBase = preSurge * surge;
-  // Optional salting add-on. Priced off the same surface, but never storm-surged
-  // and only offered on surfaces you'd actually salt.
+  base = Math.max(PRICING.minTotal, base * mod);
+  // Optional salting add-on, priced off the same surface.
   const saltable = SALT.appliesTo.includes(jobType);
-  const saltFee = salt && saltable
-    ? Math.round(jt.basis === "area" ? SALT.base + sqft * SALT.perSqFt
-      : jt.basis === "linear" ? SALT.base + linearFt * SALT.perFt
-      : SALT.base)
-    : 0;
+  const saltFee = salt && saltable ? Math.round(base * SALT.rate) : 0; // +15% of the job
   const saltMins = saltFee ? SALT.mins : 0;
-  const fee = surgedBase * 0.15;
-  const total = surgedBase + fee + saltFee;
-  const driverPay = Math.round(surgedBase * SEED_DRIVER.tierPct + saltFee * SEED_DRIVER.tierPct);
+
+  const total = Math.round(base + saltFee);       // what the customer pays
+  const platformNet = Math.round(total * PLATFORM_RATE); // your cut
+  const driverPay = total - platformNet;          // driver keeps the rest
   const hourly = Math.round((driverPay / (mins + saltMins + DRIVE_OVERHEAD_MIN)) * 60);
   return {
     jobType, jt, sqft, linearFt, mod,
     salt: !!saltFee, saltFee, saltable,
-    riderTotal: Math.round(total),
-    fee, surgedBase, preSurge: Math.round(preSurge),
+    riderTotal: total,
+    fee: platformNet, preSurge: Math.round(base),
     driverPay, hourly, mins: mins + saltMins,
-    platformNet: Math.round(total - driverPay),
+    platformNet,
     tool: jt.tool,
   };
 }
 
 // AREA-BASED quote kept as a thin wrapper for existing callers.
-function areaQuote(sqft, surge = BACKEND_SURGE, property = null) {
-  return quoteJob({ jobType: property?.size?.id === "xl" ? "commercial" : "driveway", sqft, property, surge });
+function areaQuote(sqft, property = null) {
+  return quoteJob({ jobType: property?.size?.id === "xl" ? "commercial" : "driveway", sqft, property });
 }
 
-function quoteProperty(property, surge = BACKEND_SURGE) {
+function quoteProperty(property) {
   const sqft = property?.sqft || zonesToSqFt(property?.zones);
-  if (sqft > 0) return quoteJob({ jobType: "driveway", sqft, property, surge });
-  return quote(property?.size || SIZES[1], surge);
+  if (sqft > 0) return quoteJob({ jobType: "driveway", sqft, property });
+  return quote(property?.size || SIZES[1]);
 }
 
 // legacy bucket quote (fallback when nothing is outlined yet)
-function quote(size, surge = BACKEND_SURGE) {
-  const surgedBase = size.base * surge;
-  const fee = surgedBase * 0.15;
-  const total = surgedBase + fee;
-  const driverPay = surgedBase * SEED_DRIVER.tierPct;
+function quote(size) {
+  const total = Math.round(size.base);
+  const platformNet = Math.round(total * PLATFORM_RATE);
+  const driverPay = total - platformNet;
   const hourly = Math.round((driverPay / (size.mins + DRIVE_OVERHEAD_MIN)) * 60);
-  return {
-    riderTotal: Math.round(total),
-    fee, surgedBase, driverPay: Math.round(driverPay), hourly,
-    platformNet: Math.round(total - driverPay),
-  };
+  return { riderTotal: total, fee: platformNet, driverPay, hourly, platformNet };
 }
 
 // ---- Global store (shared between rider & driver) --------------------------
@@ -1686,7 +1682,7 @@ function RiderHome({ go }) {
               {salt ? "Keeps the cleared surface from re-freezing" : "Prevent re-freeze after we clear it"}</div>
           </div>
           <span style={{ font: `700 13px ${FD}`, color: salt ? C.amber : C.mistDim }}>
-            {salt ? `+$${q.saltFee}` : `+$${SALT.base}+`}</span>
+            {salt ? `+$${q.saltFee}` : "+15%"}</span>
         </button>
       )}
 
@@ -2730,8 +2726,8 @@ function DriverOnboarding() {
             Turn on when the snow flies. Take the jobs you want. Cash out the same day.
           </p>
           <div style={{ display: "grid", gap: 10, marginBottom: S.xl }}>
-            {[["💵", "Keep 80% of every job", "Higher tiers keep more"],
-              ["⚡", `${BACKEND_SURGE.toFixed(2)}× pay in storms`, "Deep snow pays more"],
+            {[["💵", "Keep 85% of every job", "We take a small, flat cut"],
+              ["⚡", "Steady work every storm", "Jobs near you when it snows"],
               ["🏦", "Instant cash out", "Stripe Connect, same day"]].map(([i, t, d]) => (
               <div key={t} style={{ display: "flex", gap: 12, alignItems: "center", background: C.slate,
                 border: `1px solid ${C.line}`, borderRadius: 14, padding: 13 }}>
@@ -3033,7 +3029,7 @@ function DriverDrive() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginTop: S.lg }}>
         {[
           { v: `${SNOW_DEPTH_IN}"`, l: "Snow depth", c: C.plow, i: "🌨️" },
-          { v: `${BACKEND_SURGE.toFixed(2)}×`, l: "Pay multiplier", c: C.amber, i: "⚡" },
+          { v: "85%", l: "You keep", c: C.push, i: "💵" },
           { v: "12", l: "Open jobs", c: C.push, i: "📍" },
         ].map((s, i) => (
           <div key={i} style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: "13px 11px" }}>
@@ -3521,8 +3517,8 @@ function DriverEarnings({ onReferral }) {
           <div style={{ font: `700 24px ${FD}`, color: C.ice }}>$92<span style={{ fontSize: 13 }}>/hr</span></div>
           <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 3 }}>Active-job rate at peak</div></div>
         <div style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: S.lg }}>
-          <div style={{ font: `700 24px ${FD}`, color: C.push }}>{BACKEND_SURGE.toFixed(2)}×</div>
-          <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 3 }}>Storm multiplier now</div></div>
+          <div style={{ font: `700 24px ${FD}`, color: C.push }}>85%</div>
+          <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 3 }}>You keep per job</div></div>
       </div>
 
       {/* interactive chart */}
