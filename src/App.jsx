@@ -169,7 +169,26 @@ const DRIVE_OVERHEAD_MIN = 12;
 // Your platform cut — taken transparently out of the job total; the driver keeps
 // the rest. This ONE number sets your take rate. No hidden surge, no add-on fee:
 // the customer pays exactly the price they see, and it equals the line items.
-const PLATFORM_RATE = 0.15; // 15% — change this single value to set your cut
+const PLATFORM_RATE = 0.15; // reference cut; actual driver share comes from tiers below
+
+// Driver payout tiers — drivers keep more of each job as they complete more.
+// Brand-new drivers get a 90% intro on their first few jobs to remove the risk
+// of signing up. Tune the thresholds/percentages freely.
+const INTRO_JOBS = 5, INTRO_PCT = 0.90;
+const DRIVER_TIERS = [
+  { id: "blizzard", label: "Blizzard", pct: 0.85, minJobs: 150 },
+  { id: "veteran",  label: "Veteran",  pct: 0.80, minJobs: 75 },
+  { id: "pro",      label: "Pro",      pct: 0.75, minJobs: 25 },
+  { id: "rookie",   label: "Rookie",   pct: 0.70, minJobs: 0 },
+];
+function driverTier(driver) {
+  const jobs = driver?.jobs || 0;
+  if (jobs < INTRO_JOBS) return { id: "intro", label: "New driver", pct: INTRO_PCT, intro: true, minJobs: 0 };
+  return DRIVER_TIERS.find(t => jobs >= t.minJobs) || DRIVER_TIERS[DRIVER_TIERS.length - 1];
+}
+const driverPct = (driver) => driverTier(driver).pct;
+const driverPayFor = (riderTotal, driver) => Math.round((riderTotal || 0) * driverPct(driver));
+const driverHourlyFor = (dPay, mins) => Math.round((dPay / ((mins || 25) + DRIVE_OVERHEAD_MIN)) * 60);
 
 // ---- Unified quote: honest, transparent pricing ---------------------------
 // riderTotal = base + area/linear (× site factors) + optional salt. That's it —
@@ -2726,7 +2745,7 @@ function DriverOnboarding() {
             Turn on when the snow flies. Take the jobs you want. Cash out the same day.
           </p>
           <div style={{ display: "grid", gap: 10, marginBottom: S.xl }}>
-            {[["💵", "Keep 85% of every job", "We take a small, flat cut"],
+            {[["💵", "Keep up to 85% per job", "Starts at 70% · first jobs pay 90%"],
               ["⚡", "Steady work every storm", "Jobs near you when it snows"],
               ["🏦", "Instant cash out", "Stripe Connect, same day"]].map(([i, t, d]) => (
               <div key={t} style={{ display: "flex", gap: 12, alignItems: "center", background: C.slate,
@@ -3029,7 +3048,7 @@ function DriverDrive() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginTop: S.lg }}>
         {[
           { v: `${SNOW_DEPTH_IN}"`, l: "Snow depth", c: C.plow, i: "🌨️" },
-          { v: "85%", l: "You keep", c: C.push, i: "💵" },
+          { v: `${Math.round(driverPct(state.driver) * 100)}%`, l: "You keep", c: C.push, i: "💵" },
           { v: "12", l: "Open jobs", c: C.push, i: "📍" },
         ].map((s, i) => (
           <div key={i} style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: "13px 11px" }}>
@@ -3090,6 +3109,8 @@ function IncomingJob({ order }) {
   const { state, dispatch } = useStore();
   const q = order.quote;
   const prop = order.property;
+  const dPay = driverPayFor(q.riderTotal, state.driver);
+  const dHourly = driverHourlyFor(dPay, order.size?.mins || q.mins);
   const jt = JOB_TYPES[order.jobType || "driveway"];
   const toolMatch = state.driver.tools?.includes(order.tool || jt.tool);
   const hazards = (prop?.hazards || []).map(h => MODIFIERS.hazards[h]?.label).filter(Boolean);
@@ -3136,8 +3157,8 @@ function IncomingJob({ order }) {
 
         {/* pay — huge */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
-          <div style={{ font: `700 44px ${FD}`, color: C.push, lineHeight: 1 }}>${q.driverPay}</div>
-          <Chip color={C.amber}>${q.hourly}/hr est</Chip>
+          <div style={{ font: `700 44px ${FD}`, color: C.push, lineHeight: 1 }}>${dPay}</div>
+          <Chip color={C.amber}>${dHourly}/hr est</Chip>
         </div>
         <div style={{ font: `500 13px ${FB}`, color: C.mist, marginBottom: 14 }}>{prop?.addr}</div>
 
@@ -3209,7 +3230,7 @@ function IncomingJob({ order }) {
           <button onClick={accept} disabled={!toolMatch} style={{ flex: 1, padding: "18px 0", borderRadius: 14, cursor: toolMatch ? "pointer" : "not-allowed",
             background: toolMatch ? C.push : C.line, color: toolMatch ? "#0A2015" : C.mistDim, border: "none", font: `700 17px ${FB}`,
             boxShadow: toolMatch ? "0 6px 20px rgba(124,242,156,.3)" : "none" }}>
-            Accept · ${q.driverPay}
+            Accept · ${dPay}
           </button>
         </div>
       </div>
@@ -3267,6 +3288,8 @@ function ClusterRoute() {
 function DriverActiveJob() {
   const { state, dispatch } = useStore();
   const o = state.order, q = o.quote;
+  const dPay = driverPayFor(q.riderTotal, state.driver);
+  const dHourly = driverHourlyFor(dPay, o.size?.mins || q.mins);
   const [pos, setPos] = useState({ x: state.driver.x, y: state.driver.y });
   const [eta, setEta] = useState(o.eta || 8);
   const [checks, setChecks] = useState({});
@@ -3294,9 +3317,9 @@ function DriverActiveJob() {
 
   const startPlow = () => dispatch({ type: "ORDER_STATE", patch: { state: "plowing" } });
   const complete = () => {
-    dispatch({ type: "COMPLETE", q, size: o.size });
+    dispatch({ type: "COMPLETE", q: { ...q, driverPay: dPay }, size: o.size });
     dispatch({ type: "ORDER_STATE", patch: { state: "arrived_done", completed: true } });
-    dispatch({ type: "TOAST", msg: `Job complete · $${q.driverPay} added to today` });
+    dispatch({ type: "TOAST", msg: `Job complete · $${dPay} added to today` });
   };
 
   // driver's own completion screen
@@ -3310,8 +3333,8 @@ function DriverActiveJob() {
           <p style={{ ...sub, marginTop: 6 }}>Nice work. Payout added to today's earnings.</p>
         </div>
         <div style={{ background: C.night2, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 14 }}>
-          <Row label="You earned" value={`$${q.driverPay}`} big />
-          <Row label="Effective rate" value={`$${q.hourly}/hr`} amber />
+          <Row label="You earned" value={`$${dPay}`} big />
+          <Row label="Effective rate" value={`$${dHourly}/hr`} amber />
         </div>
         {(o.photos?.before?.length || o.photos?.after?.length) ? (
           <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
@@ -3339,7 +3362,7 @@ function DriverActiveJob() {
           <Eyebrow color={arrived ? C.push : C.amber}>{arrived ? "At the property" : "En route"}</Eyebrow>
           <h2 style={{ font: `700 28px ${FD}`, margin: "6px 0 0" }}>{arrived ? "Plow the job" : `${Math.ceil(eta)} min to site`}</h2>
         </div>
-        <div style={{ font: `700 20px ${FD}`, color: C.push }}>${q.driverPay}</div>
+        <div style={{ font: `700 20px ${FD}`, color: C.push }}>${dPay}</div>
       </div>
 
       {MAP_ENABLED && jobCenter ? (
@@ -3437,7 +3460,7 @@ function DriverActiveJob() {
 
               <div style={{ marginTop: 14 }}>
                 <Btn full onClick={complete} disabled={!allChecked || !(o.photos?.after?.length)}>
-                  {!allChecked ? "Check off all zones" : !(o.photos?.after?.length) ? "Add an after photo" : `Complete job · collect $${q.driverPay}`}
+                  {!allChecked ? "Check off all zones" : !(o.photos?.after?.length) ? "Add an after photo" : `Complete job · collect $${dPay}`}
                 </Btn>
               </div>
             </>
@@ -3517,7 +3540,7 @@ function DriverEarnings({ onReferral }) {
           <div style={{ font: `700 24px ${FD}`, color: C.ice }}>$92<span style={{ fontSize: 13 }}>/hr</span></div>
           <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 3 }}>Active-job rate at peak</div></div>
         <div style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: S.lg }}>
-          <div style={{ font: `700 24px ${FD}`, color: C.push }}>85%</div>
+          <div style={{ font: `700 24px ${FD}`, color: C.push }}>{Math.round(driverPct(state.driver) * 100)}%</div>
           <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 3 }}>You keep per job</div></div>
       </div>
 
@@ -3601,16 +3624,62 @@ function DriverAccount({ onReferral }) {
             <Stars v={d.rating} size={13} /><span style={{ font: `600 12px ${FB}`, color: C.mist }}>{d.rating} · {d.jobs} jobs</span></div></div>
       </div>
 
-      {/* tier */}
-      <Card style={{ marginBottom: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div><Eyebrow>Driver tier</Eyebrow><div style={{ font: `700 20px ${FD}`, color: C.amber, marginTop: 4 }}>{d.tier}</div></div>
-          <Power n={d.power} />
-        </div>
-        <div style={{ marginTop: 12, height: 8, borderRadius: 8, background: C.night, overflow: "hidden" }}>
-          <div style={{ width: "78%", height: "100%", background: `linear-gradient(90deg,${C.amber},${C.push})` }} /></div>
-        <p style={{ font: `500 11px ${FB}`, color: C.mistDim, margin: "8px 0 0" }}>22 more 5★ jobs to keep {d.tier} tier · higher tier = keep more of each job.</p>
-      </Card>
+      {/* tier — how much of each job you keep, and how to climb */}
+      {(() => {
+        const cur = driverTier(d);
+        const jobs = d.jobs || 0;
+        // ladder shown low → high; New-driver bonus sits on top when active
+        const ladder = [...DRIVER_TIERS].slice().reverse(); // rookie, pro, veteran, blizzard
+        const next = ladder.find(t => t.minJobs > jobs && !cur.intro && t.pct > cur.pct)
+          || (cur.intro ? null : ladder.find(t => t.minJobs > jobs));
+        return (
+          <Card style={{ marginBottom: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <div>
+                <Eyebrow>You keep</Eyebrow>
+                <div style={{ font: `800 30px ${FD}`, color: C.push, marginTop: 2, lineHeight: 1 }}>
+                  {Math.round(cur.pct * 100)}%<span style={{ font: `600 13px ${FB}`, color: C.mistDim }}> of each job</span>
+                </div>
+              </div>
+              <Chip color={cur.intro ? C.amber : C.push} solid>{cur.label}</Chip>
+            </div>
+
+            {cur.intro ? (
+              <p style={{ font: `600 12px ${FB}`, color: C.amber, margin: "10px 0 0" }}>
+                Welcome bonus — your first {INTRO_JOBS} jobs pay {Math.round(INTRO_PCT * 100)}%. {Math.max(0, INTRO_JOBS - jobs)} to go, then you start at Rookie (70%) and climb.
+              </p>
+            ) : next ? (
+              <p style={{ font: `500 12px ${FB}`, color: C.mistDim, margin: "10px 0 0" }}>
+                {next.minJobs - jobs} more jobs → <b style={{ color: C.mist }}>{next.label}</b>, keep {Math.round(next.pct * 100)}%.
+              </p>
+            ) : (
+              <p style={{ font: `500 12px ${FB}`, color: C.mistDim, margin: "10px 0 0" }}>
+                Top tier — you keep the most of every job. Nice work.
+              </p>
+            )}
+
+            {/* the ladder */}
+            <div style={{ marginTop: 12, display: "grid", gap: 6 }}>
+              {ladder.map(t => {
+                const active = !cur.intro && cur.id === t.id;
+                const reached = jobs >= t.minJobs;
+                return (
+                  <div key={t.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+                    padding: "8px 11px", borderRadius: 10,
+                    background: active ? C.push + "18" : C.slate,
+                    border: `1px solid ${active ? C.push + "66" : C.line}`, opacity: reached || active ? 1 : 0.6 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ font: `700 12px ${FB}`, color: active ? C.push : C.mist }}>{t.label}</span>
+                      <span style={{ font: `500 10px ${FB}`, color: C.mistDim }}>{t.minJobs}+ jobs</span>
+                    </div>
+                    <span style={{ font: `700 13px ${FD}`, color: active ? C.push : C.mistDim }}>{Math.round(t.pct * 100)}%</span>
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+        );
+      })()}
 
       {/* equipment — determines which job types you can accept */}
       <Card style={{ marginBottom: 14 }}>
