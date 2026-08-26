@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, createContext, useContext, useReducer } from "react";
-import MapPropertyDesigner, { staticMapUrl } from "./PropertyMap.jsx";
+import MapPropertyDesigner, { staticMapUrl, LiveMap, MAP_ENABLED } from "./PropertyMap.jsx";
 
 // ============================================================
 // DRIFT — two-sided snowplow marketplace prototype
@@ -147,7 +147,7 @@ const SEED_DRIVER = {
   name: "Marcus T.", rating: 4.9, jobs: 412, truck: "F-350 · 9ft V-Plow", power: 5,
   tier: "Blizzard", tierPct: 0.80,
   tools: ["Plow truck", "Snowblower", "Snowblower / shovel", "Skid steer", "Roadside kit"], // equipped for all job types
-  x: 62, y: 38,
+  x: 62, y: 38, lng: -92.101, lat: 46.801,
   docs: { license: "verified", insurance: "verified", plate: "verified", w9: "pending" },
   insurancePolicy: { carrier: "North Country Commercial", type: "Commercial GL + Plow", expires: "2026-11-01" },
 };
@@ -1590,7 +1590,16 @@ function RiderHome({ go }) {
         ))}
       </div>
 
-      <StormMap pin blips={[{ id: 1, x: 62, y: 38 }, { id: 2, x: 40, y: 61 }, { id: 3, x: 74, y: 66 }]} />
+      {MAP_ENABLED && prop?.center ? (
+        <LiveMap center={prop.center} height={200} markers={[
+          { lng: prop.center.lng, lat: prop.center.lat, emoji: "📍", size: 28 },
+          { lng: prop.center.lng + 0.0034, lat: prop.center.lat + 0.0016, emoji: "🛻", size: 20 },
+          { lng: prop.center.lng - 0.0041, lat: prop.center.lat - 0.0025, emoji: "🛻", size: 20 },
+          { lng: prop.center.lng + 0.0019, lat: prop.center.lat - 0.0037, emoji: "🛻", size: 20 },
+        ]} />
+      ) : (
+        <StormMap pin blips={[{ id: 1, x: 62, y: 38 }, { id: 2, x: 40, y: 61 }, { id: 3, x: 74, y: 66 }]} />
+      )}
 
       {/* property selector */}
       <Card style={{ marginTop: 14, display: "flex", alignItems: "center", justifyContent: "space-between" }} onClick={() => go("props")}>
@@ -1781,6 +1790,10 @@ function RiderTracking() {
   const [chat, setChat] = useState([{ me: false, t: "On my way — about 8 min." }]);
   const [msg, setMsg] = useState("");
   const arrived = o.state === "plowing" || o.state === "arrived" || eta <= 0;
+  const trackCenter = o.property?.center;
+  const initEta = o.eta || 8;
+  const prog = trackCenter ? Math.min(1, Math.max(0, 1 - eta / initEta)) : 0;
+  const driverLL = trackCenter ? { lng: trackCenter.lng - 0.006 * (1 - prog), lat: trackCenter.lat + 0.004 * (1 - prog) } : null;
 
   // drive toward pin when accepted
   useEffect(() => {
@@ -1834,8 +1847,17 @@ function RiderTracking() {
         <Chip color={C.plow}>{o.property?.label}</Chip>
       </div>
 
-      <StormMap pin blips={[{ id: d.id || "d", x: pos.x, y: pos.y }]} selected={{ id: d.id || "d" }}
-        tracking driverPos={pos} showRoute />
+      {MAP_ENABLED && trackCenter ? (
+        <LiveMap center={trackCenter} height={220}
+          route={[[driverLL.lng, driverLL.lat], [trackCenter.lng, trackCenter.lat]]}
+          markers={[
+            { lng: trackCenter.lng, lat: trackCenter.lat, emoji: "📍", size: 26 },
+            { lng: driverLL.lng, lat: driverLL.lat, emoji: "🛻", size: 26, pulse: true },
+          ]} />
+      ) : (
+        <StormMap pin blips={[{ id: d.id || "d", x: pos.x, y: pos.y }]} selected={{ id: d.id || "d" }}
+          tracking driverPos={pos} showRoute />
+      )}
 
       {/* timeline */}
       <div style={{ margin: "16px 0", background: C.night2, border: `1px solid ${C.line}`, borderRadius: 14, padding: "14px 16px" }}>
@@ -2967,7 +2989,12 @@ function DriverDrive() {
         </div>
       </div>
 
-      <StormMap pin="JOB" blips={[{ id: "me", x: state.driver.x, y: state.driver.y }]} selected={{ id: "me" }} />
+      {MAP_ENABLED && state.driver.lng ? (
+        <LiveMap center={{ lng: state.driver.lng, lat: state.driver.lat }} height={200}
+          markers={[{ lng: state.driver.lng, lat: state.driver.lat, emoji: "🛻", size: 28, pulse: true }]} />
+      ) : (
+        <StormMap pin="JOB" blips={[{ id: "me", x: state.driver.x, y: state.driver.y }]} selected={{ id: "me" }} />
+      )}
 
       {/* big online switch — primary action, oversized for gloves */}
       <button onClick={() => { dispatch({ type: "ONLINE", v: !online }); dispatch({ type: "TOAST", msg: !online ? "You're online — jobs will come in" : "You're offline" }); }}
@@ -3229,6 +3256,10 @@ function DriverActiveJob() {
 
   const arrived = eta <= 0 || o.state === "plowing";
   const allChecked = checkableZones.length === 0 || checkableZones.every((_, i) => checks[i]);
+  const jobCenter = o.property?.center;
+  const initEtaD = o.eta || 8;
+  const progD = jobCenter ? Math.min(1, Math.max(0, 1 - eta / initEtaD)) : 0;
+  const driverLLD = jobCenter ? { lng: jobCenter.lng - 0.006 * (1 - progD), lat: jobCenter.lat + 0.004 * (1 - progD) } : null;
 
   const startPlow = () => dispatch({ type: "ORDER_STATE", patch: { state: "plowing" } });
   const complete = () => {
@@ -3280,7 +3311,16 @@ function DriverActiveJob() {
         <div style={{ font: `700 20px ${FD}`, color: C.push }}>${q.driverPay}</div>
       </div>
 
-      <StormMap pin="SITE" blips={[{ id: "me", x: pos.x, y: pos.y }]} selected={{ id: "me" }} tracking driverPos={pos} showRoute />
+      {MAP_ENABLED && jobCenter ? (
+        <LiveMap center={jobCenter} height={220}
+          route={[[driverLLD.lng, driverLLD.lat], [jobCenter.lng, jobCenter.lat]]}
+          markers={[
+            { lng: jobCenter.lng, lat: jobCenter.lat, emoji: "🏁", size: 24 },
+            { lng: driverLLD.lng, lat: driverLLD.lat, emoji: "🛻", size: 26, pulse: true },
+          ]} />
+      ) : (
+        <StormMap pin="SITE" blips={[{ id: "me", x: pos.x, y: pos.y }]} selected={{ id: "me" }} tracking driverPos={pos} showRoute />
+      )}
 
       {/* navigation / address */}
       <Card style={{ marginTop: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
