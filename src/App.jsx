@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo, createContext, useContext, useReducer } from "react";
 import MapPropertyDesigner, { staticMapUrl, LiveMap, MAP_ENABLED } from "./PropertyMap.jsx";
+import { useAuth } from "./lib/auth.jsx";
+import { supabaseEnabled } from "./lib/supabase.js";
+import { loadProperties, replaceProperties } from "./lib/db.js";
 
 // ============================================================
 // DRIFT — two-sided snowplow marketplace prototype
@@ -248,6 +251,7 @@ const initial = {
   offline: false,                   // storm knocked out signal
   queued: 0,                        // ops waiting to sync
   driver: SEED_DRIVER,
+  userId: null,                     // set when signed in via Supabase
   autoPlow: false,
   autoPlowThreshold: 2,             // inches of snow that triggers auto-dispatch
   earnings: { today: 0, week: 512, jobsToday: 0, payouts: [
@@ -301,6 +305,13 @@ function reducer(s, a) {
       return { ...s, driverReferral: { ...r, invited: r.invited + 1,
         activity: [{ name: a.name || "Invited driver", jobs: 0, status: "signed-up" }, ...r.activity] } };
     }
+    case "HYDRATE_USER": {
+      if (a.role === "driver") return { ...s, userId: a.userId, role: "driver", profile: a.profile || s.profile };
+      const props = a.properties || [];
+      return { ...s, userId: a.userId, role: "rider", profile: a.profile || s.profile,
+        properties: props, activeProperty: props[0] || null, onboarded: props.length > 0 };
+    }
+    case "SIGNED_OUT": return { ...initial };
     case "ONBOARD_DONE": return {
       ...s, onboarded: true,
       profile: a.profile || s.profile,
@@ -2445,6 +2456,7 @@ function PhotoViewer({ job, onClose }) {
 
 function RiderAccount({ onReferral }) {
   const { state, dispatch } = useStore();
+  const auth = useAuth();
   const p = state.profile, pay = state.payment;
   const ref = state.riderReferral;
   return (
@@ -2477,8 +2489,15 @@ function RiderAccount({ onReferral }) {
           <span style={{ color: C.mist }}>›</span>
         </Card>
       </div>
+      {auth?.isConfigured && auth?.session && (
+        <button onClick={async () => { await auth.signOut(); dispatch({ type: "SIGNED_OUT" }); }}
+          style={{ width: "100%", marginTop: 12, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 12,
+            color: C.ice, font: `700 13px ${FB}`, cursor: "pointer", padding: 13 }}>
+          Sign out
+        </button>
+      )}
       <button onClick={() => dispatch({ type: "RESET" })}
-        style={{ width: "100%", marginTop: 18, background: "transparent", border: `1px dashed ${C.line}`, borderRadius: 12,
+        style={{ width: "100%", marginTop: 12, background: "transparent", border: `1px dashed ${C.line}`, borderRadius: 12,
           color: C.mistDim, font: `600 12px ${FB}`, cursor: "pointer", padding: 12 }}>
         ↺ Reset demo (replay onboarding)
       </button>
@@ -3547,7 +3566,8 @@ function DriverEarnings({ onReferral }) {
 }
 
 function DriverAccount({ onReferral }) {
-  const { state } = useStore();
+  const { state, dispatch } = useStore();
+  const auth = useAuth();
   const d = state.driver;
   const ref = state.driverReferral;
   const docRow = (label, status) => {
@@ -3633,6 +3653,14 @@ function DriverAccount({ onReferral }) {
             <div style={{ font: `500 12px ${FB}`, color: C.mist }}>Bring on plow operators you trust</div></div></div>
         <span style={{ color: C.push, fontSize: 18 }}>›</span>
       </Card>
+
+      {auth?.isConfigured && auth?.session && (
+        <button onClick={async () => { await auth.signOut(); dispatch({ type: "SIGNED_OUT" }); }}
+          style={{ width: "100%", marginTop: 14, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 12,
+            color: C.ice, font: `700 13px ${FB}`, cursor: "pointer", padding: 13 }}>
+          Sign out
+        </button>
+      )}
     </section>
   );
 }
@@ -3694,9 +3722,102 @@ function DriverReferral({ onBack }) {
 // ============================================================
 // SHELL
 // ============================================================
+// ============================================================
+// AUTH SCREEN — real sign up / log in (Supabase)
+// ============================================================
+function AuthScreen({ auth, onDemo }) {
+  const [mode, setMode] = useState("signup"); // signup | signin
+  const [role, setRole] = useState("customer"); // customer | driver
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [info, setInfo] = useState("");
+
+  const submit = async () => {
+    setErr(""); setInfo("");
+    if (!email || !password) { setErr("Enter your email and a password."); return; }
+    if (mode === "signup" && password.length < 6) { setErr("Password must be at least 6 characters."); return; }
+    setBusy(true);
+    const res = mode === "signup"
+      ? await auth.signUp({ email, password, name, role })
+      : await auth.signIn({ email, password });
+    setBusy(false);
+    if (res?.error) { setErr(res.error.message || "Something went wrong."); return; }
+    if (mode === "signup" && !res?.data?.session) {
+      setInfo("Account created — check your email to confirm, then sign in.");
+      setMode("signin");
+    }
+    // on success with a session, the auth listener flips the app in automatically
+  };
+
+  const field = (props) => (
+    <input {...props} style={{ width: "100%", background: C.slate, color: C.ice, font: `500 15px ${FB}`,
+      outline: "none", padding: "13px 14px", borderRadius: 11, border: `1px solid ${C.line}` }} />
+  );
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.night, color: C.ice, fontFamily: FB, display: "flex", justifyContent: "center" }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap'); *{box-sizing:border-box} input::placeholder{color:${C.mistDim}}`}</style>
+      <div style={{ width: "100%", maxWidth: 440, minHeight: "100vh", display: "flex", flexDirection: "column", justifyContent: "center", padding: "0 24px" }}>
+        <div style={{ textAlign: "center", marginBottom: 22 }}>
+          <div style={{ fontSize: 44, filter: "drop-shadow(0 6px 18px rgba(255,176,32,.4))" }}>❄️</div>
+          <div style={{ font: `700 26px ${FD}`, letterSpacing: ".08em", marginTop: 6 }}>DRIFT</div>
+          <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 4 }}>
+            {mode === "signup" ? "Create your account" : "Welcome back"}</div>
+        </div>
+
+        {mode === "signup" && (
+          <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+            {[["customer", "🏠 I need plowing"], ["driver", "🚜 I plow & earn"]].map(([id, label]) => {
+              const on = role === id;
+              return (
+                <button key={id} onClick={() => setRole(id)} style={{ flex: 1, cursor: "pointer", padding: "13px 8px",
+                  borderRadius: 12, background: on ? C.amber + "1E" : C.slate, border: `1.5px solid ${on ? C.amber : C.line}`,
+                  color: on ? C.amber : C.mist, font: `700 13px ${FB}` }}>{label}</button>
+              );
+            })}
+          </div>
+        )}
+
+        <div style={{ display: "grid", gap: 11 }}>
+          {mode === "signup" && field({ value: name, onChange: (e) => setName(e.target.value), placeholder: "Full name" })}
+          {field({ value: email, onChange: (e) => setEmail(e.target.value), placeholder: "Email", type: "email", inputMode: "email", autoComplete: "email" })}
+          {field({ value: password, onChange: (e) => setPassword(e.target.value), placeholder: "Password", type: "password",
+            autoComplete: mode === "signup" ? "new-password" : "current-password",
+            onKeyDown: (e) => { if (e.key === "Enter") submit(); } })}
+        </div>
+
+        {err && <div style={{ marginTop: 12, font: `600 12px ${FB}`, color: C.danger }}>{err}</div>}
+        {info && <div style={{ marginTop: 12, font: `600 12px ${FB}`, color: C.push }}>{info}</div>}
+
+        <div style={{ marginTop: 16 }}>
+          <Btn full onClick={submit} disabled={busy}>
+            {busy ? "One moment…" : mode === "signup" ? "Create account" : "Sign in"}</Btn>
+        </div>
+
+        <button onClick={() => { setErr(""); setInfo(""); setMode(mode === "signup" ? "signin" : "signup"); }}
+          style={{ width: "100%", marginTop: 14, background: "transparent", border: "none", cursor: "pointer",
+            color: C.mist, font: `600 13px ${FB}`, padding: 8 }}>
+          {mode === "signup" ? "Already have an account? Sign in" : "New here? Create an account"}
+        </button>
+
+        <button onClick={onDemo} style={{ width: "100%", marginTop: 6, background: "transparent",
+          border: `1px dashed ${C.line}`, borderRadius: 12, cursor: "pointer", color: C.mistDim,
+          font: `600 12px ${FB}`, padding: 11 }}>
+          Skip — just explore the demo
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Shell() {
   const [state, dispatch] = useReducer(reducer, initial);
   const store = useMemo(() => ({ state, dispatch }), [state]);
+  const auth = useAuth();
+  const [bypass, setBypass] = useState(false);
 
   useEffect(() => {
     if (!state.toast) return;
@@ -3704,9 +3825,47 @@ function Shell() {
     return () => clearTimeout(t);
   }, [state.toast]);
 
+  // Hydrate the app from the signed-in account (profile + saved properties).
+  useEffect(() => {
+    if (!supabaseEnabled || !auth.session || !auth.profile) return;
+    let cancelled = false;
+    (async () => {
+      const role = auth.profile.role === "driver" ? "driver" : "rider";
+      let props = [];
+      if (role === "rider") {
+        const { data } = await loadProperties(auth.user.id);
+        props = data || [];
+      }
+      if (cancelled) return;
+      dispatch({ type: "HYDRATE_USER", userId: auth.user.id, role,
+        profile: { name: auth.profile.name || "", phone: auth.profile.phone || "", email: auth.profile.email || "" },
+        properties: props });
+    })();
+    return () => { cancelled = true; };
+  }, [auth.session, auth.profile]);
+
+  // Persist a customer's properties to Supabase whenever they change.
+  useEffect(() => {
+    if (!supabaseEnabled || !state.userId || state.role !== "rider") return;
+    replaceProperties(state.userId, state.properties);
+  }, [state.properties]);
+
   const onboarding = state.role === "rider" && !state.onboarded;
   const driverSetup = state.role === "driver" && !state.driverOnboarded;
   const inSetup = onboarding || driverSetup;
+
+  // Auth gate: when Supabase is configured, require sign-in (demo escape hatch stays).
+  if (supabaseEnabled && auth.loading) {
+    return <div style={{ minHeight: "100vh", background: C.night, color: C.mist, fontFamily: FB,
+      display: "grid", placeItems: "center" }}>
+      <span style={{ width: 26, height: 26, borderRadius: "50%", border: `3px solid ${C.line}`,
+        borderTopColor: C.amber, animation: "spin .7s linear infinite" }} />
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+    </div>;
+  }
+  if (supabaseEnabled && !auth.session && !bypass) {
+    return <AuthScreen auth={auth} onDemo={() => setBypass(true)} />;
+  }
 
   return (
     <StoreCtx.Provider value={store}>

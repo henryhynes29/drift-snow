@@ -21,6 +21,61 @@ export async function setAutoPlow(propertyId, on, thresholdInches) {
     .eq("id", propertyId);
 }
 
+// ---- map between the app's property shape and DB columns ----
+function toPropRow(p, ownerId) {
+  return {
+    owner_id: ownerId,
+    label: p.label || "Home",
+    address: p.addr || null,
+    lat: p.lat ?? null,
+    lng: p.lng ?? null,
+    center: p.center || null,
+    features: p.features || [],
+    sqft: p.sqft || 0,
+    grade: p.grade || "flat",
+    hazards: p.hazards || [],
+    shared: !!p.shared,
+    map_img: p.mapImg || null,
+    instructions: p.instructions || null,
+  };
+}
+export function fromPropRow(r) {
+  return {
+    id: r.id,
+    label: r.label,
+    addr: r.address,
+    lat: r.lat, lng: r.lng,
+    center: r.center,
+    features: r.features || [],
+    sqft: r.sqft || 0,
+    grade: r.grade || "flat",
+    hazards: r.hazards || [],
+    shared: !!r.shared,
+    mapImg: r.map_img,
+    instructions: r.instructions,
+    zones: [],
+    size: null,
+  };
+}
+
+// Load a user's properties, mapped to the app's shape.
+export async function loadProperties(userId) {
+  if (!supabaseEnabled || !userId) return { data: [] };
+  const { data, error } = await supabase.from("properties")
+    .select("*").eq("owner_id", userId).order("created_at");
+  return { data: (data || []).map(fromPropRow), error };
+}
+
+// Replace-all: the simplest robust persistence for a small property set.
+export async function replaceProperties(userId, appProps) {
+  if (!supabaseEnabled || !userId) return { data: [] };
+  await supabase.from("properties").delete().eq("owner_id", userId);
+  const rows = (appProps || []).map((p) => toPropRow(p, userId));
+  if (!rows.length) return { data: [] };
+  const { data, error } = await supabase.from("properties").insert(rows).select();
+  return { data: (data || []).map(fromPropRow), error };
+}
+
 // ---------- Jobs ----------
 export async function createJob(job) {
   if (!supabaseEnabled) return off();
