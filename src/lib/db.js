@@ -77,6 +77,9 @@ export async function replaceProperties(userId, appProps) {
 }
 
 // ---------- Jobs ----------
+const isUuid = (v) => typeof v === "string" &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+
 export async function createJob(job) {
   if (!supabaseEnabled) return off();
   return supabase.from("jobs").insert(job).select().single();
@@ -84,6 +87,36 @@ export async function createJob(job) {
 export async function updateJob(id, patch) {
   if (!supabaseEnabled) return off();
   return supabase.from("jobs").update(patch).eq("id", id).select().single();
+}
+
+// Map an in-app order to a jobs row and insert it. Best-effort + non-blocking:
+// returns { data: { id } } on success, or a soft failure the caller can ignore.
+export async function createJobFromOrder(order, customerId) {
+  if (!supabaseEnabled || !customerId) return { data: null };
+  const q = order?.quote || {};
+  const row = {
+    property_id: isUuid(order?.property?.id) ? order.property.id : null,
+    customer_id: customerId,
+    job_type: order?.jobType || "driveway",
+    status: "requested",
+    tool: order?.tool || q.tool || null,
+    salt: !!q.salt,
+    instructions: order?.property?.instructions || null,
+    quote: q,
+    price: q.riderTotal ?? null,
+    driver_pay: q.driverPay ?? null,
+    platform_fee: q.platformNet ?? null,
+    eta_minutes: order?.eta ?? null,
+  };
+  try { return await createJob(row); }
+  catch (e) { return { error: e }; }
+}
+
+// Patch a persisted job by id (no-op unless it's a real Supabase uuid).
+export async function patchJob(jobId, patch) {
+  if (!supabaseEnabled || !isUuid(jobId)) return { data: null };
+  try { return await updateJob(jobId, patch); }
+  catch (e) { return { error: e }; }
 }
 export async function openJobs() {
   // the dispatch pool a driver sees when online

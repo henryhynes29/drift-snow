@@ -286,6 +286,26 @@ create policy referrals_own on public.referrals for all
   using (auth.uid() = referrer_id) with check (auth.uid() = referrer_id);
 
 -- ============================================================
+-- Driver recruiting leads (from the public /drive.html signup page).
+-- Written server-side via the service role key, so no public RLS insert policy
+-- is needed. Only you (via the service role / admin) read these.
+-- ============================================================
+create table if not exists public.driver_applications (
+  id          uuid primary key default gen_random_uuid(),
+  name        text not null,
+  phone       text not null,
+  email       text,
+  area        text,          -- town / ZIP they cover
+  equipment   text,          -- plow truck, snowblower, skid steer, etc.
+  experience  text,
+  status      text not null default 'new'
+                check (status in ('new','contacted','onboarding','active','declined')),
+  created_at  timestamptz not null default now()
+);
+alter table public.driver_applications enable row level security;
+-- No public policies: inserts happen with the service role key from /api/driver-signup.
+
+-- ============================================================
 -- DONE. Next: enable Realtime on jobs, messages, driver_locations
 -- in Database → Replication, then add your keys to the app.
 -- ============================================================

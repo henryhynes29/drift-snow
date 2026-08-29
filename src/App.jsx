@@ -2,12 +2,16 @@ import React, { useState, useEffect, useRef, useMemo, createContext, useContext,
 import MapPropertyDesigner, { staticMapUrl, LiveMap, MAP_ENABLED } from "./PropertyMap.jsx";
 import { useAuth } from "./lib/auth.jsx";
 import { supabaseEnabled } from "./lib/supabase.js";
-import { loadProperties, replaceProperties } from "./lib/db.js";
+import { loadProperties, replaceProperties, rateJob, pushDriverLocation, subscribeToDriverLocation, createJobFromOrder, patchJob, sendMessage, subscribeToMessages } from "./lib/db.js";
+import { STRIPE_ENABLED, getStripe, createPaymentIntent, capturePayment, createConnectAccount, sendTip } from "./lib/payments.js";
+import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
+import { snowDepthNow, nextStorm, refreshConditions } from "./lib/weather.js";
+import { deliverExternal } from "./lib/notify.js";
 
 // ============================================================
 // DRIFT — two-sided snowplow marketplace prototype
 // One app · Rider/Driver toggle · shared live state
-// Surge is a hidden backend multiplier; rider only sees final price.
+// Storm surcharge is small, capped, and shown as its own line item — never hidden.
 // Single-file. All data mocked; no network calls.
 // ============================================================
 
@@ -15,7 +19,7 @@ import { loadProperties, replaceProperties } from "./lib/db.js";
 const C = {
   night: "#08121F", night2: "#0E1E31", slate: "#152A42", slate2: "#1B334E",
   line: "#24435F", lineSoft: "#1A3450",
-  ice: "#F2F7FC", mist: "#A3BAD1", mistDim: "#6B819A",
+  ice: "#F5F9FD", mist: "#BCCEE0", mistDim: "#93A8C0",
   amber: "#FFB020", amberDeep: "#B9791A", amberSoft: "#FFC759",
   plow: "#3DCBFF", push: "#6EEE9B", danger: "#FF6B6B", good: "#6EEE9B",
 };
@@ -36,21 +40,28 @@ const EASE = "cubic-bezier(.22,1,.36,1)";
 // minimum touch target (Apple HIG / cold-weather gloves)
 const TAP = 48;
 
-// ---- Hidden backend surge (never shown to rider) --------------------------
-// In lake-effect country, snow depth is the real surge driver. This multiplier
-// is computed from live conditions and NEVER shown to the consumer as "surge" —
-// they only ever see one final price.
-const SNOW_DEPTH_IN = 4;              // live storm depth (drives the multiplier)
-function depthMultiplier(inches) {
-  // 0–2" = 1.0, then ramps; a 10"+ dump roughly doubles the job.
-  if (inches <= 2) return 1.0;
-  return +(1.0 + (inches - 2) * 0.12).toFixed(2); // 4"→1.24, 8"→1.72, 12"→2.20
+// ---- Storm surcharge (small, capped, and ALWAYS shown to the rider) -------
+// Deep snow is genuinely more work, so heavy storms carry a modest surcharge —
+// but it's disclosed as its own line item, never a hidden multiplier. Honest
+// pricing is the brand: the rider sees exactly why the price moved.
+const SNOW_DEPTH_IN = snowDepthNow(); // live storm depth (from the weather provider) — 7" ⇒ small +6% surcharge
+const STORM = {
+  freeUnder: 4,      // up to 4" of snow: no surcharge at all
+  perInchOver: 0.02, // each inch beyond that adds 2% of the plow price
+  cap: 0.20,         // never more than +20%, even in a blizzard
+};
+function stormSurgePct(inches = SNOW_DEPTH_IN) {
+  if (inches <= STORM.freeUnder) return 0;
+  return Math.min(STORM.cap, +( (inches - STORM.freeUnder) * STORM.perInchOver ).toFixed(3));
 }
-const BACKEND_SURGE = depthMultiplier(SNOW_DEPTH_IN);
+// short label for the line item, e.g. 'Heavy snow (8")'
+function stormLabel(inches = SNOW_DEPTH_IN) {
+  return `Heavy snow (${inches}")`;
+}
 
 // Next incoming storm (demo forecast). In production this is the same weather
 // feed that will drive auto-dispatch against each customer's snow threshold.
-const FORECAST = { low: 3, high: 5, when: "Friday night" };
+const FORECAST = nextStorm();
 
 // ---- Job types (Duluth-specific) ------------------------------------------
 // Each job type has its own tool requirement, pricing basis, and driver match.
@@ -190,6 +201,20 @@ const driverPct = (driver) => driverTier(driver).pct;
 const driverPayFor = (riderTotal, driver) => Math.round((riderTotal || 0) * driverPct(driver));
 const driverHourlyFor = (dPay, mins) => Math.round((dPay / ((mins || 25) + DRIVE_OVERHEAD_MIN)) * 60);
 
+// Capture the customer's held card + pay the driver when a job completes.
+// Best-effort: the UI still marks the job done even if this network call fails,
+// and it's a no-op until Stripe keys are set (demo mode).
+async function settleJobPayment(order, driverAmount, driver) {
+  if (!STRIPE_ENABLED || !order?.paymentIntentId) return;
+  try {
+    await capturePayment({
+      paymentIntentId: order.paymentIntentId,
+      driverAmount,
+      driverStripeAccountId: driver?.stripeAccountId,
+    });
+  } catch (e) { /* swallow — completion shouldn't hinge on the network */ }
+}
+
 // ---- Unified quote: honest, transparent pricing ---------------------------
 // riderTotal = base + area/linear (× site factors) + optional salt. That's it —
 // what the customer sees is what they pay, and the breakdown adds up to it.
@@ -207,21 +232,26 @@ function quoteJob({ jobType = "driveway", sqft = 0, linearFt = 0, property = nul
     mins = jt.mins;
   }
   const mod = modifierMultiplier(property);
-  base = Math.max(PRICING.minTotal, base * mod);
-  // Optional salting add-on, priced off the same surface.
+  const coreBase = Math.max(PRICING.minTotal, base * mod); // the plow price, pre-storm
+  // Storm surcharge — disclosed, capped. Roadside/flat jobs aren't snow-depth priced.
+  const surged = jt.basis !== "flat";
+  const surgePct = surged ? stormSurgePct() : 0;
+  const surgeFee = Math.round(coreBase * surgePct);
+  // Optional salting add-on — priced off the pre-storm base (salt isn't storm-priced).
   const saltable = SALT.appliesTo.includes(jobType);
-  const saltFee = salt && saltable ? Math.round(base * SALT.rate) : 0; // +15% of the job
+  const saltFee = salt && saltable ? Math.round(coreBase * SALT.rate) : 0; // +15% of the job
   const saltMins = saltFee ? SALT.mins : 0;
 
-  const total = Math.round(base + saltFee);       // what the customer pays
+  const total = Math.round(coreBase + surgeFee + saltFee); // what the customer pays
   const platformNet = Math.round(total * PLATFORM_RATE); // your cut
   const driverPay = total - platformNet;          // driver keeps the rest
   const hourly = Math.round((driverPay / (mins + saltMins + DRIVE_OVERHEAD_MIN)) * 60);
   return {
     jobType, jt, sqft, linearFt, mod,
     salt: !!saltFee, saltFee, saltable,
+    surge: surgeFee > 0, surgeFee, surgePct, snowDepth: SNOW_DEPTH_IN,
     riderTotal: total,
-    fee: platformNet, preSurge: Math.round(base),
+    fee: platformNet, preSurge: Math.round(coreBase),
     driverPay, hourly, mins: mins + saltMins,
     platformNet,
     tool: jt.tool,
@@ -289,7 +319,45 @@ const initial = {
     activity: [],         // {name, jobs, status}
   },
   toast: null,
+  notifications: [],   // in-app activity feed (bell). {id, kind, title, body, ts, read, role}
 };
+
+// Build a notification record. `role` scopes who should see it: rider | driver | both.
+let _notifSeq = 0;
+function mkNotif({ kind = "job", title, body = "", role = "both" }) {
+  _notifSeq += 1;
+  return { id: `n${Date.now()}_${_notifSeq}`, kind, title, body, role, read: false, ts: Date.now() };
+}
+// Persist a newly-created order to Supabase (best-effort, non-blocking). On
+// success, stamps the real job id back onto the live order so status updates and
+// live-location can key off it. No-op in demo mode (no Supabase / not signed in).
+function persistNewJob(dispatch, order, userId) {
+  if (!supabaseEnabled || !userId) return;
+  createJobFromOrder(order, userId)
+    .then((res) => { if (res?.data?.id) dispatch({ type: "ORDER_STATE", patch: { jobId: res.data.id } }); })
+    .catch(() => { /* best-effort — the demo flow never depends on this */ });
+}
+
+// Open real turn-by-turn directions in the device's native maps app.
+// Uses the universal Google Maps URL (opens the Google Maps app on iOS/Android,
+// the web map on desktop). Prefers exact coordinates, falls back to the address.
+function openDirections(dest) {
+  const hasLL = dest && typeof dest.lat === "number" && typeof dest.lng === "number";
+  const q = hasLL ? `${dest.lat},${dest.lng}` : encodeURIComponent(dest?.addr || "");
+  if (!q) return false;
+  const url = `https://www.google.com/maps/dir/?api=1&destination=${q}&travelmode=driving`;
+  if (typeof window !== "undefined") window.open(url, "_blank", "noopener");
+  return true;
+}
+
+// Emit an in-app notification AND hand it to the external transport (push/SMS,
+// which is a no-op until those channels are wired). One call, both paths.
+function notify(dispatch, opts, phone) {
+  const n = mkNotif(opts);
+  dispatch({ type: "NOTIFY", notif: n });
+  deliverExternal(n, { phone });
+  return n;
+}
 
 function reducer(s, a) {
   switch (a.type) {
@@ -327,6 +395,19 @@ function reducer(s, a) {
         properties: props, activeProperty: props[0] || null, onboarded: props.length > 0 };
     }
     case "SIGNED_OUT": return { ...initial };
+    // DEV ONLY — jump past auth + both onboarding flows with demo data. Remove before production.
+    case "DEV_SKIP": {
+      const props = s.properties.length ? s.properties : SEED_PROPERTIES;
+      return {
+        ...s,
+        onboarded: true,
+        driverOnboarded: true,
+        profile: s.profile.name ? s.profile : { name: "Demo User", phone: "218-555-0100", email: "demo@drift.app" },
+        payment: s.payment || { brand: "Visa", last4: "4242" },
+        properties: props,
+        activeProperty: s.activeProperty || props[0] || null,
+      };
+    }
     case "ONBOARD_DONE": return {
       ...s, onboarded: true,
       profile: a.profile || s.profile,
@@ -375,6 +456,12 @@ function reducer(s, a) {
       };
     }
     case "CLEAR_ORDER": return { ...s, order: null };
+    case "TIP": return { ...s, earnings: { ...s.earnings,
+      today: s.earnings.today + a.amt, week: s.earnings.week + a.amt } };
+    case "NOTIFY": return { ...s, notifications: [a.notif, ...s.notifications].slice(0, 50) };
+    case "NOTIF_READ":
+      return { ...s, notifications: s.notifications.map(n => (!a.id || n.id === a.id) ? { ...n, read: true } : n) };
+    case "NOTIF_CLEAR": return { ...s, notifications: [] };
     case "RESET": return { ...initial };
     case "TOAST": return { ...s, toast: a.msg };
     default: return s;
@@ -383,7 +470,7 @@ function reducer(s, a) {
 
 // ---- UI atoms --------------------------------------------------------------
 function Eyebrow({ children, color = C.amber }) {
-  return <div style={{ font: `700 11px/1 ${FB}`, letterSpacing: ".18em", textTransform: "uppercase", color }}>{children}</div>;
+  return <div style={{ font: `700 12px/1 ${FB}`, letterSpacing: ".16em", textTransform: "uppercase", color }}>{children}</div>;
 }
 function Stars({ v, size = 13, onSet }) {
   return (
@@ -446,7 +533,7 @@ function Card({ children, style, active, onClick, flat }) {
 }
 
 function Chip({ children, color = C.mist, bg, solid }) {
-  return <span style={{ font: `700 10px ${FB}`, letterSpacing: ".07em", textTransform: "uppercase",
+  return <span style={{ font: `700 11px ${FB}`, letterSpacing: ".06em", textTransform: "uppercase",
     color: solid ? "#08121F" : color, background: solid ? color : (bg || color + "1C"),
     padding: "5px 10px", borderRadius: 20, whiteSpace: "nowrap",
     border: solid ? "none" : `1px solid ${color}2E` }}>{children}</span>;
@@ -509,7 +596,7 @@ function Skeleton({ h = 16, w = "100%", r = 8, style }) {
 }
 
 const h2 = { font: `700 30px/1.05 ${FD}`, letterSpacing: ".01em", margin: "8px 0 8px" };
-const sub = { font: `400 14px/1.5 ${FB}`, color: C.mist, margin: 0 };
+const sub = { font: `400 15px/1.5 ${FB}`, color: C.mist, margin: 0 };
 const miniBtn = { font: `600 13px ${FB}`, minHeight: 38, padding: "0 14px", borderRadius: 11, cursor: "pointer",
   background: C.slate, color: C.ice, border: `1px solid ${C.line}`, display: "inline-flex",
   alignItems: "center", justifyContent: "center", gap: 6, WebkitTapHighlightColor: "transparent" };
@@ -1468,12 +1555,41 @@ function OfflineBanner() {
   );
 }
 
+// Weather-driven storm banner — active storm vs. incoming forecast, dismissible.
+function StormBanner() {
+  const [hide, setHide] = useState(false);
+  if (hide) return null;
+  const depth = SNOW_DEPTH_IN, f = FORECAST;
+  const incoming = f && (f.low || f.high);
+  if (depth < 3 && !incoming) return null; // nothing worth shouting about
+  const active = depth >= 3;
+  const accent = active ? C.amber : C.plow;
+  const title = active ? `Storm active · ${depth}" down` : "Snow day likely";
+  const body = active
+    ? "Roads and driveways are rough — book now before the morning rush."
+    : `${f.low}–${f.high}" expected ${f.when}. Line up your plow before everyone else does.`;
+  return (
+    <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "12px 14px", borderRadius: 14, marginBottom: 14,
+      background: `linear-gradient(120deg, ${accent}22, ${C.night2})`, border: `1px solid ${accent}66` }}>
+      <div style={{ fontSize: 24, animation: active ? "bob 2.4s ease-in-out infinite" : "none" }}>{active ? "🌨️" : "❄️"}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ font: `700 13px ${FB}`, color: C.ice }}>{title}</div>
+        <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 2, lineHeight: 1.35 }}>{body}</div>
+      </div>
+      <button onClick={() => setHide(true)} aria-label="Dismiss" style={{ background: "none", border: "none",
+        color: C.mistDim, fontSize: 20, cursor: "pointer", padding: 4, lineHeight: 1, WebkitTapHighlightColor: "transparent" }}>×</button>
+    </div>
+  );
+}
+
 function RiderHome({ go }) {
   const { state, dispatch } = useStore();
   const prop = state.activeProperty;
   const [jobType, setJobType] = useState("driveway");
   const [showSched, setShowSched] = useState(false);
   const [salt, setSalt] = useState(false);
+  const [showBreak, setShowBreak] = useState(true); // price breakdown open by default (transparency)
+  const [payOpen, setPayOpen] = useState(false);    // Stripe authorization sheet (only when keys are set)
 
   const sqft = prop?.sqft || zonesToSqFt(prop?.zones);
   // sidewalk length: derive a sensible default from the property, editable later
@@ -1494,8 +1610,26 @@ function RiderHome({ go }) {
   });
 
   const request = () => {
-    dispatch({ type: "REQUEST", order: buildOrder() });
+    const order = buildOrder();
+    dispatch({ type: "REQUEST", order });
+    persistNewJob(dispatch, order, state.userId);
     dispatch({ type: "TOAST", msg: `Request sent — finding a nearby ${q.tool.toLowerCase()}` });
+    notify(dispatch, { kind: "job", title: "Request sent", body: `Finding a nearby ${q.tool.toLowerCase()} for ${prop?.label || "your property"}.`, role: "rider" });
+    autoMatch(dispatch, state);
+  };
+
+  // With Stripe on, authorize the card first; otherwise straight to the demo request.
+  const startRequest = () => {
+    if (STRIPE_ENABLED) { setPayOpen(true); return; }
+    request();
+  };
+  const onAuthorized = (paymentIntentId) => {
+    setPayOpen(false);
+    const order = buildOrder({ paymentIntentId });
+    dispatch({ type: "REQUEST", order });
+    persistNewJob(dispatch, order, state.userId);
+    dispatch({ type: "TOAST", msg: `Card authorized — finding a nearby ${q.tool.toLowerCase()}` });
+    notify(dispatch, { kind: "job", title: "Card authorized", body: `We'll only charge $${q.riderTotal} once ${prop?.label || "your property"} is plowed.`, role: "rider" });
     autoMatch(dispatch, state);
   };
 
@@ -1526,6 +1660,8 @@ function RiderHome({ go }) {
         <Eyebrow>{first ? `Hi ${first}` : "On-demand snow removal"}</Eyebrow>
         <h1 style={{ font: `700 32px/1 ${FD}`, margin: "8px 0 8px" }}>What needs clearing?</h1>
       </div>
+
+      <StormBanner />
 
       {/* emergency dispatch — one tap when you're blocked in */}
       {SNOW_DEPTH_IN >= 3 && prop && (
@@ -1666,14 +1802,30 @@ function RiderHome({ go }) {
                 </div>
                 <span style={{ fontSize: 30 }}>{jt.icon}</span>
               </div>
-              <div style={{ height: 1, background: C.line, margin: "4px 0 12px" }} />
-              <Row label={`${jt.label} base`} value={`$${jt.base}`} />
-              {jt.basis === "area" && <Row label={`${sqft.toLocaleString()} sq ft × $${jt.rate.toFixed(2)}`} value={`$${Math.round(sqft * jt.rate)}`} />}
-              {jt.basis === "linear" && <Row label={`${linearFt} ft × $${jt.rate.toFixed(2)}`} value={`$${Math.round(linearFt * jt.rate)}`} />}
-              {modActive && <Row label={`Property factors ×${q.mod.toFixed(2)}`} value={q.mod > 1 ? "surcharge" : "discount"} amber />}
-              {q.salt && <Row label="🧂 Salt / ice-melt add-on" value={`+$${q.saltFee}`} amber />}
-              <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 7, font: `600 11px ${FB}`, color: C.mist }}>
+              <div style={{ height: 1, background: C.line, margin: "4px 0 10px" }} />
+              <button onClick={() => setShowBreak(v => !v)} style={{ width: "100%", background: "none", border: "none",
+                cursor: "pointer", padding: "2px 0 8px", display: "flex", alignItems: "center", justifyContent: "space-between",
+                font: `700 12px ${FB}`, color: C.mist, WebkitTapHighlightColor: "transparent" }}>
+                <span>How this price is built</span>
+                <span style={{ fontSize: 13, transform: showBreak ? "rotate(180deg)" : "none", transition: "transform .2s" }}>⌄</span>
+              </button>
+              {showBreak && (
+                <div style={{ animation: "fadeIn .2s ease" }}>
+                  <Row label={`${jt.label} base`} value={`$${jt.base}`} />
+                  {jt.basis === "area" && <Row label={`${sqft.toLocaleString()} sq ft × $${jt.rate.toFixed(2)}`} value={`$${Math.round(sqft * jt.rate)}`} />}
+                  {jt.basis === "linear" && <Row label={`${linearFt} ft × $${jt.rate.toFixed(2)}`} value={`$${Math.round(linearFt * jt.rate)}`} />}
+                  {modActive && <Row label={`Property factors ×${q.mod.toFixed(2)}`} value={q.mod > 1 ? "surcharge" : "discount"} amber />}
+                  {q.surge && <Row label={`❄ ${stormLabel(q.snowDepth)} +${Math.round(q.surgePct * 100)}%`} value={`+$${q.surgeFee}`} amber />}
+                  {q.salt && <Row label="🧂 Salt / ice-melt add-on" value={`+$${q.saltFee}`} amber />}
+                  <div style={{ height: 1, background: C.line, margin: "8px 0" }} />
+                  <Row label="You pay" value={`$${q.riderTotal}`} big />
+                </div>
+              )}
+              <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 7, font: `600 12px ${FB}`, color: C.mist }}>
                 <span style={{ fontSize: 13 }}>{jt.icon}</span> Sends a <b style={{ color: C.ice }}>{q.tool}</b>{q.salt ? " + salt" : ""} · ~{q.mins} min on site
+              </div>
+              <div style={{ marginTop: 9, display: "flex", alignItems: "center", gap: 6, font: `600 11px ${FB}`, color: C.push }}>
+                <span style={{ fontSize: 12 }}>✓</span> No contracts · no membership · {q.surge ? "storm surcharge shown above" : "no hidden fees"}
               </div>
             </>
           ) : (
@@ -1708,7 +1860,7 @@ function RiderHome({ go }) {
       <div style={{ position: "sticky", bottom: 14, marginTop: 18, marginBottom: 4, paddingTop: 6,
         background: `linear-gradient(transparent, ${C.night} 30%)` }}>
         <div style={{ display: "flex", gap: 10 }}>
-          <Btn full onClick={request} disabled={!prop || needsOutline}>Clear now · ${animPrice}</Btn>
+          <Btn full onClick={startRequest} disabled={!prop || needsOutline}>Clear now · ${animPrice}</Btn>
           <Btn kind="dark" onClick={() => setShowSched(true)} disabled={!prop || needsOutline}>
             <span style={{ display: "flex", alignItems: "center", gap: 6 }}>🗓️</span>
           </Btn>
@@ -1719,6 +1871,8 @@ function RiderHome({ go }) {
       </div>
 
       {showSched && <ScheduleSheet price={q.riderTotal} onClose={() => setShowSched(false)} onPick={schedule} />}
+      {payOpen && <PaymentSheet amount={q.riderTotal} jobId={"pending"} customerId={state.userId || ""}
+        onAuthorized={onAuthorized} onClose={() => setPayOpen(false)} />}
     </section></Fade>
   );
 }
@@ -1805,7 +1959,208 @@ function autoMatch(dispatch, state) {
       timeline: [{ k: "requested", t: "now", label: "Request sent" }, { k: "accepted", t: "now", label: `${state.driver.name} accepted` }],
     }});
     dispatch({ type: "TOAST", msg: `${state.driver.name} is on the way` });
+    notify(dispatch, { kind: "job", title: `${state.driver.name} is on the way`,
+      body: "Your driver accepted and is heading to your property.", role: "rider" }, state.profile?.phone);
   }, 2400);
+}
+
+// ---- Stripe card authorization (real payments, only when keys are set) -----
+// Inner form: renders Stripe's PaymentElement and authorizes (not captures) the
+// card. Manual capture means the hold is only charged when the job is completed.
+function PayForm({ amount, paymentIntentId, onAuthorized, onClose }) {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const pay = async () => {
+    if (!stripe || !elements) return;
+    setBusy(true); setErr(null);
+    const { error } = await stripe.confirmPayment({
+      elements,
+      confirmParams: { return_url: window.location.href },
+      redirect: "if_required", // cards authorize without leaving the app
+    });
+    if (error) { setErr(error.message || "Card couldn't be authorized"); setBusy(false); return; }
+    onAuthorized(paymentIntentId);
+  };
+  return (
+    <div>
+      <PaymentElement options={{ layout: "tabs" }} />
+      {err && <p style={{ font: `600 12px ${FB}`, color: C.danger, margin: "10px 0 0" }}>{err}</p>}
+      <div style={{ marginTop: 16 }}>
+        <Btn full onClick={pay} disabled={busy || !stripe}>{busy ? "Authorizing…" : `Authorize $${amount}`}</Btn>
+      </div>
+      <p style={{ font: `500 11px ${FB}`, color: C.mistDim, textAlign: "center", marginTop: 10 }}>
+        You're only charged after it's plowed. No storm, no charge.
+      </p>
+    </div>
+  );
+}
+
+// Outer sheet: fetches a PaymentIntent, then mounts Stripe Elements.
+function PaymentSheet({ amount, jobId, customerId, onAuthorized, onClose }) {
+  const [secret, setSecret] = useState(null);
+  const [piId, setPiId] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    let ok = true;
+    createPaymentIntent({ amount, jobId, customerId })
+      .then(r => { if (!ok) return; r.clientSecret ? (setSecret(r.clientSecret), setPiId(r.paymentIntentId)) : setErr(r.error || "Couldn't start payment"); })
+      .catch(e => ok && setErr(e.message));
+    return () => { ok = false; };
+  }, []);
+  const appearance = { theme: "night", variables: { colorPrimary: C.amber, colorBackground: C.night2,
+    colorText: C.ice, fontFamily: "Inter, sans-serif", borderRadius: "12px" } };
+  return (
+    <Sheet onClose={onClose}>
+      <Eyebrow>Confirm & authorize</Eyebrow>
+      <h3 style={{ font: `700 26px ${FD}`, margin: "8px 0 4px" }}>${amount}</h3>
+      <p style={{ ...sub, marginBottom: 16 }}>Add a card to hold your spot — we only charge once your property is plowed.</p>
+      {err ? (
+        <div style={{ padding: "14px 16px", background: C.slate, borderRadius: 12, border: `1px solid ${C.danger}55` }}>
+          <p style={{ font: `600 13px ${FB}`, color: C.danger, margin: 0 }}>{err}</p>
+          <p style={{ font: `500 12px ${FB}`, color: C.mist, margin: "6px 0 0" }}>Payments aren't fully set up yet. You can still explore the app.</p>
+        </div>
+      ) : !secret ? (
+        <div style={{ display: "grid", gap: 10 }}>
+          <Skeleton h={44} /><Skeleton h={44} /><Skeleton h={48} r={14} />
+        </div>
+      ) : (
+        <Elements stripe={getStripe()} options={{ clientSecret: secret, appearance }}>
+          <PayForm amount={amount} paymentIntentId={piId} onAuthorized={onAuthorized} onClose={onClose} />
+        </Elements>
+      )}
+    </Sheet>
+  );
+}
+
+// ---- Shared job chat (rider <-> driver) ------------------------------------
+// Uses Supabase realtime when the job is persisted (real jobId + Supabase on);
+// otherwise falls back to a local, in-session thread so the demo still chats.
+function JobChat({ jobId, senderId, peerName, seed }) {
+  const [msgs, setMsgs] = useState(seed || []);
+  const [text, setText] = useState("");
+  const live = supabaseEnabled && !!jobId && !!senderId;
+
+  useEffect(() => {
+    if (!live) return;
+    const unsub = subscribeToMessages(jobId, (m) => {
+      setMsgs(cur => [...cur, { id: m.id, me: m.sender_id === senderId, t: m.body }]);
+    });
+    return unsub;
+  }, [jobId, senderId]);
+
+  const send = () => {
+    const body = text.trim();
+    if (!body) return;
+    setText("");
+    if (live) {
+      sendMessage(jobId, senderId, body); // the realtime subscription echoes it back
+    } else {
+      setMsgs(c => [...c, { me: true, t: body }]);
+    }
+  };
+
+  return (
+    <div id="chatbox" style={{ marginTop: 14 }}>
+      <Eyebrow>Message {peerName}</Eyebrow>
+      <div style={{ marginTop: 8, background: C.night2, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, maxHeight: 150, overflowY: "auto" }}>
+        {msgs.length === 0 ? (
+          <div style={{ font: `500 12px ${FB}`, color: C.mistDim, textAlign: "center", padding: "6px 0" }}>Say hi 👋</div>
+        ) : msgs.map((m, i) => (
+          <div key={m.id || i} style={{ display: "flex", justifyContent: m.me ? "flex-end" : "flex-start", marginBottom: 6 }}>
+            <span style={{ font: `500 13px ${FB}`, background: m.me ? C.amber : C.slate, color: m.me ? "#20140A" : C.ice,
+              padding: "7px 11px", borderRadius: 12, maxWidth: "80%" }}>{m.t}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+        <input value={text} onChange={e => setText(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") send(); }} placeholder="Type a message…"
+          style={{ flex: 1, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 10, padding: "11px 12px",
+            color: C.ice, font: `500 13px ${FB}`, outline: "none" }} />
+        <Btn sm onClick={send}>Send</Btn>
+      </div>
+    </div>
+  );
+}
+
+// ---- Notification Center ---------------------------------------------------
+function timeAgo(ts) {
+  const sec = Math.floor((Date.now() - ts) / 1000);
+  if (sec < 60) return "just now";
+  const m = Math.floor(sec / 60); if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+const NOTIF_ICON = { job: "🚜", payment: "💵", system: "❄️", promo: "🎁" };
+
+function unreadCount(state) {
+  const role = state.role === "driver" ? "driver" : "rider";
+  return state.notifications.filter(n => !n.read && (n.role === "both" || n.role === role)).length;
+}
+
+// Bell with unread badge for the header.
+function Bell({ count, onClick }) {
+  return (
+    <button onClick={onClick} aria-label="Notifications" style={{ position: "relative", width: 38, height: 38,
+      borderRadius: 12, border: `1px solid ${C.line}`, background: C.night2, cursor: "pointer",
+      display: "grid", placeItems: "center", fontSize: 17, WebkitTapHighlightColor: "transparent" }}>
+      🔔
+      {count > 0 && (
+        <span style={{ position: "absolute", top: -5, right: -5, minWidth: 18, height: 18, padding: "0 4px",
+          borderRadius: 10, background: C.danger, color: "#fff", font: `800 10px ${FB}`,
+          display: "grid", placeItems: "center", border: `2px solid ${C.night}` }}>{count > 9 ? "9+" : count}</span>
+      )}
+    </button>
+  );
+}
+
+function NotificationSheet({ onClose }) {
+  const { state, dispatch } = useStore();
+  const role = state.role === "driver" ? "driver" : "rider";
+  const list = state.notifications.filter(n => n.role === "both" || n.role === role);
+  return (
+    <Sheet onClose={onClose}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+        <div><Eyebrow>Activity</Eyebrow><h3 style={{ font: `700 24px ${FD}`, margin: "6px 0 0" }}>Notifications</h3></div>
+        {list.some(n => !n.read) && (
+          <button onClick={() => dispatch({ type: "NOTIF_READ" })} style={{ ...miniBtn, padding: "7px 12px" }}>Mark all read</button>
+        )}
+      </div>
+      {list.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "34px 10px" }}>
+          <div style={{ fontSize: 34, marginBottom: 8, opacity: .5 }}>🔔</div>
+          <div style={{ font: `700 15px ${FB}`, color: C.ice }}>You're all caught up</div>
+          <div style={{ ...sub, marginTop: 4 }}>Job updates and payouts will show up here.</div>
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: 8 }}>
+          {list.map(n => (
+            <button key={n.id} onClick={() => dispatch({ type: "NOTIF_READ", id: n.id })}
+              style={{ display: "flex", gap: 12, alignItems: "flex-start", textAlign: "left", cursor: "pointer",
+                padding: "13px 14px", borderRadius: 13, width: "100%",
+                background: n.read ? C.slate : C.slate2, border: `1px solid ${n.read ? C.line : C.amber + "55"}`,
+                WebkitTapHighlightColor: "transparent" }}>
+              <div style={{ width: 34, height: 34, flexShrink: 0, borderRadius: 10, display: "grid", placeItems: "center",
+                background: C.night2, fontSize: 17 }}>{NOTIF_ICON[n.kind] || "❄️"}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
+                  <span style={{ font: `700 13px ${FB}`, color: C.ice }}>{n.title}</span>
+                  <span style={{ font: `500 10px ${FB}`, color: C.mistDim, flexShrink: 0 }}>{timeAgo(n.ts)}</span>
+                </div>
+                {n.body && <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 3, lineHeight: 1.35 }}>{n.body}</div>}
+              </div>
+              {!n.read && <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.amber, flexShrink: 0, marginTop: 6 }} />}
+            </button>
+          ))}
+          <button onClick={() => dispatch({ type: "NOTIF_CLEAR" })} style={{ ...miniBtn, marginTop: 6, justifyContent: "center" }}>
+            Clear all
+          </button>
+        </div>
+      )}
+    </Sheet>
+  );
 }
 
 function RiderTracking() {
@@ -1814,28 +2169,53 @@ function RiderTracking() {
   const d = state.driver;
   const [pos, setPos] = useState(o.driverPos || { x: d.x, y: d.y });
   const [eta, setEta] = useState(o.eta || 8);
-  const [chat, setChat] = useState([{ me: false, t: "On my way — about 8 min." }]);
-  const [msg, setMsg] = useState("");
   const arrived = o.state === "plowing" || o.state === "arrived" || eta <= 0;
   const trackCenter = o.property?.center;
   const initEta = o.eta || 8;
   const prog = trackCenter ? Math.min(1, Math.max(0, 1 - eta / initEta)) : 0;
-  const driverLL = trackCenter ? { lng: trackCenter.lng - 0.006 * (1 - prog), lat: trackCenter.lat + 0.004 * (1 - prog) } : null;
+  const simLL = trackCenter ? { lng: trackCenter.lng - 0.006 * (1 - prog), lat: trackCenter.lat + 0.004 * (1 - prog) } : null;
 
-  // drive toward pin when accepted
+  // Subscribe to the driver's REAL location when Supabase is on and the job has a
+  // known driver id. Until jobs are persisted with a driver_id this stays dormant
+  // and we fall back to the simulated route below.
+  const [liveLL, setLiveLL] = useState(null);
+  useEffect(() => {
+    const driverId = o.driverId || o.driver?.id;
+    if (!supabaseEnabled || !driverId) return;
+    const unsub = subscribeToDriverLocation(driverId, (row) => {
+      if (row && typeof row.lng === "number" && typeof row.lat === "number") {
+        setLiveLL({ lng: row.lng, lat: row.lat });
+      }
+    });
+    return unsub;
+  }, [o.driverId, o.driver?.id]);
+  const driverLL = liveLL || simLL;
+
+  // once accepted, advance to "en route" so the stepper shows the driving leg
+  useEffect(() => {
+    if (o.state === "accepted" && !state.driverOnline) {
+      dispatch({ type: "ORDER_STATE", patch: { state: "enroute" } });
+    }
+  }, [o.state, state.driverOnline]);
+
+  // drive toward pin while en route
   useEffect(() => {
     if (o.state !== "accepted" && o.state !== "enroute") return;
     if (state.driverOnline) return;
     const iv = setInterval(() => {
       setPos(p => ({ x: p.x + (50 - p.x) * .13, y: p.y + (50 - p.y) * .13 }));
-      setEta(e => {
-        const n = +(e - .6).toFixed(1);
-        if (n <= 0) { clearInterval(iv); dispatch({ type: "ORDER_STATE", patch: { state: "plowing" } }); }
-        return Math.max(0, n);
-      });
+      setEta(e => Math.max(0, +(e - .6).toFixed(1)));
     }, 1000);
     return () => clearInterval(iv);
-  }, [o.state]);
+  }, [o.state, state.driverOnline]);
+
+  // arrival: when the ETA runs out during the drive, start plowing (side effect
+  // lives here, not inside a setState updater, so StrictMode can't double-fire it)
+  useEffect(() => {
+    if ((o.state === "enroute" || o.state === "accepted") && !state.driverOnline && eta <= 0) {
+      dispatch({ type: "ORDER_STATE", patch: { state: "plowing" } });
+    }
+  }, [eta, o.state, state.driverOnline]);
 
   // plowing -> done (auto-sim only; if a driver is online they drive the flow + photos)
   useEffect(() => {
@@ -1846,18 +2226,25 @@ function RiderTracking() {
       const after = { seed: 12, phase: "after", ts: Date.now() };
       dispatch({ type: "ADD_PHOTO", phase: "before", photo: before });
       dispatch({ type: "ADD_PHOTO", phase: "after", photo: after });
-      dispatch({ type: "COMPLETE", q: o.quote, size: o.size });
+      const tierPay = driverPayFor(o.quote?.riderTotal, state.driver);
+      settleJobPayment(o, tierPay, state.driver);
+      // credit earnings at the driver's real tier rate, not the flat quoteJob rate
+      dispatch({ type: "COMPLETE", q: { ...o.quote, driverPay: tierPay }, size: o.size });
       dispatch({ type: "ORDER_STATE", patch: { state: "arrived_done", completed: true } });
+      notify(dispatch, { kind: "job", title: "Your property is plowed ✓",
+        body: `${o.property?.label || "Your driveway"} is clear. Before & after photos are on your receipt.`, role: "rider" }, state.profile?.phone);
+      notify(dispatch, { kind: "payment", title: `Charged $${o.quote?.riderTotal}`,
+        body: "Payment complete — thanks for using DRIFT.", role: "rider" });
     }, 4200);
     return () => clearTimeout(t);
   }, [o.state, state.driverOnline]);
 
   const steps = [
-    { k: "requested", label: "Request sent" },
-    { k: "accepted", label: `${d.name} accepted` },
-    { k: "enroute", label: "En route to you" },
-    { k: "plowing", label: "Plowing your property" },
-    { k: "arrived_done", label: "Complete" },
+    { k: "requested", label: "Request sent", short: "Sent", icon: "📨" },
+    { k: "accepted", label: `${d.name} accepted`, short: "Accepted", icon: "🤝" },
+    { k: "enroute", label: "En route to you", short: "En route", icon: "🛻" },
+    { k: "plowing", label: "Plowing your property", short: "Plowing", icon: "🚜" },
+    { k: "arrived_done", label: "Complete", short: "Done", icon: "✅" },
   ];
   const order = ["requested", "accepted", "enroute", "plowing", "arrived_done"];
   const curIdx = Math.max(order.indexOf(o.state), o.state === "accepted" ? 1 : 0);
@@ -1886,19 +2273,32 @@ function RiderTracking() {
           tracking driverPos={pos} showRoute />
       )}
 
-      {/* timeline */}
-      <div style={{ margin: "16px 0", background: C.night2, border: `1px solid ${C.line}`, borderRadius: 14, padding: "14px 16px" }}>
-        {steps.map((s, i) => {
-          const done = i <= curIdx;
-          return (
-            <div key={s.k} style={{ display: "flex", gap: 12, alignItems: "center", padding: "5px 0" }}>
-              <div style={{ width: 18, height: 18, borderRadius: "50%", flexShrink: 0, display: "grid", placeItems: "center",
-                background: done ? C.amber : "transparent", border: `2px solid ${done ? C.amber : C.line}`,
-                color: "#20140A", fontSize: 11, fontWeight: 800 }}>{done ? "✓" : ""}</div>
-              <span style={{ font: `${i === curIdx ? 700 : 500} 13px ${FB}`, color: done ? C.ice : C.mistDim }}>{s.label}</span>
-            </div>
-          );
-        })}
+      {/* horizontal status stepper (DoorDash-style) */}
+      <div style={{ margin: "16px 0", background: C.night2, border: `1px solid ${C.line}`, borderRadius: 14, padding: "18px 14px 14px" }}>
+        <div style={{ font: `700 13px ${FB}`, color: C.ice, marginBottom: 14 }}>
+          {curIdx >= 4 ? "All done — your property is clear." : steps[curIdx]?.label}
+        </div>
+        <div style={{ position: "relative", display: "flex", justifyContent: "space-between" }}>
+          {/* track behind the nodes */}
+          <div style={{ position: "absolute", top: 15, left: 15, right: 15, height: 3, background: C.line, borderRadius: 3 }} />
+          <div style={{ position: "absolute", top: 15, left: 15, height: 3, borderRadius: 3, background: `linear-gradient(90deg, ${C.amber}, ${C.amberSoft})`,
+            width: `calc((100% - 30px) * ${steps.length > 1 ? curIdx / (steps.length - 1) : 0})`, transition: "width .6s cubic-bezier(.22,1,.36,1)" }} />
+          {steps.map((s, i) => {
+            const done = i < curIdx, current = i === curIdx;
+            return (
+              <div key={s.k} style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 7, flex: "0 0 auto", width: 56 }}>
+                <div style={{ width: 30, height: 30, borderRadius: "50%", display: "grid", placeItems: "center", fontSize: 14,
+                  background: done ? C.amber : current ? C.night2 : C.night2,
+                  border: `2.5px solid ${done || current ? C.amber : C.line}`,
+                  boxShadow: current ? `0 0 0 5px ${C.amber}22` : "none", color: done ? "#20140A" : C.ice,
+                  transition: "all .3s" }}>
+                  {done ? "✓" : s.icon}
+                </div>
+                <span style={{ font: `${current ? 700 : 600} 10px ${FB}`, color: done || current ? C.ice : C.mistDim, textAlign: "center", lineHeight: 1.1 }}>{s.short}</span>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* driver card */}
@@ -1931,24 +2331,9 @@ function RiderTracking() {
         </div>
       </Card>
 
-      {/* chat */}
-      <div id="chatbox" style={{ marginTop: 14 }}>
-        <Eyebrow>Message {d.name.split(" ")[0]}</Eyebrow>
-        <div style={{ marginTop: 8, background: C.night2, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, maxHeight: 130, overflowY: "auto" }}>
-          {chat.map((m, i) => (
-            <div key={i} style={{ display: "flex", justifyContent: m.me ? "flex-end" : "flex-start", marginBottom: 6 }}>
-              <span style={{ font: `500 13px ${FB}`, background: m.me ? C.amber : C.slate, color: m.me ? "#20140A" : C.ice,
-                padding: "7px 11px", borderRadius: 12, maxWidth: "80%" }}>{m.t}</span>
-            </div>
-          ))}
-        </div>
-        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-          <input value={msg} onChange={e => setMsg(e.target.value)} placeholder="Type a message…"
-            style={{ flex: 1, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 10, padding: "11px 12px",
-              color: C.ice, font: `500 13px ${FB}`, outline: "none" }} />
-          <Btn sm onClick={() => { if (msg.trim()) { setChat(c => [...c, { me: true, t: msg }]); setMsg(""); } }}>Send</Btn>
-        </div>
-      </div>
+      {/* chat — real Supabase thread when the job is persisted, else in-session */}
+      <JobChat jobId={o.jobId} senderId={state.userId} peerName={d.name.split(" ")[0]}
+        seed={[{ me: false, t: "On my way — about 8 min." }]} />
 
       {!arrived && (
         <div style={{ marginTop: 14 }}>
@@ -1970,6 +2355,20 @@ function RiderReceipt() {
   const [done, setDone] = useState(false);
 
   const finish = () => {
+    // save the rating (best-effort; persists when signed in + Supabase is on)
+    if (rating > 0 && state.userId) {
+      rateJob({ jobId: o.id, raterId: state.userId, rateeId: d.id || "driver", stars: rating });
+    }
+    // route the tip to the driver: earnings + notification now, real charge when Stripe's on
+    if (tip > 0) {
+      dispatch({ type: "TIP", amt: tip });
+      notify(dispatch, { kind: "payment", title: `$${tip} tip from your customer`,
+        body: `Nice work on ${o.property?.label || "the job"} — 100% of the tip is yours.`, role: "driver" });
+      if (STRIPE_ENABLED) {
+        sendTip({ amount: tip, jobId: o.id, driverStripeAccountId: d.stripeAccountId, customerId: state.userId })
+          .catch(() => { /* best-effort; never block the receipt */ });
+      }
+    }
     dispatch({ type: "CLEAR_ORDER" });
     dispatch({ type: "TOAST", msg: tip ? `Thanks! $${tip} tip sent to ${d.name.split(" ")[0]}` : "Thanks! Receipt saved to Trips" });
   };
@@ -2015,7 +2414,7 @@ function RiderReceipt() {
         <div style={{ margin: "10px 0" }}><Stars v={rating} size={30} onSet={setRating} /></div>
         <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
           {[5, 10, 15].map(t => (
-            <button key={t} onClick={() => setTip(t)} style={{ ...miniBtn, background: tip === t ? C.amber : C.night2,
+            <button key={t} onClick={() => setTip(tip === t ? 0 : t)} style={{ ...miniBtn, background: tip === t ? C.amber : C.night2,
               color: tip === t ? "#20140A" : C.ice, border: tip === t ? "none" : `1px solid ${C.line}` }}>Tip ${t}</button>
           ))}
         </div>
@@ -3299,14 +3698,36 @@ function DriverActiveJob() {
   const jtA = JOB_TYPES[o.jobType || "driveway"];
   const checkableZones = jtA.basis === "area" ? plowZones : [];
 
+  const [gps, setGps] = useState(null); // real device location {lng, lat, heading}
+
   useEffect(() => {
     if (o.state !== "accepted" && o.state !== "enroute") return;
+    if (eta <= 0) return; // truck has arrived — stop the drive sim
     const iv = setInterval(() => {
       setPos(p => ({ x: p.x + (50 - p.x) * .13, y: p.y + (50 - p.y) * .13 }));
       setEta(e => Math.max(0, +(e - .7).toFixed(1)));
     }, 1000);
     return () => clearInterval(iv);
-  }, [o.state]);
+  }, [o.state, eta]);
+
+  // Real GPS: while a job is active, stream the driver's true location to the map
+  // and (when Supabase is on) push it so the customer can watch the truck live.
+  useEffect(() => {
+    const active = ["accepted", "enroute", "plowing"].includes(o.state);
+    if (!active || typeof navigator === "undefined" || !navigator.geolocation) return;
+    const id = navigator.geolocation.watchPosition(
+      (p) => {
+        const loc = { lng: p.coords.longitude, lat: p.coords.latitude, heading: p.coords.heading || 0 };
+        setGps(loc);
+        if (supabaseEnabled && state.userId) {
+          pushDriverLocation(state.userId, loc.lng, loc.lat, loc.heading);
+        }
+      },
+      () => { /* permission denied / unavailable — keep the simulated route */ },
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+    );
+    return () => navigator.geolocation.clearWatch(id);
+  }, [o.state, state.userId]);
 
   const arrived = eta <= 0 || o.state === "plowing";
   const allChecked = checkableZones.length === 0 || checkableZones.every((_, i) => checks[i]);
@@ -3317,9 +3738,14 @@ function DriverActiveJob() {
 
   const startPlow = () => dispatch({ type: "ORDER_STATE", patch: { state: "plowing" } });
   const complete = () => {
+    settleJobPayment(o, dPay, state.driver); // capture the customer's card + pay the driver
     dispatch({ type: "COMPLETE", q: { ...q, driverPay: dPay }, size: o.size });
     dispatch({ type: "ORDER_STATE", patch: { state: "arrived_done", completed: true } });
     dispatch({ type: "TOAST", msg: `Job complete · $${dPay} added to today` });
+    notify(dispatch, { kind: "payment", title: `You earned $${dPay}`,
+      body: `${o.property?.label || "Job"} complete · paid out to your account.`, role: "driver" });
+    notify(dispatch, { kind: "job", title: "Your property is plowed ✓",
+      body: `${o.property?.label || "Your driveway"} is clear. Photos are on your receipt.`, role: "rider" });
   };
 
   // driver's own completion screen
@@ -3367,10 +3793,10 @@ function DriverActiveJob() {
 
       {MAP_ENABLED && jobCenter ? (
         <LiveMap center={jobCenter} height={220}
-          route={[[driverLLD.lng, driverLLD.lat], [jobCenter.lng, jobCenter.lat]]}
+          route={[[(gps || driverLLD).lng, (gps || driverLLD).lat], [jobCenter.lng, jobCenter.lat]]}
           markers={[
             { lng: jobCenter.lng, lat: jobCenter.lat, emoji: "🏁", size: 24 },
-            { lng: driverLLD.lng, lat: driverLLD.lat, emoji: "🛻", size: 26, pulse: true },
+            { lng: (gps || driverLLD).lng, lat: (gps || driverLLD).lat, emoji: "🛻", size: 26, pulse: true },
           ]} />
       ) : (
         <StormMap pin="SITE" blips={[{ id: "me", x: pos.x, y: pos.y }]} selected={{ id: "me" }} tracking driverPos={pos} showRoute />
@@ -3380,11 +3806,17 @@ function DriverActiveJob() {
       <Card style={{ marginTop: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div><div style={{ font: `700 14px ${FB}` }}>{o.property?.addr}</div>
           <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 2 }}>{o.property?.label} · {(JOB_TYPES[o.jobType || "driveway"]).label}</div></div>
-        <Btn sm onClick={() => dispatch({ type: "TOAST", msg: "Opening turn-by-turn navigation…" })}>Navigate</Btn>
+        <Btn sm onClick={() => {
+          const ok = openDirections({ lat: jobCenter?.lat, lng: jobCenter?.lng, addr: o.property?.addr });
+          dispatch({ type: "TOAST", msg: ok ? "Opening directions in Maps…" : "No address on this job yet" });
+        }}>Navigate</Btn>
       </Card>
 
       {/* density routing: cluster of nearby jobs to batch */}
       {!arrived && <ClusterRoute />}
+
+      {/* chat with the customer */}
+      <JobChat jobId={o.jobId} senderId={state.userId} peerName="your customer" seed={[]} />
 
       {/* property map with zones — the driver's instructions */}
       <div style={{ marginTop: 14 }}>
@@ -3568,22 +4000,47 @@ function DriverEarnings({ onReferral }) {
         </div>
       </Card>
 
-      {/* cash out */}
-      <div style={{ background: C.night2, border: `1px solid ${C.line}`, borderRadius: 16, padding: S.lg, marginBottom: S.md }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: S.md }}>
-          <div>
-            <div style={{ font: `700 14px ${FB}`, color: C.ice }}>Available now</div>
-            <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 2 }}>Stripe Connect · ···6789</div>
+      {/* cash out / payout setup */}
+      {STRIPE_ENABLED && !state.driver.stripeAccountId ? (
+        <div style={{ background: `linear-gradient(140deg, ${C.plow}18, ${C.night2})`, border: `1px solid ${C.plow}55`,
+          borderRadius: 16, padding: S.lg, marginBottom: S.md }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            <span style={{ fontSize: 22 }}>🏦</span>
+            <div style={{ font: `700 15px ${FB}`, color: C.ice }}>Set up your payouts</div>
           </div>
-          <div style={{ font: `700 26px ${FD}`, color: C.push }}>${e.week}</div>
+          <p style={{ font: `500 12px ${FB}`, color: C.mist, margin: "0 0 14px" }}>
+            Connect a bank account through Stripe to get paid — takes about 2 minutes. You keep {Math.round(driverPct(state.driver) * 100)}% of every job, deposited automatically.
+          </p>
+          <Btn full kind="dark" onClick={async () => {
+            dispatch({ type: "TOAST", msg: "Opening secure Stripe setup…" });
+            try {
+              const r = await createConnectAccount({ driverId: state.userId || "driver",
+                email: state.profile.email, returnUrl: window.location.href });
+              if (r.onboardingUrl) window.location.href = r.onboardingUrl;
+              else dispatch({ type: "TOAST", msg: r.error || "Payouts aren't set up on the server yet" });
+            } catch (err) { dispatch({ type: "TOAST", msg: err.message }); }
+          }}>Connect bank with Stripe ›</Btn>
+          <p style={{ font: `500 11px ${FB}`, color: C.mistDim, textAlign: "center", marginTop: 10 }}>
+            Secured by Stripe · we never see your bank details
+          </p>
         </div>
-        <Btn full kind="good" onClick={() => dispatch({ type: "TOAST", msg: `$${e.week} sent — arrives in seconds` })}>
-          Cash out instantly
-        </Btn>
-        <p style={{ font: `500 11px ${FB}`, color: C.mistDim, textAlign: "center", marginTop: 10 }}>
-          $0.50 instant fee · free if you wait for Tuesday deposit
-        </p>
-      </div>
+      ) : (
+        <div style={{ background: C.night2, border: `1px solid ${C.line}`, borderRadius: 16, padding: S.lg, marginBottom: S.md }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: S.md }}>
+            <div>
+              <div style={{ font: `700 14px ${FB}`, color: C.ice }}>Available now</div>
+              <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 2 }}>Stripe Connect · same-day</div>
+            </div>
+            <div style={{ font: `700 26px ${FD}`, color: C.push }}>${e.week}</div>
+          </div>
+          <Btn full kind="good" onClick={() => dispatch({ type: "TOAST", msg: `$${e.week} sent — arrives in seconds` })}>
+            Cash out instantly
+          </Btn>
+          <p style={{ font: `500 11px ${FB}`, color: C.mistDim, textAlign: "center", marginTop: 10 }}>
+            $0.50 instant fee · free if you wait for Tuesday deposit
+          </p>
+        </div>
+      )}
 
       {/* referral CTA */}
       <Card onClick={onReferral} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
@@ -3894,17 +4351,335 @@ function AuthScreen({ auth, onDemo }) {
   );
 }
 
+// ---- Public marketing homepage (front door for logged-out visitors) --------
+function LandingPage({ onStart }) {
+  const Section = ({ children, style }) => (
+    <section style={{ padding: "48px 20px", ...style }}>
+      <div style={{ maxWidth: 960, margin: "0 auto" }}>{children}</div>
+    </section>
+  );
+  const H2 = ({ children }) => <h2 style={{ font: `700 clamp(26px,4vw,36px)/1.1 ${FD}`, textAlign: "center", margin: "0 0 10px" }}>{children}</h2>;
+  const Lead = ({ children }) => <p style={{ textAlign: "center", color: C.mist, maxWidth: 560, margin: "0 auto 30px", font: `400 16px/1.5 ${FB}` }}>{children}</p>;
+  const goDrive = () => { if (typeof window !== "undefined") window.location.href = "/drive.html"; };
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.night, color: C.ice, fontFamily: FB }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@600;700;800&family=Inter:wght@400;500;600;700;800&display=swap'); html{scroll-behavior:smooth}`}</style>
+
+      {/* nav */}
+      <nav style={{ position: "sticky", top: 0, zIndex: 20, background: "rgba(8,18,31,.86)", backdropFilter: "blur(14px)",
+        borderBottom: `1px solid ${C.line}80` }}>
+        <div style={{ maxWidth: 960, margin: "0 auto", padding: "13px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 30, height: 30, borderRadius: 9, background: `linear-gradient(150deg, ${C.amberSoft}, ${C.amber})`,
+              color: "#231603", display: "grid", placeItems: "center", fontWeight: 800 }}>❄</div>
+            <div style={{ font: `800 21px ${FD}`, letterSpacing: ".06em" }}>DRIFT</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button onClick={goDrive} style={{ background: "none", border: `1px solid ${C.line}`, color: C.mist,
+              font: `700 12px ${FB}`, borderRadius: 10, padding: "9px 13px", cursor: "pointer" }}>Drive with us</button>
+            <Btn sm onClick={onStart}>Get started</Btn>
+          </div>
+        </div>
+      </nav>
+
+      {/* hero */}
+      <Section style={{ paddingTop: 58, paddingBottom: 34, textAlign: "center" }}>
+        <div style={{ font: `700 12px ${FB}`, letterSpacing: ".16em", textTransform: "uppercase", color: C.amber }}>Duluth · Superior · the Northland</div>
+        <h1 style={{ font: `800 clamp(40px,8vw,66px)/1.02 ${FD}`, letterSpacing: ".01em", margin: "14px 0 16px" }}>
+          Snow removal, <span style={{ color: C.amber }}>on demand</span>.
+        </h1>
+        <p style={{ font: `400 clamp(16px,2.4vw,20px)/1.5 ${FB}`, color: C.mist, maxWidth: 620, margin: "0 auto 26px" }}>
+          Get your driveway plowed without a contract. Map your property, see an honest price up front, track your driver like a pizza — and only pay when it actually snows.
+        </p>
+        <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
+          <Btn onClick={onStart}>Get my driveway plowed</Btn>
+          <Btn kind="ghost" onClick={goDrive}>I have a plow — earn money</Btn>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center", marginTop: 28 }}>
+          {["No contracts", "Pay per storm", "Track your driver", "Honest pricing"].map(t => (
+            <div key={t} style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 22, padding: "9px 15px", font: `700 13px ${FB}` }}>
+              <span style={{ color: C.push }}>✓</span> {t}
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      {/* how it works */}
+      <Section>
+        <H2>How it works</H2>
+        <Lead>From "it's snowing" to a clear driveway in four steps.</Lead>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 14 }}>
+          {[
+            ["1", "Map your driveway", "Outline your property on a satellite map — no measuring, no guesswork."],
+            ["2", "Set your snow trigger", "Choose how many inches auto-books a plow, or just tap when you need one."],
+            ["3", "We dispatch a plow", "A nearby driver accepts, heads over, and you watch them live on the map."],
+            ["4", "Pay only when plowed", "One honest price, charged after the job — with before & after photos."],
+          ].map(([n, t, d]) => (
+            <div key={n} style={{ background: C.night2, border: `1px solid ${C.line}`, borderRadius: 16, padding: 22 }}>
+              <div style={{ width: 34, height: 34, borderRadius: 10, background: C.amber, color: "#231603",
+                font: `800 17px ${FD}`, display: "grid", placeItems: "center", marginBottom: 12 }}>{n}</div>
+              <h3 style={{ font: `700 16px ${FB}`, margin: "0 0 5px" }}>{t}</h3>
+              <p style={{ margin: 0, color: C.mist, font: `400 14px/1.5 ${FB}` }}>{d}</p>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      {/* services */}
+      <Section style={{ paddingTop: 20 }}>
+        <H2>Everything winter throws at you</H2>
+        <Lead>One app for the whole storm — not just plowing.</Lead>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
+          {[
+            ["🚜", "Driveway plowing", "Cleared down to the apron."],
+            ["🧹", "Sidewalk clearing", "Stay ordinance-compliant."],
+            ["🧂", "Salting & ice-melt", "Stop the re-freeze."],
+            ["🚗", "Car dig-outs", "Freed from the plow berm."],
+            ["🔋", "Roadside jump-starts", "Dead battery in the cold."],
+            ["🏢", "Commercial lots", "Businesses & multi-bay."],
+          ].map(([i, t, d]) => (
+            <div key={t} style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 }}>
+              <div style={{ fontSize: 24 }}>{i}</div>
+              <div style={{ font: `700 14px ${FB}`, marginTop: 8 }}>{t}</div>
+              <div style={{ font: `400 12px ${FB}`, color: C.mist, marginTop: 3 }}>{d}</div>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      {/* why */}
+      <Section>
+        <div style={{ background: `linear-gradient(120deg, ${C.amber}12, ${C.night2})`, border: `1px solid ${C.amber}44`,
+          borderRadius: 20, padding: "30px 24px", textAlign: "center" }}>
+          <H2>Why neighbors pick DRIFT</H2>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: 16, marginTop: 22, textAlign: "left" }}>
+            {[
+              ["No contracts, ever", "Pay per storm. When it doesn't snow, you don't pay a dime."],
+              ["Prices you can see", "The full breakdown up front — no hidden fees, no surprise surge."],
+              ["Watch your driver", "Live tracking and in-app messaging, start to finish."],
+              ["Proof it's done", "Before & after photos on every job's receipt."],
+              ["Local drivers", "Real people from around Duluth — not a faceless call center."],
+              ["Set it & forget it", "Auto-book at your snow depth so you wake up to a clear drive."],
+            ].map(([t, d]) => (
+              <div key={t} style={{ display: "flex", gap: 10 }}>
+                <span style={{ color: C.push, fontSize: 16, flexShrink: 0 }}>✓</span>
+                <div><div style={{ font: `700 14px ${FB}` }}>{t}</div>
+                  <div style={{ font: `400 13px/1.45 ${FB}`, color: C.mist, marginTop: 2 }}>{d}</div></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </Section>
+
+      {/* service area — local SEO */}
+      <Section style={{ paddingTop: 10, textAlign: "center" }}>
+        <H2>Serving the Twin Ports</H2>
+        <Lead>On-demand snow removal across Duluth and the surrounding Northland.</Lead>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center" }}>
+          {["Duluth, MN", "Hermantown, MN", "Cloquet, MN", "Esko, MN", "Proctor, MN", "Superior, WI"].map(t => (
+            <div key={t} style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 10, padding: "10px 15px", font: `600 13px ${FB}`, color: C.ice }}>📍 {t}</div>
+          ))}
+        </div>
+      </Section>
+
+      {/* final CTA */}
+      <Section style={{ textAlign: "center" }}>
+        <h2 style={{ font: `800 clamp(28px,5vw,42px)/1.05 ${FD}`, margin: "0 0 12px" }}>Snow's coming. Beat the rush.</h2>
+        <p style={{ color: C.mist, font: `400 16px ${FB}`, margin: "0 0 24px" }}>Set up your property in two minutes — it's free until you book a plow.</p>
+        <Btn onClick={onStart}>Get started</Btn>
+      </Section>
+
+      {/* footer */}
+      <footer style={{ borderTop: `1px solid ${C.line}`, padding: "26px 20px", textAlign: "center", color: C.mistDim, font: `500 13px ${FB}` }}>
+        <div style={{ marginBottom: 8 }}>
+          <button onClick={onStart} style={{ background: "none", border: "none", color: C.mist, cursor: "pointer", font: `600 13px ${FB}`, marginRight: 16 }}>Get a plow</button>
+          <button onClick={goDrive} style={{ background: "none", border: "none", color: C.mist, cursor: "pointer", font: `600 13px ${FB}` }}>Drive with DRIFT</button>
+        </div>
+        DRIFT · On-demand snow removal · Duluth, MN &amp; the Northland
+      </footer>
+    </div>
+  );
+}
+
+// ---- Operator dashboard (private, ?ops=1) ---------------------------------
+const OPS_STATUS = {
+  requested: { label: "Requested", c: C.mist },
+  accepted: { label: "Accepted", c: C.plow },
+  enroute: { label: "En route", c: C.plow },
+  plowing: { label: "Plowing", c: C.amber },
+  completed: { label: "Done", c: C.push },
+  cancelled: { label: "Cancelled", c: C.danger },
+};
+
+function OpsTile({ label, value, accent = C.ice, sub }) {
+  return (
+    <div style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: "14px 16px" }}>
+      <div style={{ font: `600 11px ${FB}`, letterSpacing: ".08em", textTransform: "uppercase", color: C.mistDim }}>{label}</div>
+      <div style={{ font: `800 26px ${FD}`, color: accent, marginTop: 6, lineHeight: 1 }}>{value}</div>
+      {sub && <div style={{ font: `500 11px ${FB}`, color: C.mistDim, marginTop: 5 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function OpsDashboard() {
+  const { state } = useStore();
+  const [remote, setRemote] = useState(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let ok = true;
+    fetch("/api/ops-summary")
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (ok) { setRemote(d && !d.error ? d : null); setLoaded(true); } })
+      .catch(() => { if (ok) setLoaded(true); });
+    return () => { ok = false; };
+  }, []);
+
+  // Fallback view from this session's own data until the admin feed is live.
+  const local = useMemo(() => {
+    const hist = state.history || [];
+    const rev = hist.reduce((s, h) => s + (h.total || 0), 0);
+    const active = state.order && state.order.state !== "arrived_done" ? [state.order] : [];
+    const pay = Math.round(rev * 0.8);
+    return {
+      kpis: { jobsToday: hist.length + active.length, activeNow: active.length, completedToday: hist.length,
+        revenueToday: rev, payoutsToday: pay, platformToday: rev - pay, tipsToday: 0 },
+      activeDrivers: state.driverOnline ? 1 : 0,
+      jobs: [
+        ...active.map(o => ({ status: o.state === "arrived_done" ? "completed" : o.state,
+          price: o.quote?.riderTotal, driver_pay: o.quote?.driverPay, job_type: o.jobType,
+          address: o.property?.addr || o.property?.label, customer: state.profile?.name || "Customer",
+          driver: state.driver?.name })),
+        ...hist.map(h => ({ status: "completed", price: h.total, job_type: "driveway",
+          address: h.size, customer: "—", driver: h.driver })),
+      ],
+    };
+  }, [state]);
+
+  const data = remote || local;
+  const live = !!remote;
+  const k = data.kpis;
+  const money = (n) => `$${Math.round(n || 0).toLocaleString()}`;
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.night, color: C.ice, fontFamily: FB }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@600;700;800&family=Inter:wght@400;500;600;700;800&display=swap'); *{box-sizing:border-box}`}</style>
+      <div style={{ maxWidth: 820, margin: "0 auto", padding: "26px 20px 60px" }}>
+        {/* header */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 30, height: 30, borderRadius: 9, background: `linear-gradient(150deg, ${C.amberSoft}, ${C.amber})`,
+              color: "#231603", display: "grid", placeItems: "center", fontWeight: 800 }}>❄</div>
+            <div style={{ font: `800 22px ${FD}`, letterSpacing: ".06em" }}>DRIFT OPS</div>
+          </div>
+          <a href="/" style={{ font: `700 12px ${FB}`, color: C.mist, textDecoration: "none",
+            border: `1px solid ${C.line}`, borderRadius: 10, padding: "8px 12px" }}>← Back to app</a>
+        </div>
+        <div style={{ font: `500 13px ${FB}`, color: live ? C.push : C.amber, marginBottom: 20 }}>
+          {!loaded ? "Loading…" : live ? "● Live — connected to your database" : "Demo data — add the Supabase admin key to go live (see SETUP.md)"}
+        </div>
+
+        {/* KPI grid */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 14 }}>
+          <OpsTile label="Jobs today" value={k.jobsToday} />
+          <OpsTile label="Active now" value={k.activeNow} accent={C.amber} sub={`${data.activeDrivers} driver${data.activeDrivers !== 1 ? "s" : ""} out`} />
+          <OpsTile label="Completed" value={k.completedToday} accent={C.push} />
+          <OpsTile label="Revenue" value={money(k.revenueToday)} accent={C.amber} sub={`${money(k.platformToday)} platform`} />
+          <OpsTile label="Driver payouts" value={money(k.payoutsToday)} accent={C.plow} />
+          <OpsTile label="Tips" value={money(k.tipsToday)} accent={C.push} />
+        </div>
+
+        {/* jobs table */}
+        <div style={{ background: C.night2, border: `1px solid ${C.line}`, borderRadius: 16, overflow: "hidden" }}>
+          <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.line}`, font: `700 14px ${FB}` }}>
+            Today's jobs {data.jobs.length ? `· ${data.jobs.length}` : ""}
+          </div>
+          {data.jobs.length === 0 ? (
+            <div style={{ padding: "34px 18px", textAlign: "center", color: C.mistDim, font: `500 13px ${FB}` }}>
+              No jobs yet today. They'll appear here live as customers book.
+            </div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 560 }}>
+                <thead>
+                  <tr style={{ font: `600 10px ${FB}`, letterSpacing: ".07em", textTransform: "uppercase", color: C.mistDim }}>
+                    {["Status", "Type", "Location", "Customer", "Driver", "Price", "Pay"].map(h => (
+                      <th key={h} style={{ textAlign: h === "Price" || h === "Pay" ? "right" : "left", padding: "10px 14px", fontWeight: 600 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.jobs.map((j, i) => {
+                    const st = OPS_STATUS[j.status] || OPS_STATUS.requested;
+                    const jt = JOB_TYPES[j.job_type] || JOB_TYPES.driveway;
+                    return (
+                      <tr key={i} style={{ borderTop: `1px solid ${C.line}55`, font: `500 12px ${FB}` }}>
+                        <td style={{ padding: "11px 14px" }}>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, font: `700 11px ${FB}`, color: st.c }}>
+                            <span style={{ width: 7, height: 7, borderRadius: "50%", background: st.c }} />{st.label}
+                          </span>
+                        </td>
+                        <td style={{ padding: "11px 14px", color: C.mist }}>{jt.icon} {jt.label}</td>
+                        <td style={{ padding: "11px 14px", color: C.ice, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{j.address || "—"}</td>
+                        <td style={{ padding: "11px 14px", color: C.mist }}>{j.customer || "—"}</td>
+                        <td style={{ padding: "11px 14px", color: C.mist }}>{j.driver || "Unassigned"}</td>
+                        <td style={{ padding: "11px 14px", textAlign: "right", color: C.ice, fontWeight: 700 }}>{j.price ? money(j.price) : "—"}</td>
+                        <td style={{ padding: "11px 14px", textAlign: "right", color: C.push }}>{j.driver_pay ? money(j.driver_pay) : "—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        <p style={{ font: `500 11px ${FB}`, color: C.mistDim, marginTop: 16, textAlign: "center" }}>
+          Private operator view · bookmark <code style={{ color: C.mist }}>?ops=1</code>. Add a password before sharing beyond you.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function Shell() {
   const [state, dispatch] = useReducer(reducer, initial);
   const store = useMemo(() => ({ state, dispatch }), [state]);
   const auth = useAuth();
   const [bypass, setBypass] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [entered, setEntered] = useState(false); // false = show the marketing homepage first
 
   useEffect(() => {
     if (!state.toast) return;
     const t = setTimeout(() => dispatch({ type: "TOAST", msg: null }), 2600);
     return () => clearTimeout(t);
   }, [state.toast]);
+
+  // Pull fresh storm conditions on load (no-op with demo data; live once a
+  // weather API key is set — see src/lib/weather.js).
+  useEffect(() => { refreshConditions(); }, []);
+
+
+  // Keep the persisted job row in sync as the order moves through its lifecycle
+  // (best-effort; only fires once the job has a real Supabase id).
+  useEffect(() => {
+    const o = state.order;
+    if (!o?.jobId) return;
+    const statusMap = { requested: "requested", accepted: "accepted", enroute: "enroute",
+      plowing: "plowing", arrived_done: "completed" };
+    const status = statusMap[o.state];
+    if (!status) return;
+    const patch = { status };
+    if (o.eta != null) patch.eta_minutes = Math.round(o.eta);
+    if (status === "completed") {
+      patch.completed_at = new Date().toISOString();
+      patch.photos = o.photos || undefined;
+      patch.driver_pay = o.quote?.driverPay ?? undefined;
+    }
+    patchJob(o.jobId, patch);
+  }, [state.order?.state, state.order?.jobId]);
 
   // Hydrate the app from the signed-in account (profile + saved properties).
   useEffect(() => {
@@ -3935,6 +4710,24 @@ function Shell() {
   const driverSetup = state.role === "driver" && !state.driverOnboarded;
   const inSetup = onboarding || driverSetup;
 
+  // DEV ONLY — floating "Skip" that clears the auth gate + both onboarding flows. Remove before production.
+  const devSkip = () => { setBypass(true); dispatch({ type: "DEV_SKIP" }); };
+  const SkipButton = (
+    <button onClick={devSkip} title="Dev: skip setup"
+      style={{ position: "fixed", top: "calc(10px + env(safe-area-inset-top))", right: 12, zIndex: 9999,
+        font: `700 11px ${FB}`, letterSpacing: ".04em", color: "#231603",
+        background: `linear-gradient(180deg, ${C.amberSoft}, ${C.amber})`, border: "none",
+        padding: "7px 12px", borderRadius: 20, cursor: "pointer",
+        boxShadow: "0 3px 12px rgba(0,0,0,.4)", WebkitTapHighlightColor: "transparent" }}>
+      Skip ⏭
+    </button>
+  );
+
+  // Operator dashboard — private ops cockpit at ?ops=1 (for the business owner).
+  if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("ops") === "1") {
+    return <StoreCtx.Provider value={store}><OpsDashboard /></StoreCtx.Provider>;
+  }
+
   // Auth gate: when Supabase is configured, require sign-in (demo escape hatch stays).
   if (supabaseEnabled && auth.loading) {
     return <div style={{ minHeight: "100vh", background: C.night, color: C.mist, fontFamily: FB,
@@ -3944,12 +4737,18 @@ function Shell() {
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>;
   }
+  // Marketing homepage: the public front door for anyone not signed in yet.
+  if (!auth.session && !bypass && !entered) {
+    return <>{SkipButton}<LandingPage onStart={() => setEntered(true)} /></>;
+  }
+
   if (supabaseEnabled && !auth.session && !bypass) {
-    return <AuthScreen auth={auth} onDemo={() => setBypass(true)} />;
+    return <>{SkipButton}<AuthScreen auth={auth} onDemo={() => setBypass(true)} /></>;
   }
 
   return (
     <StoreCtx.Provider value={store}>
+      {SkipButton}
       <div style={{ minHeight: "100vh", background: C.night, color: C.ice, fontFamily: FB, display: "flex", justifyContent: "center" }}>
         <style>{`
           @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
@@ -3984,22 +4783,25 @@ function Shell() {
                 <div style={{ font: `600 9px ${FB}`, letterSpacing: ".14em", color: C.mistDim, marginTop: 1 }}>DULUTH, MN</div>
               </div>
             </div>
-            {inSetup ? (
-              <button onClick={() => dispatch({ type: "ROLE", role: onboarding ? "driver" : "rider" })}
-                style={{ ...miniBtn, minHeight: 34, fontSize: 12 }}>
-                {onboarding ? "Drive & earn ›" : "Need a plow ›"}</button>
-            ) : (
-              <div style={{ display: "flex", background: C.night2, border: `1px solid ${C.line}`, borderRadius: 22, padding: 3 }}>
-                {["rider", "driver"].map(r => (
-                  <button key={r} onClick={() => dispatch({ type: "ROLE", role: r })}
-                    style={{ font: `700 12px ${FB}`, minHeight: 32, padding: "0 15px", borderRadius: 18, cursor: "pointer", border: "none",
-                      background: state.role === r ? `linear-gradient(180deg, ${C.amberSoft}, ${C.amber})` : "transparent",
-                      color: state.role === r ? "#231603" : C.mist, textTransform: "capitalize",
-                      boxShadow: state.role === r ? "0 2px 8px rgba(255,176,32,.3)" : "none",
-                      transition: `background .25s ${EASE}, color .2s`, WebkitTapHighlightColor: "transparent" }}>{r}</button>
-                ))}
-              </div>
-            )}
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Bell count={unreadCount(state)} onClick={() => setNotifOpen(true)} />
+              {inSetup ? (
+                <button onClick={() => dispatch({ type: "ROLE", role: onboarding ? "driver" : "rider" })}
+                  style={{ ...miniBtn, minHeight: 34, fontSize: 12 }}>
+                  {onboarding ? "Drive & earn ›" : "Need a plow ›"}</button>
+              ) : (
+                <div style={{ display: "flex", background: C.night2, border: `1px solid ${C.line}`, borderRadius: 22, padding: 3 }}>
+                  {["rider", "driver"].map(r => (
+                    <button key={r} onClick={() => dispatch({ type: "ROLE", role: r })}
+                      style={{ font: `700 12px ${FB}`, minHeight: 32, padding: "0 15px", borderRadius: 18, cursor: "pointer", border: "none",
+                        background: state.role === r ? `linear-gradient(180deg, ${C.amberSoft}, ${C.amber})` : "transparent",
+                        color: state.role === r ? "#231603" : C.mist, textTransform: "capitalize",
+                        boxShadow: state.role === r ? "0 2px 8px rgba(255,176,32,.3)" : "none",
+                        transition: `background .25s ${EASE}, color .2s`, WebkitTapHighlightColor: "transparent" }}>{r}</button>
+                  ))}
+                </div>
+              )}
+            </div>
           </header>
 
           <OfflineBanner />
@@ -4017,6 +4819,7 @@ function Shell() {
             : !state.driverOnboarded ? <DriverOnboarding />
             : <DriverApp />}
           <Toast msg={state.toast} />
+          {notifOpen && <NotificationSheet onClose={() => setNotifOpen(false)} />}
         </div>
       </div>
     </StoreCtx.Provider>

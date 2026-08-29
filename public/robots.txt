@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://drift-snow.vercel.app/sitemap.xml
