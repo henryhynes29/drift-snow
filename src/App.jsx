@@ -7,6 +7,7 @@ import { STRIPE_ENABLED, getStripe, createPaymentIntent, capturePayment, createC
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { snowDepthNow, nextStorm, refreshConditions } from "./lib/weather.js";
 import { deliverExternal } from "./lib/notify.js";
+import { surgePct as marketSurgePct, surgeLabel as marketSurgeLabel, SURGE, refreshMarket } from "./lib/market.js";
 import Landing from "./Landing.jsx";
 
 // ============================================================
@@ -41,24 +42,12 @@ const EASE = "cubic-bezier(.22,1,.36,1)";
 // minimum touch target (Apple HIG / cold-weather gloves)
 const TAP = 48;
 
-// ---- Storm surcharge (small, capped, and ALWAYS shown to the rider) -------
-// Deep snow is genuinely more work, so heavy storms carry a modest surcharge —
-// but it's disclosed as its own line item, never a hidden multiplier. Honest
-// pricing is the brand: the rider sees exactly why the price moved.
-const SNOW_DEPTH_IN = snowDepthNow(); // live storm depth (from the weather provider) — 7" ⇒ small +6% surcharge
-const STORM = {
-  freeUnder: 4,      // up to 4" of snow: no surcharge at all
-  perInchOver: 0.02, // each inch beyond that adds 2% of the plow price
-  cap: 0.20,         // never more than +20%, even in a blizzard
-};
-function stormSurgePct(inches = SNOW_DEPTH_IN) {
-  if (inches <= STORM.freeUnder) return 0;
-  return Math.min(STORM.cap, +( (inches - STORM.freeUnder) * STORM.perInchOver ).toFixed(3));
-}
-// short label for the line item, e.g. 'Heavy snow (8")'
-function stormLabel(inches = SNOW_DEPTH_IN) {
-  return `Heavy snow (${inches}")`;
-}
+// ---- Demand surge (supply/demand, and ALWAYS shown to the rider) ----------
+// The price rises only when many customers need a plow and few drivers are out —
+// real scarcity, not snow depth. It's disclosed as its own line item, never a
+// hidden multiplier, and the driver keeps 75% of it (it's what pulls plows online).
+// The surge % + label come from src/lib/market.js (demand/driver counts).
+const SNOW_DEPTH_IN = snowDepthNow(); // still used for the weather banner + emergency dispatch, NOT pricing
 
 // Next incoming storm (demo forecast). In production this is the same weather
 // feed that will drive auto-dispatch against each customer's snow threshold.
@@ -69,7 +58,7 @@ const FORECAST = nextStorm();
 // basis: "area" (per sqft), "linear" (per ft of walk/curb), or "flat".
 const JOB_TYPES = {
   driveway: { id: "driveway", label: "Driveway plow", icon: "🚜", tool: "Plow truck",
-    basis: "area", base: 23, rate: 0.03, minsPer1000: 22, minMins: 18, blurb: "Clear your drive & apron" },
+    basis: "area", base: 25, rate: 0.035, minsPer1000: 22, minMins: 18, blurb: "Clear your drive & apron" },
   sidewalk: { id: "sidewalk", label: "Sidewalk clear", icon: "🧹", tool: "Snowblower",
     basis: "linear", base: 15, rate: 0.35, minsPerFt: 0.5, minMins: 15, blurb: "24-hr city ordinance compliance" },
   digout: { id: "digout", label: "Car dig-out", icon: "🚗", tool: "Snowblower / shovel",
@@ -113,9 +102,14 @@ function modifierMultiplier(property) {
 // residential lot so polygon area maps to believable square feet.
 const CANVAS_W = 150, CANVAS_H = 100;
 const PRICING = {
-  base: 23, perSqFt: 0.03, minTotal: 30,
+  base: 25, perSqFt: 0.035, minTotal: 30,
   lotWidthFt: 90, lotHeightFt: 60, minsPer1000: 14,
 };
+
+// Flat platform fee on every order — folded into the price the customer sees (so
+// there's no separate "fee" line) but taken off the top before the driver split,
+// so it's 100% yours. One number to tune your take.
+const PLATFORM_FEE = 8;
 
 // ---- Salting add-on (optional, stacks on any driveway / walk / lot job) ----
 // Salt is priced separately and is NOT storm-surged — a bag of ice-melt costs
@@ -197,7 +191,11 @@ function driverTier(driver) {
   return DRIVER_TIERS.find(t => jobs >= t.minJobs) || DRIVER_TIERS[DRIVER_TIERS.length - 1];
 }
 const driverPct = (driver) => driverTier(driver).pct;
-const driverPayFor = (riderTotal, driver) => Math.round((riderTotal || 0) * driverPct(driver));
+// Driver's gross pay for a job: their tier % of the base+salt, plus 75% of any
+// storm surge. The flat platform fee is NOT shared — it's 100% the platform's.
+const driverGrossPay = (q, driver) => Math.round(
+  (q?.baseAmount || 0) * driverPct(driver) + (q?.surgeFee || 0) * SURGE.driverShare
+);
 
 // Pay-per-event insurance: drivers can use their OWN commercial policy, or opt into
 // DRIFT's per-event coverage — no monthly premium, a small fee is deducted from each
@@ -206,8 +204,8 @@ const driverPayFor = (riderTotal, driver) => Math.round((riderTotal || 0) * driv
 const INSURANCE = { perEvent: 5, label: "Per-event coverage" };
 const driverOnPerEvent = (driver) => driver?.insurancePlan === "perEvent";
 const driverInsuranceFee = (driver) => driverOnPerEvent(driver) ? INSURANCE.perEvent : 0;
-// Net take-home = tier pay minus the per-event insurance fee (0 if they carry their own).
-const driverNetPay = (riderTotal, driver) => Math.max(0, driverPayFor(riderTotal, driver) - driverInsuranceFee(driver));
+// Net take-home = gross pay minus the per-event insurance fee (0 if they carry their own).
+const driverNetPay = (q, driver) => Math.max(0, driverGrossPay(q, driver) - driverInsuranceFee(driver));
 const driverHourlyFor = (dPay, mins) => Math.round((dPay / ((mins || 25) + DRIVE_OVERHEAD_MIN)) * 60);
 
 // Capture the customer's held card + pay the driver when a job completes.
@@ -244,25 +242,29 @@ function quoteJob({ jobType = "driveway", sqft = 0, linearFt = 0, property = nul
   const coreBase = Math.max(PRICING.minTotal, base * mod); // the plow price, pre-storm
   // Storm surcharge — disclosed, capped. Roadside/flat jobs aren't snow-depth priced.
   const surged = jt.basis !== "flat";
-  const surgePct = surged ? stormSurgePct() : 0;
+  const surgePct = surged ? marketSurgePct() : 0; // demand-based, not snow-based
   const surgeFee = Math.round(coreBase * surgePct);
   // Optional salting add-on — priced off the pre-storm base (salt isn't storm-priced).
   const saltable = SALT.appliesTo.includes(jobType);
   const saltFee = salt && saltable ? Math.round(coreBase * SALT.rate) : 0; // +15% of the job
   const saltMins = saltFee ? SALT.mins : 0;
 
-  const total = Math.round(coreBase + surgeFee + saltFee); // what the customer pays
-  const platformNet = Math.round(total * PLATFORM_RATE); // your cut
-  const driverPay = total - platformNet;          // driver keeps the rest
-  const hourly = Math.round((driverPay / (mins + saltMins + DRIVE_OVERHEAD_MIN)) * 60);
+  // Pay components: the base + salt is split by the driver's tier; the surge is
+  // split 75/25; the flat platform fee is 100% ours. (Driver share needs the
+  // driver's tier, so the real number is computed by driverGrossPay/driverNetPay.)
+  const baseAmount = Math.round(coreBase + saltFee); // tier-split portion
+  const total = Math.round(baseAmount + surgeFee + PLATFORM_FEE); // what the customer pays
+  const nominalDriver = Math.round(baseAmount * 0.8 + surgeFee * SURGE.driverShare); // ~80% tier estimate
+  const hourly = Math.round((nominalDriver / (mins + saltMins + DRIVE_OVERHEAD_MIN)) * 60);
   return {
     jobType, jt, sqft, linearFt, mod,
     salt: !!saltFee, saltFee, saltable,
-    surge: surgeFee > 0, surgeFee, surgePct, snowDepth: SNOW_DEPTH_IN,
+    surge: surgeFee > 0, surgeFee, surgePct, surgeLabel: marketSurgeLabel(),
     riderTotal: total,
-    fee: platformNet, preSurge: Math.round(coreBase),
-    driverPay, hourly, mins: mins + saltMins,
-    platformNet,
+    baseAmount, platformFee: PLATFORM_FEE,
+    preSurge: Math.round(coreBase),
+    driverPay: nominalDriver, fee: total - nominalDriver, platformNet: total - nominalDriver,
+    hourly, mins: mins + saltMins,
     tool: jt.tool,
   };
 }
@@ -1814,11 +1816,11 @@ function RiderHome({ go }) {
               </button>
               {showBreak && (
                 <div style={{ animation: "fadeIn .2s ease" }}>
-                  <Row label={`${jt.label} base`} value={`$${jt.base}`} />
+                  <Row label={`${jt.label} base`} value={`$${jt.base + PLATFORM_FEE}`} />
                   {jt.basis === "area" && <Row label={`${sqft.toLocaleString()} sq ft × $${jt.rate.toFixed(2)}`} value={`$${Math.round(sqft * jt.rate)}`} />}
                   {jt.basis === "linear" && <Row label={`${linearFt} ft × $${jt.rate.toFixed(2)}`} value={`$${Math.round(linearFt * jt.rate)}`} />}
                   {modActive && <Row label={`Property factors ×${q.mod.toFixed(2)}`} value={q.mod > 1 ? "surcharge" : "discount"} amber />}
-                  {q.surge && <Row label={`❄ ${stormLabel(q.snowDepth)} +${Math.round(q.surgePct * 100)}%`} value={`+$${q.surgeFee}`} amber />}
+                  {q.surge && <Row label={`⚡ ${q.surgeLabel} +${Math.round(q.surgePct * 100)}%`} value={`+$${q.surgeFee}`} amber />}
                   {q.salt && <Row label="🧂 Salt / ice-melt add-on" value={`+$${q.saltFee}`} amber />}
                   <div style={{ height: 1, background: C.line, margin: "8px 0" }} />
                   <Row label="You pay" value={`$${q.riderTotal}`} big />
@@ -1828,14 +1830,14 @@ function RiderHome({ go }) {
                 <span style={{ fontSize: 13 }}>{jt.icon}</span> Sends a <b style={{ color: C.ice }}>{q.tool}</b>{q.salt ? " + salt" : ""} · ~{q.mins} min on site
               </div>
               <div style={{ marginTop: 9, display: "flex", alignItems: "center", gap: 6, font: `600 11px ${FB}`, color: C.push }}>
-                <span style={{ fontSize: 12 }}>✓</span> No contracts · no membership · {q.surge ? "storm surcharge shown above" : "no hidden fees"}
+                <span style={{ fontSize: 12 }}>✓</span> No contracts · no membership · {q.surge ? "demand surcharge shown above" : "no hidden fees"}
               </div>
             </>
           ) : (
             <div style={{ textAlign: "center", padding: "8px 4px" }}>
               <div style={{ fontSize: 26, marginBottom: 6 }}>✏️</div>
               <div style={{ font: `700 14px ${FB}`, marginBottom: 4 }}>Outline the area to see the price</div>
-              <div style={{ font: `500 12px ${FB}`, color: C.mist, marginBottom: 12 }}>${jt.base} base + ${jt.rate.toFixed(2)} per sq ft.</div>
+              <div style={{ font: `500 12px ${FB}`, color: C.mist, marginBottom: 12 }}>${jt.base + PLATFORM_FEE} base + ${jt.rate.toFixed(2)} per sq ft.</div>
               <Btn sm onClick={() => go("props")}>Map it</Btn>
             </div>
           )}
@@ -2229,7 +2231,7 @@ function RiderTracking() {
       const after = { seed: 12, phase: "after", ts: Date.now() };
       dispatch({ type: "ADD_PHOTO", phase: "before", photo: before });
       dispatch({ type: "ADD_PHOTO", phase: "after", photo: after });
-      const tierPay = driverNetPay(o.quote?.riderTotal, state.driver); // net of per-event insurance
+      const tierPay = driverNetPay(o.quote, state.driver); // net of per-event insurance
       settleJobPayment(o, tierPay, state.driver);
       // credit earnings at the driver's real tier rate (minus any per-event insurance)
       dispatch({ type: "COMPLETE", q: { ...o.quote, driverPay: tierPay }, size: o.size });
@@ -3491,7 +3493,7 @@ function IncomingJob({ order }) {
   const q = order.quote;
   const prop = order.property;
   const insFee = driverInsuranceFee(state.driver);
-  const dPay = driverNetPay(q.riderTotal, state.driver); // take-home, net of per-event insurance
+  const dPay = driverNetPay(q, state.driver); // take-home, net of per-event insurance
   const dHourly = driverHourlyFor(dPay, order.size?.mins || q.mins);
   const jt = JOB_TYPES[order.jobType || "driveway"];
   const toolMatch = state.driver.tools?.includes(order.tool || jt.tool);
@@ -3676,8 +3678,8 @@ function DriverActiveJob() {
   const { state, dispatch } = useStore();
   const o = state.order, q = o.quote;
   const insFee = driverInsuranceFee(state.driver);
-  const dGross = driverPayFor(q.riderTotal, state.driver);
-  const dPay = driverNetPay(q.riderTotal, state.driver); // take-home after per-event insurance
+  const dGross = driverGrossPay(q, state.driver);
+  const dPay = driverNetPay(q, state.driver); // take-home after per-event insurance
   const dHourly = driverHourlyFor(dPay, o.size?.mins || q.mins);
   const [pos, setPos] = useState({ x: state.driver.x, y: state.driver.y });
   const [eta, setEta] = useState(o.eta || 8);
@@ -4501,7 +4503,7 @@ function Shell() {
 
   // Pull fresh storm conditions on load (no-op with demo data; live once a
   // weather API key is set — see src/lib/weather.js).
-  useEffect(() => { refreshConditions(); }, []);
+  useEffect(() => { refreshConditions(); refreshMarket(); }, []);
 
 
   // Keep the persisted job row in sync as the order moves through its lifecycle

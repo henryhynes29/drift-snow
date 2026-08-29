@@ -211,19 +211,19 @@ function DemoPrice() {
   return (
     <div>
       <div style={{ background: C.night2, border: `1px solid ${C.line}`, borderRadius: 12, padding: 13 }}>
-        <div style={{ font: `800 30px ${FD}`, color: C.amber, lineHeight: 1 }}>$42</div>
+        <div style={{ font: `800 30px ${FD}`, color: C.amber, lineHeight: 1 }}>$55</div>
         <div style={{ font: `500 10px ${FB}`, color: C.mist, margin: "3px 0 10px" }}>per plow · 620 sq ft</div>
         <div style={{ height: 1, background: C.line, margin: "0 0 8px" }} />
-        <Row l="Driveway base" v="$23" />
-        <Row l="620 sq ft × $0.03" v="$19" />
+        <Row l="Driveway base" v="$33" />
+        <Row l="620 sq ft × $0.035" v="$22" />
         <div style={{ height: 1, background: C.line, margin: "8px 0" }} />
-        <Row l="You pay" v="$42" strong />
+        <Row l="You pay" v="$55" strong />
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 9, font: `600 10px ${FB}`, color: C.push }}>
           <span>✓</span> No contracts · no hidden fees
         </div>
       </div>
       <div style={{ marginTop: 10, background: `linear-gradient(180deg,${C.amberSoft},${C.amber})`, color: "#231603",
-        borderRadius: 11, padding: "11px 0", textAlign: "center", font: `800 13px ${FB}` }}>Clear now · $42</div>
+        borderRadius: 11, padding: "11px 0", textAlign: "center", font: `800 13px ${FB}` }}>Clear now · $55</div>
     </div>
   );
 }
