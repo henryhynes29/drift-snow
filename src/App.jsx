@@ -7,6 +7,7 @@ import { STRIPE_ENABLED, getStripe, createPaymentIntent, capturePayment, createC
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { snowDepthNow, nextStorm, refreshConditions } from "./lib/weather.js";
 import { deliverExternal } from "./lib/notify.js";
+import Landing from "./Landing.jsx";
 
 // ============================================================
 // DRIFT — two-sided snowplow marketplace prototype
@@ -75,16 +76,13 @@ const JOB_TYPES = {
     basis: "flat", base: 45, mins: 25, blurb: "Free your street-parked car after a plow berm" },
   commercial: { id: "commercial", label: "Commercial lot", icon: "🏢", tool: "Skid steer",
     basis: "area", base: 120, rate: 0.05, minsPer1000: 16, minMins: 35, blurb: "Lots, multi-bay, private roads" },
-  // Roadside / emergency — the winter side-hustle for drivers. No property zones
-  // needed; these are flat-rate, dispatched to wherever the customer is stuck.
+  // Roadside jump-start — a minor add-on, not a core service. Flat-rate, no zones.
   jumpstart: { id: "jumpstart", label: "Jump-start", icon: "🔋", tool: "Roadside kit",
     basis: "flat", base: 40, mins: 15, blurb: "Dead battery in the cold — back on the road" },
-  pullout: { id: "pullout", label: "Snowbank pull-out", icon: "🪢", tool: "Roadside kit",
-    basis: "flat", base: 55, mins: 20, blurb: "Stuck in a berm or ditch — winched free" },
 };
 
 // Roadside jobs live in their own section, not the snow-clearing picker.
-const ROADSIDE = ["jumpstart", "pullout"];
+const ROADSIDE = ["jumpstart"];
 
 // ---- Property modifiers (surcharge multipliers) ---------------------------
 // Duluth hillside reality: grade, ice, retaining walls, shared drives all change
@@ -163,6 +161,7 @@ const SEED_DRIVER = {
   tools: ["Plow truck", "Snowblower", "Snowblower / shovel", "Skid steer", "Roadside kit"], // equipped for all job types
   x: 62, y: 38, lng: -92.101, lat: 46.801,
   docs: { license: "verified", insurance: "verified", plate: "verified", w9: "pending" },
+  insurancePlan: "own", // "own" = carries their own commercial policy | "perEvent" = DRIFT per-event coverage
   insurancePolicy: { carrier: "North Country Commercial", type: "Commercial GL + Plow", expires: "2026-11-01" },
 };
 
@@ -199,6 +198,16 @@ function driverTier(driver) {
 }
 const driverPct = (driver) => driverTier(driver).pct;
 const driverPayFor = (riderTotal, driver) => Math.round((riderTotal || 0) * driverPct(driver));
+
+// Pay-per-event insurance: drivers can use their OWN commercial policy, or opt into
+// DRIFT's per-event coverage — no monthly premium, a small fee is deducted from each
+// job they actually work. IMPORTANT: this must be backed by a real insurer's on-demand
+// program; set `perEvent` to what that insurer charges you per covered job.
+const INSURANCE = { perEvent: 5, label: "Per-event coverage" };
+const driverOnPerEvent = (driver) => driver?.insurancePlan === "perEvent";
+const driverInsuranceFee = (driver) => driverOnPerEvent(driver) ? INSURANCE.perEvent : 0;
+// Net take-home = tier pay minus the per-event insurance fee (0 if they carry their own).
+const driverNetPay = (riderTotal, driver) => Math.max(0, driverPayFor(riderTotal, driver) - driverInsuranceFee(driver));
 const driverHourlyFor = (dPay, mins) => Math.round((dPay / ((mins || 25) + DRIVE_OVERHEAD_MIN)) * 60);
 
 // Capture the customer's held card + pay the driver when a job completes.
@@ -369,6 +378,7 @@ function reducer(s, a) {
       driver: { ...s.driver, name: a.name || s.driver.name, truck: a.truck || s.driver.truck,
         tools: a.tools?.length ? a.tools : s.driver.tools,
         docs: { ...s.driver.docs, ...(a.docs || {}) },
+        insurancePlan: a.insurancePlan || s.driver.insurancePlan,
         insurancePolicy: a.insurance || s.driver.insurancePolicy },
       driverReferral: { ...s.driverReferral, code: a.name ? "PLOW-" + a.name.split(" ")[0].toUpperCase() : s.driverReferral.code },
     };
@@ -1700,46 +1710,39 @@ function RiderHome({ go }) {
         autoMatch(dispatch, state);
       }} />}
 
-      {/* dedicated roadside & emergency section — a second earning lane for drivers */}
-      {prop && (
-        <div style={{ marginBottom: 14 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 8 }}>
-            <Eyebrow color={C.danger}>Roadside help</Eyebrow>
-            <span style={{ font: `500 11px ${FB}`, color: C.mistDim }}>· dispatched to you now</span>
-          </div>
-          <div style={{ display: "flex", gap: 10 }}>
-            {ROADSIDE.map(id => {
-              const rjt = JOB_TYPES[id];
-              return (
-                <button key={id} onClick={() => requestRoadside(id)} style={{ flex: 1, cursor: "pointer", textAlign: "left",
-                  background: `linear-gradient(120deg, ${C.danger}18, ${C.night2})`, border: `1.5px solid ${C.danger}55`,
-                  borderRadius: 14, padding: "13px 14px", WebkitTapHighlightColor: "transparent" }}>
-                  <div style={{ fontSize: 22, marginBottom: 6 }}>{rjt.icon}</div>
-                  <div style={{ font: `700 13px ${FB}`, color: C.ice }}>{rjt.label}</div>
-                  <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 2 }}>Flat ${rjt.base} · ~{rjt.mins} min</div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* job type picker (snow-clearing services) */}
+      {/* SNOW REMOVAL — the main event. Driveway plowing leads. */}
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
+        <Eyebrow>Snow removal</Eyebrow>
+        <span style={{ font: `500 11px ${FB}`, color: C.mistDim }}>pick what needs clearing</span>
+      </div>
       <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4, marginBottom: 14 }}>
         {Object.values(JOB_TYPES).filter(t => !ROADSIDE.includes(t.id)).map(t => {
           const on = jobType === t.id;
+          const hero = t.id === "driveway";
           return (
-            <button key={t.id} onClick={() => setJobType(t.id)} style={{ flex: "0 0 auto", cursor: "pointer",
-              minWidth: 104, padding: "12px 10px", borderRadius: 14, textAlign: "left",
-              background: on ? C.amber + "18" : C.slate, border: `1.5px solid ${on ? C.amber : C.line}`,
+            <button key={t.id} onClick={() => setJobType(t.id)} style={{ flex: "0 0 auto", cursor: "pointer", position: "relative",
+              minWidth: hero ? 128 : 104, padding: "13px 12px", borderRadius: 14, textAlign: "left",
+              background: on ? C.amber + "18" : C.slate, border: `1.5px solid ${on ? C.amber : hero ? C.amber + "77" : C.line}`,
               transition: "all .15s" }}>
-              <div style={{ fontSize: 22, marginBottom: 6 }}>{t.icon}</div>
-              <div style={{ font: `700 12px ${FB}`, color: on ? C.amber : C.ice }}>{t.label}</div>
+              {hero && <span style={{ position: "absolute", top: 8, right: 9, font: `800 8px ${FB}`, letterSpacing: ".09em", color: C.push }}>POPULAR</span>}
+              <div style={{ fontSize: hero ? 26 : 22, marginBottom: 6 }}>{t.icon}</div>
+              <div style={{ font: `700 ${hero ? 13 : 12}px ${FB}`, color: on ? C.amber : C.ice }}>{t.label}</div>
               <div style={{ font: `500 10px ${FB}`, color: C.mist, marginTop: 2 }}>{t.tool}</div>
             </button>
           );
         })}
       </div>
+
+      {/* Roadside jump-start — minor, clearly-secondary add-on */}
+      {prop && (
+        <button onClick={() => requestRoadside("jumpstart")} style={{ width: "100%", marginBottom: 14, cursor: "pointer",
+          textAlign: "left", display: "flex", alignItems: "center", gap: 11, padding: "11px 13px", borderRadius: 12,
+          background: C.slate, border: `1px solid ${C.line}`, WebkitTapHighlightColor: "transparent" }}>
+          <span style={{ fontSize: 18 }}>🔋</span>
+          <div style={{ flex: 1, font: `600 12px ${FB}`, color: C.mist }}>Dead battery? Roadside jump-start · flat ${JOB_TYPES.jumpstart.base}</div>
+          <span style={{ color: C.mistDim, fontSize: 15 }}>›</span>
+        </button>
+      )}
 
       {/* live weather / demand strip */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12, overflowX: "auto", paddingBottom: 2 }}>
@@ -2226,9 +2229,9 @@ function RiderTracking() {
       const after = { seed: 12, phase: "after", ts: Date.now() };
       dispatch({ type: "ADD_PHOTO", phase: "before", photo: before });
       dispatch({ type: "ADD_PHOTO", phase: "after", photo: after });
-      const tierPay = driverPayFor(o.quote?.riderTotal, state.driver);
+      const tierPay = driverNetPay(o.quote?.riderTotal, state.driver); // net of per-event insurance
       settleJobPayment(o, tierPay, state.driver);
-      // credit earnings at the driver's real tier rate, not the flat quoteJob rate
+      // credit earnings at the driver's real tier rate (minus any per-event insurance)
       dispatch({ type: "COMPLETE", q: { ...o.quote, driverPay: tierPay }, size: o.size });
       dispatch({ type: "ORDER_STATE", patch: { state: "arrived_done", completed: true } });
       notify(dispatch, { kind: "job", title: "Your property is plowed ✓",
@@ -3037,7 +3040,7 @@ const TOOL_OPTIONS = [
   { id: "Snowblower", icon: "🧹", label: "Snowblower", note: "Sidewalks, walks" },
   { id: "Snowblower / shovel", icon: "🚗", label: "Shovel kit", note: "Car dig-outs" },
   { id: "Skid steer", icon: "🏢", label: "Skid steer", note: "Commercial lots" },
-  { id: "Roadside kit", icon: "🔋", label: "Roadside kit", note: "Jump-starts, snowbank pull-outs" },
+  { id: "Roadside kit", icon: "🔋", label: "Roadside kit", note: "Jump-starts" },
 ];
 
 // Guided-insurance partners. Our target driver — a guy who plows his own drive —
@@ -3063,22 +3066,14 @@ function DriverOnboarding() {
   const [policy, setPolicy] = useState("");
   const [valid, setValid] = useState({});
   const [uploads, setUploads] = useState({});
-  // insurance step: "have" (verify existing) | "get" (buy via partner)
+  // insurance step: "have" (verify own commercial policy) | "perEvent" (opt into DRIFT per-event coverage)
   const [coverage, setCoverage] = useState(null);
-  const [plan, setPlan] = useState(null);
-  const [bound, setBound] = useState(false);
-  const [ackLater, setAckLater] = useState(false);
+  const [perEventOptIn, setPerEventOptIn] = useState(false);
   const setV = (k, v) => setValid(s => ({ ...s, [k]: v }));
   const TOTAL = 4;
 
-  // simulate binding a partner policy (a real app hands off to the broker's flow)
-  const bindPlan = (p) => {
-    setPlan(p); setBound(false);
-    dispatch({ type: "TOAST", msg: `Starting your ${p.name} application…` });
-    setTimeout(() => { setBound(true); dispatch({ type: "TOAST", msg: `Covered — ${p.name} policy active` }); }, 1100);
-  };
   const step3Ready = coverage === "have" ? !!uploads.insurance
-    : coverage === "get" ? (bound || ackLater)
+    : coverage === "perEvent" ? perEventOptIn
     : false;
 
   const upload = (k) => {
@@ -3088,12 +3083,14 @@ function DriverOnboarding() {
   };
 
   const finish = () => {
-    const insured = (coverage === "have" && uploads.insurance) || (coverage === "get" && bound);
-    const carrierName = coverage === "get" && plan ? plan.name : (carrier || "North Country Commercial");
-    const coverType = coverage === "get" && plan ? plan.coverage : "Commercial GL + Plow";
+    const perEvent = coverage === "perEvent";
+    const insured = (coverage === "have" && uploads.insurance) || (perEvent && perEventOptIn);
+    const carrierName = perEvent ? "DRIFT per-event coverage" : (carrier || "North Country Commercial");
+    const coverType = perEvent ? `Per-event · $${INSURANCE.perEvent}/job` : "Commercial GL + Plow";
     dispatch({ type: "DRIVER_ONBOARD_DONE", name, truck: truck || "F-350 · 9ft V-Plow", tools,
       docs: { license: "verified", insurance: insured ? "verified" : "pending", plate: "verified", w9: "pending" },
-      insurance: { carrier: carrierName, type: coverType, expires: "2026-11-01" } });
+      insurancePlan: perEvent ? "perEvent" : "own",
+      insurance: { carrier: carrierName, type: coverType, expires: perEvent ? "per job" : "2026-11-01" } });
     dispatch({ type: "TOAST", msg: insured
       ? `You're verified, ${name.split(" ")[0] || "driver"}! Go online to start earning.`
       : `Almost there, ${name.split(" ")[0] || "driver"} — you can go online once your coverage is confirmed.` });
@@ -3230,9 +3227,9 @@ function DriverOnboarding() {
             </div>
           </div>
 
-          {/* have it vs get it */}
+          {/* use your own vs opt into per-event coverage */}
           <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
-            {[["have", "🛡️", "I'm already covered"], ["get", "✨", "Help me get covered"]].map(([id, ic, label]) => {
+            {[["have", "🛡️", "I have my own", "Commercial policy"], ["perEvent", "🎟️", "Cover me per job", `No monthly bill`]].map(([id, ic, label, sub]) => {
               const on = coverage === id;
               return (
                 <button key={id} onClick={() => setCoverage(id)} style={{ flex: 1, cursor: "pointer", textAlign: "left",
@@ -3240,6 +3237,7 @@ function DriverOnboarding() {
                   border: `1.5px solid ${on ? C.push : C.line}`, transition: "all .18s", WebkitTapHighlightColor: "transparent" }}>
                   <div style={{ fontSize: 20, marginBottom: 6 }}>{ic}</div>
                   <div style={{ font: `700 13px ${FB}`, color: on ? C.push : C.ice }}>{label}</div>
+                  <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 2 }}>{sub}</div>
                 </button>
               );
             })}
@@ -3255,58 +3253,43 @@ function DriverOnboarding() {
             </div>
           )}
 
-          {/* GET IT: guided partner quotes */}
-          {coverage === "get" && (
+          {/* PER-EVENT: opt into DRIFT coverage, paid only when you work */}
+          {coverage === "perEvent" && (
             <div>
-              <Eyebrow color={C.mist}>Partner quotes · plow-specific</Eyebrow>
-              <p style={{ font: `500 11px ${FB}`, color: C.mistDim, margin: "6px 0 12px" }}>
-                Vetted commercial plow policies. Pick one to start — cancel any time before your first storm.
-              </p>
-              <div style={{ display: "grid", gap: 10 }}>
-                {INSURANCE_PARTNERS.map(p => {
-                  const on = plan?.id === p.id;
-                  return (
-                    <button key={p.id} onClick={() => bindPlan(p)} style={{ textAlign: "left", cursor: "pointer",
-                      padding: 14, borderRadius: 14, background: on ? p.accent + "14" : C.slate,
-                      border: `1.5px solid ${on ? p.accent : C.line}`, transition: "all .18s", WebkitTapHighlightColor: "transparent" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
-                            <span style={{ font: `700 14px ${FB}`, color: C.ice }}>{p.name}</span>
-                            <Chip color={p.accent}>{p.badge}</Chip>
-                          </div>
-                          <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 4 }}>{p.coverage}</div>
-                          <div style={{ font: `500 11px ${FB}`, color: C.mistDim, marginTop: 3 }}>{p.note}</div>
-                        </div>
-                        <div style={{ textAlign: "right", flexShrink: 0 }}>
-                          <div style={{ font: `700 20px ${FD}`, color: p.accent }}>${p.monthly}</div>
-                          <div style={{ font: `500 10px ${FB}`, color: C.mistDim }}>/mo</div>
-                        </div>
-                      </div>
-                      {on && (
-                        <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8,
-                          font: `600 12px ${FB}`, color: bound ? C.push : C.mist }}>
-                          {bound
-                            ? <><span>✅</span> Policy active — you're covered</>
-                            : <><span style={{ width: 13, height: 13, borderRadius: "50%", border: `2px solid ${p.accent}44`,
-                                borderTopColor: p.accent, animation: "spin .7s linear infinite", display: "inline-block" }} /> Binding your policy…</>}
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
+              <div style={{ background: `linear-gradient(130deg, ${C.push}14, ${C.night2})`, border: `1px solid ${C.push}55`,
+                borderRadius: 16, padding: 18 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+                  <div>
+                    <div style={{ font: `800 15px ${FD}`, color: C.ice }}>DRIFT per-event coverage</div>
+                    <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 4 }}>Commercial liability, active only while you're on a job.</div>
+                  </div>
+                  <div style={{ textAlign: "right", flexShrink: 0 }}>
+                    <div style={{ font: `800 22px ${FD}`, color: C.push }}>${INSURANCE.perEvent}</div>
+                    <div style={{ font: `500 10px ${FB}`, color: C.mistDim }}>per job</div>
+                  </div>
+                </div>
+                <div style={{ height: 1, background: C.line, margin: "14px 0" }} />
+                {[
+                  ["💸", "No monthly premium", "You only pay when you actually plow a job."],
+                  ["➖", "Deducted from your pay", `$${INSURANCE.perEvent} comes out of each job — nothing out of pocket.`],
+                  ["🌤️", "Slow week? Pay nothing", "No storms, no jobs, no charge."],
+                ].map(([ic, t, d]) => (
+                  <div key={t} style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+                    <span style={{ fontSize: 15 }}>{ic}</span>
+                    <div><div style={{ font: `700 12px ${FB}`, color: C.ice }}>{t}</div>
+                      <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 1 }}>{d}</div></div>
+                  </div>
+                ))}
               </div>
-              {!bound && (
-                <button onClick={() => setAckLater(a => !a)} style={{ width: "100%", marginTop: 12, cursor: "pointer",
-                  textAlign: "left", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 12,
-                  background: ackLater ? C.amber + "12" : "transparent", border: `1px dashed ${ackLater ? C.amber : C.line}` }}>
-                  <span style={{ width: 20, height: 20, borderRadius: 6, flexShrink: 0, display: "grid", placeItems: "center",
-                    background: ackLater ? C.amber : "transparent", border: `2px solid ${ackLater ? C.amber : C.line}`,
-                    color: "#20140A", fontWeight: 900, fontSize: 11 }}>{ackLater ? "✓" : ""}</span>
-                  <span style={{ font: `500 12px ${FB}`, color: C.mist }}>
-                    I'll arrange coverage myself — keep me offline until it's verified.</span>
-                </button>
-              )}
+              <button onClick={() => setPerEventOptIn(v => !v)} style={{ width: "100%", marginTop: 12, cursor: "pointer",
+                textAlign: "left", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 12,
+                background: perEventOptIn ? C.push + "12" : "transparent", border: `1px solid ${perEventOptIn ? C.push : C.line}` }}>
+                <span style={{ width: 20, height: 20, borderRadius: 6, flexShrink: 0, display: "grid", placeItems: "center",
+                  background: perEventOptIn ? C.push : "transparent", border: `2px solid ${perEventOptIn ? C.push : C.line}`,
+                  color: "#07240F", fontWeight: 900, fontSize: 11 }}>{perEventOptIn ? "✓" : ""}</span>
+                <span style={{ font: `500 12px ${FB}`, color: C.mist }}>
+                  I want DRIFT per-event coverage — deduct <b style={{ color: C.ice }}>${INSURANCE.perEvent}</b> from each job I complete.</span>
+              </button>
             </div>
           )}
 
@@ -3314,9 +3297,8 @@ function DriverOnboarding() {
             <Btn full kind="good" onClick={() => setStep(4)} disabled={!step3Ready}>
               {!coverage ? "Choose an option above"
                 : coverage === "have" ? (uploads.insurance ? "Continue" : "Upload your certificate")
-                : bound ? "Continue — you're covered"
-                : ackLater ? "Continue — I'll get covered"
-                : "Pick a policy to start"}
+                : perEventOptIn ? "Continue — you're covered per job"
+                : "Opt in to continue"}
             </Btn>
           </div>
         </Fade>
@@ -3508,7 +3490,8 @@ function IncomingJob({ order }) {
   const { state, dispatch } = useStore();
   const q = order.quote;
   const prop = order.property;
-  const dPay = driverPayFor(q.riderTotal, state.driver);
+  const insFee = driverInsuranceFee(state.driver);
+  const dPay = driverNetPay(q.riderTotal, state.driver); // take-home, net of per-event insurance
   const dHourly = driverHourlyFor(dPay, order.size?.mins || q.mins);
   const jt = JOB_TYPES[order.jobType || "driveway"];
   const toolMatch = state.driver.tools?.includes(order.tool || jt.tool);
@@ -3632,6 +3615,11 @@ function IncomingJob({ order }) {
             Accept · ${dPay}
           </button>
         </div>
+        {insFee > 0 && (
+          <p style={{ font: `500 10px ${FB}`, color: C.mistDim, textAlign: "center", marginTop: 8 }}>
+            Take-home after ${insFee} per-event insurance
+          </p>
+        )}
       </div>
     </div>
   );
@@ -3687,7 +3675,9 @@ function ClusterRoute() {
 function DriverActiveJob() {
   const { state, dispatch } = useStore();
   const o = state.order, q = o.quote;
-  const dPay = driverPayFor(q.riderTotal, state.driver);
+  const insFee = driverInsuranceFee(state.driver);
+  const dGross = driverPayFor(q.riderTotal, state.driver);
+  const dPay = driverNetPay(q.riderTotal, state.driver); // take-home after per-event insurance
   const dHourly = driverHourlyFor(dPay, o.size?.mins || q.mins);
   const [pos, setPos] = useState({ x: state.driver.x, y: state.driver.y });
   const [eta, setEta] = useState(o.eta || 8);
@@ -3759,6 +3749,8 @@ function DriverActiveJob() {
           <p style={{ ...sub, marginTop: 6 }}>Nice work. Payout added to today's earnings.</p>
         </div>
         <div style={{ background: C.night2, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 14 }}>
+          {insFee > 0 && <Row label="Job pay" value={`$${dGross}`} muted />}
+          {insFee > 0 && <Row label="🎟️ Per-event insurance" value={`−$${insFee}`} amber />}
           <Row label="You earned" value={`$${dPay}`} big />
           <Row label="Effective rate" value={`$${dHourly}/hr`} amber />
         </div>
@@ -4351,156 +4343,6 @@ function AuthScreen({ auth, onDemo }) {
   );
 }
 
-// ---- Public marketing homepage (front door for logged-out visitors) --------
-function LandingPage({ onStart }) {
-  const Section = ({ children, style }) => (
-    <section style={{ padding: "48px 20px", ...style }}>
-      <div style={{ maxWidth: 960, margin: "0 auto" }}>{children}</div>
-    </section>
-  );
-  const H2 = ({ children }) => <h2 style={{ font: `700 clamp(26px,4vw,36px)/1.1 ${FD}`, textAlign: "center", margin: "0 0 10px" }}>{children}</h2>;
-  const Lead = ({ children }) => <p style={{ textAlign: "center", color: C.mist, maxWidth: 560, margin: "0 auto 30px", font: `400 16px/1.5 ${FB}` }}>{children}</p>;
-  const goDrive = () => { if (typeof window !== "undefined") window.location.href = "/drive.html"; };
-
-  return (
-    <div style={{ minHeight: "100vh", background: C.night, color: C.ice, fontFamily: FB }}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@600;700;800&family=Inter:wght@400;500;600;700;800&display=swap'); html{scroll-behavior:smooth}`}</style>
-
-      {/* nav */}
-      <nav style={{ position: "sticky", top: 0, zIndex: 20, background: "rgba(8,18,31,.86)", backdropFilter: "blur(14px)",
-        borderBottom: `1px solid ${C.line}80` }}>
-        <div style={{ maxWidth: 960, margin: "0 auto", padding: "13px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ width: 30, height: 30, borderRadius: 9, background: `linear-gradient(150deg, ${C.amberSoft}, ${C.amber})`,
-              color: "#231603", display: "grid", placeItems: "center", fontWeight: 800 }}>❄</div>
-            <div style={{ font: `800 21px ${FD}`, letterSpacing: ".06em" }}>DRIFT</div>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <button onClick={goDrive} style={{ background: "none", border: `1px solid ${C.line}`, color: C.mist,
-              font: `700 12px ${FB}`, borderRadius: 10, padding: "9px 13px", cursor: "pointer" }}>Drive with us</button>
-            <Btn sm onClick={onStart}>Get started</Btn>
-          </div>
-        </div>
-      </nav>
-
-      {/* hero */}
-      <Section style={{ paddingTop: 58, paddingBottom: 34, textAlign: "center" }}>
-        <div style={{ font: `700 12px ${FB}`, letterSpacing: ".16em", textTransform: "uppercase", color: C.amber }}>Duluth · Superior · the Northland</div>
-        <h1 style={{ font: `800 clamp(40px,8vw,66px)/1.02 ${FD}`, letterSpacing: ".01em", margin: "14px 0 16px" }}>
-          Snow removal, <span style={{ color: C.amber }}>on demand</span>.
-        </h1>
-        <p style={{ font: `400 clamp(16px,2.4vw,20px)/1.5 ${FB}`, color: C.mist, maxWidth: 620, margin: "0 auto 26px" }}>
-          Get your driveway plowed without a contract. Map your property, see an honest price up front, track your driver like a pizza — and only pay when it actually snows.
-        </p>
-        <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
-          <Btn onClick={onStart}>Get my driveway plowed</Btn>
-          <Btn kind="ghost" onClick={goDrive}>I have a plow — earn money</Btn>
-        </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center", marginTop: 28 }}>
-          {["No contracts", "Pay per storm", "Track your driver", "Honest pricing"].map(t => (
-            <div key={t} style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 22, padding: "9px 15px", font: `700 13px ${FB}` }}>
-              <span style={{ color: C.push }}>✓</span> {t}
-            </div>
-          ))}
-        </div>
-      </Section>
-
-      {/* how it works */}
-      <Section>
-        <H2>How it works</H2>
-        <Lead>From "it's snowing" to a clear driveway in four steps.</Lead>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 14 }}>
-          {[
-            ["1", "Map your driveway", "Outline your property on a satellite map — no measuring, no guesswork."],
-            ["2", "Set your snow trigger", "Choose how many inches auto-books a plow, or just tap when you need one."],
-            ["3", "We dispatch a plow", "A nearby driver accepts, heads over, and you watch them live on the map."],
-            ["4", "Pay only when plowed", "One honest price, charged after the job — with before & after photos."],
-          ].map(([n, t, d]) => (
-            <div key={n} style={{ background: C.night2, border: `1px solid ${C.line}`, borderRadius: 16, padding: 22 }}>
-              <div style={{ width: 34, height: 34, borderRadius: 10, background: C.amber, color: "#231603",
-                font: `800 17px ${FD}`, display: "grid", placeItems: "center", marginBottom: 12 }}>{n}</div>
-              <h3 style={{ font: `700 16px ${FB}`, margin: "0 0 5px" }}>{t}</h3>
-              <p style={{ margin: 0, color: C.mist, font: `400 14px/1.5 ${FB}` }}>{d}</p>
-            </div>
-          ))}
-        </div>
-      </Section>
-
-      {/* services */}
-      <Section style={{ paddingTop: 20 }}>
-        <H2>Everything winter throws at you</H2>
-        <Lead>One app for the whole storm — not just plowing.</Lead>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
-          {[
-            ["🚜", "Driveway plowing", "Cleared down to the apron."],
-            ["🧹", "Sidewalk clearing", "Stay ordinance-compliant."],
-            ["🧂", "Salting & ice-melt", "Stop the re-freeze."],
-            ["🚗", "Car dig-outs", "Freed from the plow berm."],
-            ["🔋", "Roadside jump-starts", "Dead battery in the cold."],
-            ["🏢", "Commercial lots", "Businesses & multi-bay."],
-          ].map(([i, t, d]) => (
-            <div key={t} style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 }}>
-              <div style={{ fontSize: 24 }}>{i}</div>
-              <div style={{ font: `700 14px ${FB}`, marginTop: 8 }}>{t}</div>
-              <div style={{ font: `400 12px ${FB}`, color: C.mist, marginTop: 3 }}>{d}</div>
-            </div>
-          ))}
-        </div>
-      </Section>
-
-      {/* why */}
-      <Section>
-        <div style={{ background: `linear-gradient(120deg, ${C.amber}12, ${C.night2})`, border: `1px solid ${C.amber}44`,
-          borderRadius: 20, padding: "30px 24px", textAlign: "center" }}>
-          <H2>Why neighbors pick DRIFT</H2>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: 16, marginTop: 22, textAlign: "left" }}>
-            {[
-              ["No contracts, ever", "Pay per storm. When it doesn't snow, you don't pay a dime."],
-              ["Prices you can see", "The full breakdown up front — no hidden fees, no surprise surge."],
-              ["Watch your driver", "Live tracking and in-app messaging, start to finish."],
-              ["Proof it's done", "Before & after photos on every job's receipt."],
-              ["Local drivers", "Real people from around Duluth — not a faceless call center."],
-              ["Set it & forget it", "Auto-book at your snow depth so you wake up to a clear drive."],
-            ].map(([t, d]) => (
-              <div key={t} style={{ display: "flex", gap: 10 }}>
-                <span style={{ color: C.push, fontSize: 16, flexShrink: 0 }}>✓</span>
-                <div><div style={{ font: `700 14px ${FB}` }}>{t}</div>
-                  <div style={{ font: `400 13px/1.45 ${FB}`, color: C.mist, marginTop: 2 }}>{d}</div></div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </Section>
-
-      {/* service area — local SEO */}
-      <Section style={{ paddingTop: 10, textAlign: "center" }}>
-        <H2>Serving the Twin Ports</H2>
-        <Lead>On-demand snow removal across Duluth and the surrounding Northland.</Lead>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center" }}>
-          {["Duluth, MN", "Hermantown, MN", "Cloquet, MN", "Esko, MN", "Proctor, MN", "Superior, WI"].map(t => (
-            <div key={t} style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 10, padding: "10px 15px", font: `600 13px ${FB}`, color: C.ice }}>📍 {t}</div>
-          ))}
-        </div>
-      </Section>
-
-      {/* final CTA */}
-      <Section style={{ textAlign: "center" }}>
-        <h2 style={{ font: `800 clamp(28px,5vw,42px)/1.05 ${FD}`, margin: "0 0 12px" }}>Snow's coming. Beat the rush.</h2>
-        <p style={{ color: C.mist, font: `400 16px ${FB}`, margin: "0 0 24px" }}>Set up your property in two minutes — it's free until you book a plow.</p>
-        <Btn onClick={onStart}>Get started</Btn>
-      </Section>
-
-      {/* footer */}
-      <footer style={{ borderTop: `1px solid ${C.line}`, padding: "26px 20px", textAlign: "center", color: C.mistDim, font: `500 13px ${FB}` }}>
-        <div style={{ marginBottom: 8 }}>
-          <button onClick={onStart} style={{ background: "none", border: "none", color: C.mist, cursor: "pointer", font: `600 13px ${FB}`, marginRight: 16 }}>Get a plow</button>
-          <button onClick={goDrive} style={{ background: "none", border: "none", color: C.mist, cursor: "pointer", font: `600 13px ${FB}` }}>Drive with DRIFT</button>
-        </div>
-        DRIFT · On-demand snow removal · Duluth, MN &amp; the Northland
-      </footer>
-    </div>
-  );
-}
 
 // ---- Operator dashboard (private, ?ops=1) ---------------------------------
 const OPS_STATUS = {
@@ -4739,7 +4581,7 @@ function Shell() {
   }
   // Marketing homepage: the public front door for anyone not signed in yet.
   if (!auth.session && !bypass && !entered) {
-    return <>{SkipButton}<LandingPage onStart={() => setEntered(true)} /></>;
+    return <>{SkipButton}<Landing onStart={() => setEntered(true)} /></>;
   }
 
   if (supabaseEnabled && !auth.session && !bypass) {

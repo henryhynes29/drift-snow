@@ -76,7 +76,7 @@ create table if not exists public.jobs (
   customer_id   uuid not null references public.profiles(id) on delete cascade,
   driver_id     uuid references public.profiles(id) on delete set null,
 
-  job_type      text not null default 'driveway',   -- driveway|sidewalk|digout|commercial|jumpstart|pullout
+  job_type      text not null default 'driveway',   -- driveway|sidewalk|digout|commercial|jumpstart
   status        text not null default 'requested'
                   check (status in ('requested','accepted','enroute','plowing','completed','cancelled')),
   tool          text,
