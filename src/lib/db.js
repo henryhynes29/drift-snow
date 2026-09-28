@@ -173,3 +173,18 @@ export async function rateJob({ jobId, raterId, rateeId, stars, comment }) {
   if (!supabaseEnabled) return off();
   return supabase.from("ratings").insert({ job_id: jobId, rater_id: raterId, ratee_id: rateeId, stars, comment });
 }
+
+// ---------- Legal: signed agreements (your proof of consent) ----------
+// One row per acceptance: who, which documents, which version, when, and from
+// what device. Never updated or deleted by the app. See supabase/legal_acceptances.sql.
+export async function recordLegalAcceptance(userId, rec) {
+  if (!supabaseEnabled || !userId || !rec) return off();
+  return supabase.from("legal_acceptances").insert({
+    user_id: userId,
+    role: rec.role,
+    documents: rec.docs,
+    version: rec.version,
+    accepted_at: rec.at,
+    user_agent: rec.ua || null,
+  });
+}

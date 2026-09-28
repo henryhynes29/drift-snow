@@ -475,7 +475,7 @@ export default function MapPropertyDesigner({ existing, onDone, onQuote, saveLab
         <div>
           <div style={{ font: `400 12px ${FB}`, color: C.mist, marginBottom: 3 }}>
             {plowCount} plow · {pushCount} push · {hazards.length} hazard{hazards.length !== 1 ? "s" : ""}{hasPlow ? ` · ${sqft.toLocaleString()} sq ft` : ""}</div>
-          <div style={{ font: `600 15px ${FB}`, color: C.ice }}>{hasPlow ? "Your price per plow" : "Outline a plow area to see the price"}</div>
+          <div style={{ font: `600 15px ${FB}`, color: C.ice }}>{hasPlow ? "Suggested offer · you choose the final price" : "Outline a plow area to see a suggested offer"}</div>
         </div>
         <div style={{ font: `700 30px ${FD}`, color: hasPlow ? C.amber : C.mistDim, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>
           {hasPlow && price != null ? `$${price}` : "—"}
@@ -484,7 +484,7 @@ export default function MapPropertyDesigner({ existing, onDone, onQuote, saveLab
 
       <button onClick={done} disabled={!hasPlow || !!pending}
         style={(hasPlow && !pending ? primary : disabledBtn)({ width: "100%", marginTop: 12, minHeight: 54, font: `600 16px ${FB}` })}>
-        {pending ? "Confirm the area above first" : hasPlow ? (price != null ? `${saveLabel} · $${price} per plow` : saveLabel) : "Outline a plow area first"}
+        {pending ? "Confirm the area above first" : hasPlow ? saveLabel : "Outline a plow area first"}
       </button>
     </div>
   );

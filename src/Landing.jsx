@@ -41,7 +41,6 @@ const Icon = ({ path, size = 22 }) => (
 const ICONS = {
   noContract: <><path d="M4 4h10l4 4v12H4z" /><path d="M14 4v4h4" /><path d="m8 12 8 6M16 12l-8 6" /></>,
   lock: <><rect x="4" y="10" width="16" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></>,
-  shield: <><path d="M12 3 5 6v5c0 4 3 7 7 8 4-1 7-4 7-8V6z" /><path d="m9 12 2 2 4-4" /></>,
   camera: <><path d="M3 8h4l1.5-2h7L17 8h4v11H3z" /><circle cx="12" cy="13" r="3.2" /></>,
   pin: <><path d="M12 21s7-6.5 7-12a7 7 0 0 0-14 0c0 5.5 7 12 7 12z" /><circle cx="12" cy="9" r="2.4" /></>,
   check: <><path d="m5 12.5 4.5 4.5L19 7.5" /></>,
@@ -117,7 +116,7 @@ function LiftBridge() {
 // ---------- interactive phone demo ----------
 const DEMO = [
   { key: "map", tag: "Step 1 · Map it", title: "Outline your driveway" },
-  { key: "price", tag: "Step 2 · Price", title: "See an honest price" },
+  { key: "price", tag: "Step 2 · Price", title: "Name your price" },
   { key: "track", tag: "Step 3 · Track", title: "Watch your plow arrive" },
 ];
 
@@ -201,22 +200,32 @@ function Row({ l, v, strong }) {
   </div>;
 }
 function DemoPrice() {
+  // Mirrors the app: the customer names the offer; DRIFT only suggests (620 sq ft driveway).
+  const tiers = [["Standard", 42], ["Recommended", 48], ["Priority", 57]];
   return (
     <div>
-      <div style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 12, padding: 13 }}>
-        <div style={{ font: `700 30px ${FD}`, letterSpacing: "-0.02em", color: C.ice, lineHeight: 1 }}>$55</div>
-        <div style={{ font: `400 10px ${FB}`, color: C.mist, margin: "4px 0 10px" }}>per plow · 620 sq ft</div>
-        <div style={{ height: 1, background: C.line, margin: "0 0 8px" }} />
-        <Row l="Driveway base" v="$33" />
-        <Row l="620 sq ft × $0.035" v="$22" />
-        <div style={{ height: 1, background: C.line, margin: "8px 0" }} />
-        <Row l="You pay" v="$55" strong />
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, font: `500 10px ${FB}`, color: C.push }}>
-          <EmojiIcon e="check" s={10} /> No contracts · no hidden fees
+      <div style={{ font: `600 12px ${FB}`, color: C.ice, marginBottom: 7 }}>What will you offer?</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 5 }}>
+        {tiers.map(([l, v], i) => (
+          <div key={l} style={{ borderRadius: 9, padding: "7px 6px", background: i === 1 ? C.amber + "18" : C.slate,
+            border: `1.5px solid ${i === 1 ? C.amber : C.line}` }}>
+            <div style={{ font: `600 8.5px ${FB}`, color: i === 1 ? C.amber : C.mist }}>{l}</div>
+            <div style={{ font: `700 15px ${FD}`, color: C.ice, marginTop: 1 }}>${v}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, marginTop: 8 }}>
+        <Row l="Your offer" v="$48" />
+        <Row l="Driver call-out" v="$10" />
+        <Row l="DRIFT fee" v="$5" />
+        <div style={{ height: 1, background: C.line, margin: "7px 0" }} />
+        <Row l="Total" v="$63" strong />
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, font: `500 10px ${FB}`, color: C.push }}>
+          <EmojiIcon e="check" s={10} /> You set the price · charged when done
         </div>
       </div>
-      <div style={{ marginTop: 10, background: C.amber, color: C.onAmber,
-        borderRadius: 11, padding: "11px 0", textAlign: "center", font: `600 13px ${FB}` }}>Clear now · $55</div>
+      <div style={{ marginTop: 8, background: C.amber, color: C.onAmber,
+        borderRadius: 11, padding: "10px 0", textAlign: "center", font: `600 13px ${FB}` }}>Send offer · $63</div>
     </div>
   );
 }
@@ -256,17 +265,17 @@ function DemoTrack() {
 }
 
 // ---------- sections ----------
-export default function Landing({ onStart }) {
+export default function Landing({ onStart, onLegal }) {
   const goDrive = () => { if (typeof window !== "undefined") window.location.href = "/drive.html"; };
   const [faqOpen, setFaqOpen] = useState(0);
 
   // FAQ copy matches the JSON-LD in index.html (rich results) — keep them in sync.
   const FAQ = [
     ["Do I need a contract or subscription?", "No. DRIFT is pay-per-storm — you're only charged when a plow actually clears your driveway. No contracts, no monthly fees, no commitment."],
-    ["How much does it cost to plow a driveway in Duluth?", "A typical residential driveway runs about $30–$60 depending on size. You see the exact price up front — a base rate plus a small per-square-foot charge — before you ever book. No hidden fees."],
+    ["How much does it cost to plow a driveway in Duluth?", "You name your price. For a typical Duluth driveway we suggest an offer of about $30–$50 based on its size, plus a $10 call-out fee that goes to your driver and a $5 DRIFT booking fee. Offer more for a faster pickup mid-storm. You're only charged when it's done."],
     ["How fast can someone come plow?", "During a storm you can book on demand and watch your driver head over live, usually within the hour. You can also set an auto-plow trigger so it happens automatically once snow hits a depth you choose."],
     ["What areas do you serve?", "Duluth, Hermantown, Cloquet, Esko, Proctor, and Superior, Wisconsin — the greater Twin Ports and Northland."],
-    ["Are the drivers insured?", "Yes. Every driver is verified and carries commercial coverage before they can take a job, and you get before-and-after photos on every plow."],
+    ["Who does the plowing?", "Independent local plow operators who use DRIFT to find jobs. They're not DRIFT employees — DRIFT is the app that connects you, handles booking and payment, and gives you live tracking and photos."],
   ];
 
   return (
@@ -316,7 +325,7 @@ export default function Landing({ onStart }) {
               Your driveway,<br /><span style={{ color: C.amber }}>plowed on demand.</span>
             </h1>
             <p style={{ font: `400 clamp(17px,2vw,20px)/1.5 ${FB}`, color: C.mist, maxWidth: 480, margin: "0 0 32px" }}>
-              No contracts. Map your property, see an honest price, and track your plow live. Pay only when it actually snows.
+              No contracts. Map your property, name your price, and track your plow live. Pay only when it actually snows.
             </p>
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }} className="hero-ctas">
               <Btn big onClick={onStart}>Get my driveway plowed →</Btn>
@@ -340,9 +349,8 @@ export default function Landing({ onStart }) {
           {[
             [ICONS.noContract, "No contracts"],
             [ICONS.lock, "Secure card payments"],
-            [ICONS.shield, "Insured drivers"],
             [ICONS.camera, "Before & after photos"],
-            [ICONS.pin, "Duluth-local crews"],
+            [ICONS.pin, "Local plow operators"],
           ].map(([p, label], k) => (
             <div key={k} style={{ display: "flex", alignItems: "center", gap: 9 }}>
               <span style={{ color: C.mistDim, display: "grid", placeItems: "center" }}><Icon path={p} size={20} /></span>
@@ -359,7 +367,7 @@ export default function Landing({ onStart }) {
             ["pin", "Map your driveway", "Outline it on a satellite map. No measuring."],
             ["snowflake", "Set your snow trigger", "Auto-book at the depth you choose, or tap on demand."],
             ["pickup", "A local plow rolls out", "A driver accepts, heads over, and you track them live."],
-            ["camera", "Pay only when plowed", "One honest price, with before and after photos."],
+            ["camera", "Pay only when plowed", "Charged only when it's done, with before and after photos."],
           ].map(([ic, t, d], k) => (
             <div key={t} style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 16, padding: "24px 22px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -378,10 +386,9 @@ export default function Landing({ onStart }) {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 16 }}>
           {[
             ["plowtruck", "Driveway plowing", "Cleared to the apron", true],
-            ["broom", "Sidewalk clearing", "Ordinance-compliant"],
+            ["broom", "Sidewalk clearing", "Sidewalks and walkways"],
             ["car", "Car dig-outs", "Freed from the berm"],
             ["battery", "Roadside jump-start", "Dead battery help"],
-            ["building", "Commercial lots", "Businesses and multi-bay"],
           ].map(([ic, t, d, hero]) => (
             <div key={t} style={{ background: C.slate, border: `1px solid ${hero ? C.amber : C.line}`, borderRadius: 16, padding: "22px 20px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
@@ -403,7 +410,7 @@ export default function Landing({ onStart }) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))", gap: "28px 32px" }}>
             {[
               ["No contracts, ever", "Pay per storm. No snow, no charge, nothing to cancel."],
-              ["Prices you can see", "A full breakdown before you book. The price you see is the price you pay."],
+              ["You set the price", "Offer what the job is worth to you — we suggest a fair number from your driveway's size. No hidden fees."],
               ["Watch your driver", "Live map tracking and in-app messaging, start to finish."],
               ["Proof it's done", "Before and after photos on every job."],
               ["Real local drivers", "People from around Duluth, not a faceless call center."],
@@ -469,7 +476,12 @@ export default function Landing({ onStart }) {
           <button onClick={onStart} style={{ background: "none", border: "none", padding: 0, color: C.mist, cursor: "pointer", font: `500 14px ${FB}` }}>Get a plow</button>
           <button onClick={goDrive} style={{ background: "none", border: "none", padding: 0, color: C.mist, cursor: "pointer", font: `500 14px ${FB}` }}>Drive with DRIFT</button>
         </div>
-        DRIFT · On-demand snow removal · Duluth, MN
+        <div style={{ marginBottom: 12, display: "flex", gap: 24, justifyContent: "center", flexWrap: "wrap" }}>
+          {[["customerTerms", "Terms"], ["customerRelease", "Release & Waiver"], ["driverAgreement", "Driver Agreement"]].map(([id, label]) => (
+            <button key={id} onClick={() => onLegal && onLegal(id)} style={{ background: "none", border: "none", padding: 0, color: C.mist, cursor: "pointer", font: `500 14px ${FB}` }}>{label}</button>
+          ))}
+        </div>
+        DRIFT · The app that connects you with independent local plow operators · Duluth, MN
       </footer>
 
       <style>{`

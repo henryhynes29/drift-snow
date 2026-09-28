@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, createContext, useContext,
 import MapPropertyDesigner, { staticMapUrl, LiveMap, MAP_ENABLED } from "./PropertyMap.jsx";
 import { useAuth } from "./lib/auth.jsx";
 import { supabaseEnabled } from "./lib/supabase.js";
-import { loadProperties, replaceProperties, rateJob, pushDriverLocation, subscribeToDriverLocation, createJobFromOrder, patchJob, sendMessage, subscribeToMessages } from "./lib/db.js";
+import { recordLegalAcceptance, loadProperties, replaceProperties, rateJob, pushDriverLocation, subscribeToDriverLocation, createJobFromOrder, patchJob, sendMessage, subscribeToMessages } from "./lib/db.js";
 import { STRIPE_ENABLED, getStripe, createPaymentIntent, capturePayment, createConnectAccount, sendTip } from "./lib/payments.js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { snowDepthNow, nextStorm, refreshConditions } from "./lib/weather.js";
@@ -11,6 +11,7 @@ import { surgePct as marketSurgePct, surgeLabel as marketSurgeLabel, SURGE, refr
 import Landing from "./Landing.jsx";
 import Icon from "./Icon.jsx";
 import { C, E, FD, FB, applyTheme, getThemeMode, onThemeChange, isLight } from "./theme.js";
+import { LegalReader, LegalHub, CustomerConsent, DriverConsent, ConsentGate, hasCurrentAcceptance } from "./LegalDocs.jsx";
 
 // ============================================================
 // DRIFT — two-sided snowplow marketplace
@@ -43,11 +44,9 @@ const JOB_TYPES = {
   driveway: { id: "driveway", label: "Driveway plow", icon: "plowtruck", tool: "Plow truck",
     basis: "area", base: 25, rate: 0.035, minsPer1000: 22, minMins: 18, blurb: "Clear your drive & apron" },
   sidewalk: { id: "sidewalk", label: "Sidewalk clear", icon: "broom", tool: "Snowblower",
-    basis: "linear", base: 15, rate: 0.35, minsPerFt: 0.5, minMins: 15, blurb: "24-hr city ordinance compliance" },
+    basis: "linear", base: 15, rate: 0.35, minsPerFt: 0.5, minMins: 15, blurb: "Sidewalks and walkways" },
   digout: { id: "digout", label: "Car dig-out", icon: "car", tool: "Snowblower / shovel",
     basis: "flat", base: 45, mins: 25, blurb: "Free your street-parked car after a plow berm" },
-  commercial: { id: "commercial", label: "Commercial lot", icon: "building", tool: "Skid steer",
-    basis: "area", base: 120, rate: 0.05, minsPer1000: 16, minMins: 35, blurb: "Lots, multi-bay, private roads" },
   // Roadside jump-start — a minor add-on, not a core service. Flat-rate, no zones.
   jumpstart: { id: "jumpstart", label: "Jump-start", icon: "battery", tool: "Roadside kit",
     basis: "flat", base: 40, mins: 15, blurb: "Dead battery in the cold — back on the road" },
@@ -89,11 +88,37 @@ const PRICING = {
   lotWidthFt: 90, lotHeightFt: 60, minsPer1000: 14,
 };
 
+// ---- Marketplace pricing: the CUSTOMER names the price ---------------------
+// Customer pays : their OFFER + a $10 call-out fee (100% to the driver) + a $5 DRIFT fee.
+// Driver earns  : 80% of the offer + the full $10 call-out + 100% of tips — shown
+//                 before they accept, and they can pass on any offer, no penalty.
+// DRIFT earns   : the $5 fee + 20% of the offer.
+// DRIFT only RECOMMENDS an offer from square footage. "Standard" is set so the
+// total matches the old fixed price (rates stay the same); the customer decides.
+const CALLOUT_FEE = 10;     // flat, goes entirely to the driver
+const DRIFT_FEE = 5;        // DRIFT's booking fee
+const DRIVER_SHARE = 0.80;  // of the customer's offer
+const OFFER_MIN = 10, OFFER_MAX = 500, OFFER_STEP = 2;
+const OFFER_TIERS = [
+  { id: "standard", label: "Standard", mult: 1.00, note: "Fair rate" },
+  { id: "recommended", label: "Recommended", mult: 1.15, note: "Faster pickup" },
+  { id: "priority", label: "Priority", mult: 1.35, note: "First in line" },
+];
+// Price a quote at a specific offer (the customer's number).
+function withOffer(q, offer) {
+  const o = Math.min(OFFER_MAX, Math.max(OFFER_MIN, Math.round(offer)));
+  const driverPay = Math.round(o * DRIVER_SHARE) + CALLOUT_FEE;
+  const riderTotal = o + CALLOUT_FEE + DRIFT_FEE;
+  return { ...q, offer: o, baseAmount: o, calloutFee: CALLOUT_FEE, driftFee: DRIFT_FEE,
+    riderTotal, driverPay, platformFee: riderTotal - driverPay, fee: riderTotal - driverPay, platformNet: riderTotal - driverPay,
+    hourly: Math.round((driverPay / ((q.mins || 25) + DRIVE_OVERHEAD_MIN)) * 60),
+    low: o < (q.standardOffer || 0) };
+}
+
 // Flat DRIFT fee on every order — the platform's flat take on top of the driver's
 // price. 100% yours, never shared with the driver. One number to tune your fee.
-const PLATFORM_FEE = 10;
 
-// ---- Salting add-on (optional, stacks on any driveway / walk / lot job) ----
+// ---- Salting add-on (optional, stacks on any driveway / walk job) ----
 // Salt is priced separately and is NOT storm-surged — a bag of ice-melt costs
 // the same whether it's a dusting or a blizzard. Riders toggle it on; drivers
 // with salt on their profile see it called out on the job card.
@@ -128,17 +153,13 @@ const SIZES = [
   { id: "s", label: "Small", desc: "1–2 cars · short drive", base: 45, mins: 15 },
   { id: "m", label: "Medium", desc: "2–3 cars · standard", base: 70, mins: 25 },
   { id: "l", label: "Large", desc: "3+ cars · long drive", base: 105, mins: 40 },
-  { id: "xl", label: "Commercial", desc: "Lot / multi-bay", base: 180, mins: 70 },
 ];
 
 const SEED_DRIVER = {
   name: "Marcus T.", rating: 4.9, jobs: 412, truck: "F-350 · 9ft V-Plow", power: 5,
-  tier: "Blizzard", tierPct: 0.80,
-  tools: ["Plow truck", "Snowblower", "Snowblower / shovel", "Skid steer", "Roadside kit"], // equipped for all job types
+  tools: ["Plow truck", "Snowblower", "Snowblower / shovel", "Roadside kit"], // equipped for all job types
   x: 62, y: 38, lng: -92.101, lat: 46.801,
-  docs: { license: "verified", insurance: "verified", plate: "verified", w9: "pending" },
-  insurancePlan: "own", // "own" = carries their own commercial policy | "perEvent" = DRIFT per-event coverage
-  insurancePolicy: { carrier: "North Country Commercial", type: "Commercial GL + Plow", expires: "2026-11-01" },
+  docs: { license: "received", plate: "received", w9: "pending" }, // the driver's own upload status
 };
 
 const SEED_PROPERTIES = [
@@ -155,42 +176,19 @@ const DRIVE_OVERHEAD_MIN = 12;
 // Your platform cut — taken transparently out of the job total; the driver keeps
 // the rest. This ONE number sets your take rate. No hidden surge, no add-on fee:
 // the customer pays exactly the price they see, and it equals the line items.
-const PLATFORM_RATE = 0.15; // reference cut; actual driver share comes from tiers below
+const PLATFORM_RATE = 0.15; // reference cut for the legacy bucket quote
 
-// Driver payout tiers — drivers keep more of each job as they complete more.
-// Brand-new drivers get a 90% intro on their first few jobs to remove the risk
-// of signing up. Tune the thresholds/percentages freely.
-const INTRO_JOBS = 5, INTRO_PCT = 0.90;
-const DRIVER_TIERS = [
-  { id: "blizzard", label: "Blizzard", pct: 0.85, minJobs: 150 },
-  { id: "veteran",  label: "Veteran",  pct: 0.80, minJobs: 75 },
-  { id: "pro",      label: "Pro",      pct: 0.75, minJobs: 25 },
-  { id: "rookie",   label: "Rookie",   pct: 0.70, minJobs: 0 },
-];
-function driverTier(driver) {
-  const jobs = driver?.jobs || 0;
-  if (jobs < INTRO_JOBS) return { id: "intro", label: "New driver", pct: INTRO_PCT, intro: true, minJobs: 0 };
-  return DRIVER_TIERS.find(t => jobs >= t.minJobs) || DRIVER_TIERS[DRIVER_TIERS.length - 1];
-}
 // Flat marketplace split: the driver keeps 80% of the job price, DRIFT keeps 20%
-// (plus the flat $10 fee on top). Tier labels still show on the driver profile,
-// but they no longer change pay — everyone earns the same 80% share.
+// (plus the flat $10 fee on top). Same rate for every driver — no tiers.
 const driverPct = (driver) => 0.80;
-// Driver's gross pay for a job: 80% of the job price. The flat DRIFT fee is NOT
+// Driver's gross pay for a job: 80% of the offer + the $10 call-out. The DRIFT fee is NOT
 // shared — it's 100% the platform's.
-const driverGrossPay = (q, driver) => Math.round(
-  (q?.baseAmount || 0) * driverPct(driver)
-);
+const driverGrossPay = (q, driver) =>
+  Math.round((q?.baseAmount || 0) * driverPct(driver)) + (q?.calloutFee || 0);
 
-// Pay-per-event insurance: drivers can use their OWN commercial policy, or opt into
-// DRIFT's per-event coverage — no monthly premium, a small fee is deducted from each
-// job they actually work. IMPORTANT: this must be backed by a real insurer's on-demand
-// program; set `perEvent` to what that insurer charges you per covered job.
-const INSURANCE = { perEvent: 5, label: "Per-event coverage" };
-const driverOnPerEvent = (driver) => driver?.insurancePlan === "perEvent";
-const driverInsuranceFee = (driver) => driverOnPerEvent(driver) ? INSURANCE.perEvent : 0;
-// Net take-home = gross pay minus the per-event insurance fee (0 if they carry their own).
-const driverNetPay = (q, driver) => Math.max(0, driverGrossPay(q, driver) - driverInsuranceFee(driver));
+// DRIFT provides no insurance and deducts nothing from driver pay.
+// Net take-home = gross pay.
+const driverNetPay = (q, driver) => Math.max(0, driverGrossPay(q, driver));
 const driverHourlyFor = (dPay, mins) => Math.round((dPay / ((mins || 25) + DRIVE_OVERHEAD_MIN)) * 60);
 
 // Capture the customer's held card + pay the driver when a job completes.
@@ -233,29 +231,24 @@ function quoteJob({ jobType = "driveway", sqft = 0, linearFt = 0, property = nul
   const saltFee = salt && saltable ? Math.round(coreBase * SALT.rate) : 0; // +15% of the job
   const saltMins = saltFee ? SALT.mins : 0;
 
-  // Pay components: the base + salt is split by the driver's tier; the surge is
-  // split 75/25; the flat platform fee is 100% ours. (Driver share needs the
-  // driver's tier, so the real number is computed by driverGrossPay/driverNetPay.)
-  const baseAmount = Math.round(coreBase + saltFee); // tier-split portion
-  const total = Math.round(baseAmount + surgeFee + PLATFORM_FEE); // what the customer pays
-  const nominalDriver = Math.round(baseAmount * 0.8 + surgeFee * SURGE.driverShare); // ~80% tier estimate
-  const hourly = Math.round((nominalDriver / (mins + saltMins + DRIVE_OVERHEAD_MIN)) * 60);
-  return {
+  // Recommended offers. Standard = old fixed job price minus $5, so that
+  // Standard + $10 call-out + $5 DRIFT fee equals what the old price totaled.
+  const standard = Math.max(OFFER_MIN, Math.round(coreBase + saltFee) - (CALLOUT_FEE + DRIFT_FEE - 10));
+  const tiers = OFFER_TIERS.map(t => ({ ...t, offer: Math.max(OFFER_MIN, Math.round(standard * t.mult)) }));
+  const q = {
     jobType, jt, sqft, linearFt, mod,
     salt: !!saltFee, saltFee, saltable,
-    surge: surgeFee > 0, surgeFee, surgePct, surgeLabel: marketSurgeLabel(),
-    riderTotal: total,
-    baseAmount, platformFee: PLATFORM_FEE,
+    surge: false, surgeFee, surgePct, surgeLabel: "",
     preSurge: Math.round(coreBase),
-    driverPay: nominalDriver, fee: total - nominalDriver, platformNet: total - nominalDriver,
-    hourly, mins: mins + saltMins,
-    tool: jt.tool,
+    mins: mins + saltMins, tool: jt.tool,
+    standardOffer: standard, tiers, suggested: tiers[1].offer,
   };
+  return withOffer(q, q.suggested); // default: the Recommended offer
 }
 
 // AREA-BASED quote kept as a thin wrapper for existing callers.
 function areaQuote(sqft, property = null) {
-  return quoteJob({ jobType: property?.size?.id === "xl" ? "commercial" : "driveway", sqft, property });
+  return quoteJob({ jobType: "driveway", sqft, property });
 }
 
 function quoteProperty(property) {
@@ -277,13 +270,22 @@ function quote(size) {
 const StoreCtx = createContext(null);
 const useStore = () => useContext(StoreCtx);
 
+// Signed agreements (version + timestamp). Kept on the device and, with Supabase on,
+// written to the legal_acceptances table — that record is your proof of agreement.
+function loadLegal() {
+  try { return JSON.parse(localStorage.getItem("drift-legal") || "null") || { customer: null, driver: null }; }
+  catch (e) { return { customer: null, driver: null }; }
+}
+function saveLegal(legal) { try { localStorage.setItem("drift-legal", JSON.stringify(legal)); } catch (e) { /* private mode */ } }
+
 const initial = {
+  legal: loadLegal(),
   role: "rider",                    // rider | driver
   onboarded: false,                 // fresh customer -> guided setup first
   profile: { name: "", phone: "", email: "" },
   payment: null,                    // { brand, last4 } once added
   driverOnline: false,
-  driverOnboarded: false,           // drivers must verify before going online
+  driverOnboarded: false,           // drivers finish onboarding before going online
   properties: [],                   // fresh customer starts with none
   activeProperty: null,
   order: null,                      // the live job, shared by both sides
@@ -326,6 +328,12 @@ function mkNotif({ kind = "job", title, body = "", role = "both" }) {
 // Persist a newly-created order to Supabase (best-effort, non-blocking). On
 // success, stamps the real job id back onto the live order so status updates and
 // live-location can key off it. No-op in demo mode (no Supabase / not signed in).
+// Record a signed agreement: app state + device + (when configured) the database.
+function acceptLegal(dispatch, rec, userId) {
+  dispatch({ type: "ACCEPT_LEGAL", rec });
+  if (supabaseEnabled && userId) recordLegalAcceptance(userId, rec);
+}
+
 function persistNewJob(dispatch, order, userId) {
   if (!supabaseEnabled || !userId) return;
   createJobFromOrder(order, userId)
@@ -363,9 +371,7 @@ function reducer(s, a) {
       ...s, driverOnboarded: true,
       driver: { ...s.driver, name: a.name || s.driver.name, truck: a.truck || s.driver.truck,
         tools: a.tools?.length ? a.tools : s.driver.tools,
-        docs: { ...s.driver.docs, ...(a.docs || {}) },
-        insurancePlan: a.insurancePlan || s.driver.insurancePlan,
-        insurancePolicy: a.insurance || s.driver.insurancePolicy },
+        docs: { ...(s.driver.docs || {}), ...(a.docs || {}) } },
       driverReferral: { ...s.driverReferral, code: a.name ? "PLOW-" + a.name.split(" ")[0].toUpperCase() : s.driverReferral.code },
     };
     case "QUEUE": return { ...s, queued: s.queued + 1 };
@@ -390,7 +396,12 @@ function reducer(s, a) {
       return { ...s, userId: a.userId, role: "rider", profile: a.profile || s.profile,
         properties: props, activeProperty: props[0] || null, onboarded: props.length > 0 };
     }
-    case "SIGNED_OUT": return { ...initial };
+    case "SIGNED_OUT": return { ...initial, legal: loadLegal() };
+    case "ACCEPT_LEGAL": {
+      const legal = { ...s.legal, [a.rec.role]: a.rec };
+      saveLegal(legal);
+      return { ...s, legal };
+    }
     // DEV ONLY — jump past auth + both onboarding flows with demo data. Remove before production.
     case "DEV_SKIP": {
       const props = s.properties.length ? s.properties : SEED_PROPERTIES;
@@ -431,7 +442,9 @@ function reducer(s, a) {
       return { ...s, scheduled: s.scheduled.filter(j => j.id !== a.id) };
     case "ACTIVATE_SCHEDULED": // scheduled job becomes the live order
       return { ...s, order: a.order, scheduled: s.scheduled.filter(j => j.id !== a.id) };
-    case "ORDER_STATE": return { ...s, order: { ...s.order, ...a.patch } };
+    // Ignore late updates for a job that no longer exists (e.g. a match timer firing
+    // after the customer cancelled) — otherwise a half-built "ghost" order appears.
+    case "ORDER_STATE": return s.order ? { ...s, order: { ...s.order, ...a.patch } } : s;
     case "ADD_PHOTO": { // driver captures a before/after photo on the live order
       const photos = { ...(s.order?.photos || { before: [], after: [] }) };
       photos[a.phase] = [...(photos[a.phase] || []), a.photo];
@@ -458,7 +471,7 @@ function reducer(s, a) {
     case "NOTIF_READ":
       return { ...s, notifications: s.notifications.map(n => (!a.id || n.id === a.id) ? { ...n, read: true } : n) };
     case "NOTIF_CLEAR": return { ...s, notifications: [] };
-    case "RESET": return { ...initial };
+    case "RESET": { saveLegal({ customer: null, driver: null }); return { ...initial, legal: { customer: null, driver: null } }; }
     case "TOAST": return { ...s, toast: a.msg };
     default: return s;
   }
@@ -594,6 +607,8 @@ function Skeleton({ h = 16, w = "100%", r = 8, style }) {
 
 const h2 = { font: `700 30px/1.08 ${FD}`, letterSpacing: "-.02em", margin: "8px 0 8px" };
 const sub = { font: `400 15px/1.5 ${FB}`, color: C.mist, margin: 0 };
+const legalLink = { background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit",
+  color: C.plow, textDecoration: "underline", textUnderlineOffset: 2 };
 const miniBtn = { font: `600 13px ${FB}`, minHeight: 38, padding: "0 14px", borderRadius: 11, cursor: "pointer",
   background: C.slate, color: C.ice, border: `1px solid ${C.line}`, display: "inline-flex",
   alignItems: "center", justifyContent: "center", gap: 6, WebkitTapHighlightColor: "transparent" };
@@ -875,7 +890,7 @@ function PropertyDesigner({ onDone, existing, compact }) {
   const zonesOf = (m) => zones.filter(z => z.mode === m);
   const plowSqFt = zonesToSqFt(zones);
   const q = areaQuote(plowSqFt);
-  const animPrice = useCountUp(q.riderTotal, 320);
+  const animPrice = useCountUp(q.suggested, 320); // a suggestion — the customer names the price
   const animSqft = useCountUp(plowSqFt, 320);
   const hasPlow = plowSqFt > 0;
 
@@ -995,10 +1010,10 @@ function PropertyDesigner({ onDone, existing, compact }) {
       {/* price breakdown (plow phase) */}
       {phase === 0 && hasPlow && (
         <div style={{ marginTop: 12, background: C.night2, border: `1px solid ${C.line}`, borderRadius: 12, padding: "12px 14px" }}>
-          <Row label="Base service fee" value={`$${PRICING.base}`} />
-          <Row label={`${plowSqFt.toLocaleString()} sq ft × $${PRICING.perSqFt.toFixed(2)}`} value={`$${Math.round(plowSqFt * PRICING.perSqFt)}`} />
+          <Row label="Measured area" value={`${plowSqFt.toLocaleString()} sq ft`} />
           <div style={{ height: 1, background: C.line, margin: "10px 0" }} />
-          <Row label="Your price per plow" value={`$${q.riderTotal}`} big />
+          <Row label="Suggested offer" value={`$${q.suggested}`} big />
+          <div style={{ font: `400 12px ${FB}`, color: C.mistDim, marginTop: 4 }}>A suggestion — you choose your offer when you book.</div>
         </div>
       )}
 
@@ -1010,7 +1025,7 @@ function PropertyDesigner({ onDone, existing, compact }) {
             {canAdvance ? "Next · where to push snow ›" : "Outline a plow area first"}
           </Btn>
         ) : (
-          <Btn full onClick={save}>Save property · ${q.riderTotal} per plow</Btn>
+          <Btn full onClick={save}>Save property</Btn>
         )}
       </div>
       {phase === 1 && zonesOf("push").length === 0 && draft.length === 0 && (
@@ -1109,7 +1124,7 @@ const HOODS = {
   heights:     { label: "Duluth Heights", grade: "moderate", note: "Upper plateau" },
   lakeside:    { label: "Lakeside",      grade: "moderate", note: "Lake-effect belt" },
   lincoln:     { label: "Lincoln Park",  grade: "moderate", note: "West hillside" },
-  downtown:    { label: "Downtown",      grade: "flat",     note: "Flat · commercial" },
+  downtown:    { label: "Downtown",      grade: "flat",     note: "Flat · city grid" },
   parkpoint:   { label: "Park Point",    grade: "flat",     note: "Flat · sand spit" },
   endion:      { label: "Endion",        grade: "moderate", note: "Near lake" },
 };
@@ -1347,7 +1362,7 @@ function Onboarding() {
           <h1 style={{ font: `700 42px/0.96 ${FD}`, margin: "0 0 10px", textAlign: "center", letterSpacing: ".01em" }}>
             Never shovel<br />again.</h1>
           <p style={{ ...sub, maxWidth: 300, margin: "0 auto 18px", textAlign: "center", fontSize: 15 }}>
-            Map your property once. Tap once each storm. A pro clears it exactly how you drew it.
+            Map your property once. Tap once each storm. A local plow operator clears it exactly how you drew it.
           </p>
 
           {/* social proof */}
@@ -1383,7 +1398,7 @@ function Onboarding() {
           <p style={sub}>Search your address and we'll place a starting outline on the satellite view. Confirm it or redraw it — we measure it and price it for you.</p>
           <div style={{ height: 14 }} />
           <MapPropertyDesigner existing={prop} saveLabel="Continue"
-            onQuote={(sqft) => quoteJob({ jobType: "driveway", sqft }).riderTotal}
+            onQuote={(sqft) => quoteJob({ jobType: "driveway", sqft }).suggested}
             onDone={(data) => { setProp(data); go(state.userId ? 3 : 2); }} />
         </Fade>
       )}
@@ -1446,8 +1461,13 @@ function Onboarding() {
           <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "14px 0", font: `500 12px ${FB}`, color: C.mistDim }}>
             <span><Icon e="lock" s={14} /></span> Secured by Stripe · we never store your card
           </div>
-          <div style={{ position: "sticky", bottom: 16 }}>
-            <Btn full onClick={finish} disabled={!(valid.card && valid.exp && valid.cvc)}>Finish setup</Btn>
+          {/* clickwrap: required before the account is created */}
+          <div style={{ marginTop: 26 }}>
+            <h3 style={{ font: `700 20px/1.2 ${FD}`, letterSpacing: "-.01em", color: C.ice, margin: "0 0 4px" }}>One last thing</h3>
+            <p style={{ ...sub, fontSize: 14, marginBottom: 14 }}>How DRIFT works — please read before you finish.</p>
+            <CustomerConsent agreeLabel="Agree and finish setup"
+              blocked={!(valid.card && valid.exp && valid.cvc)} blockedLabel="Add your card above first"
+              onAgree={(rec) => { acceptLegal(dispatch, rec, state.userId); finish(); }} />
           </div>
         </Fade>
       )}
@@ -1491,8 +1511,8 @@ function RiderApp() {
 
 // ---- Duluth 24-hr sidewalk ordinance countdown ----------------------------
 // City ordinance requires walks cleared within 24 hrs of snowfall ending.
-// This turns a compliance deadline into a one-tap booking.
-function OrdinanceCountdown({ onBook }) {
+// A reminder of the city's deadline with a one-tap booking.
+function OrdinanceCountdown({ onBook, price }) {
   const DEADLINE_HRS = 24;
   const SNOW_ENDED_HRS_AGO = 6; // storm ended 6 hrs ago in this sim
   const [left, setLeft] = useState((DEADLINE_HRS - SNOW_ENDED_HRS_AGO) * 3600);
@@ -1510,7 +1530,7 @@ function OrdinanceCountdown({ onBook }) {
         display: "grid", placeItems: "center", flexShrink: 0 }}><Icon e="broom" s={18} /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ font: `600 14px ${FB}`, color: C.ice, whiteSpace: "nowrap" }}>Sidewalk due in {h}h {String(m).padStart(2, "0")}m</div>
-        <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 2 }}>City rule: 24 hrs after snow</div>
+        <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 2 }}>City rule: 24 hrs after snow{price ? ` · $${price}` : ""}</div>
       </div>
       <Btn sm kind="dark" onClick={onBook} style={{ padding: "0 14px" }}>Clear it</Btn>
     </div>
@@ -1591,11 +1611,25 @@ function RiderHome({ go }) {
   const [salt, setSalt] = useState(false);
   const [showBreak, setShowBreak] = useState(false); // breakdown one tap away — keeps the card calm
   const [payOpen, setPayOpen] = useState(false);    // Stripe authorization sheet (only when keys are set)
+  // Clickwrap gate: nothing books until the current Terms + Release are signed.
+  const [gate, setGate] = useState(null);   // the action to run once they agree
+  const [doc, setDoc] = useState(null);     // legal doc open in the reader
+  const signed = hasCurrentAcceptance(state.legal?.customer);
+  const guard = (fn) => (...args) => (signed ? fn(...args) : setGate(() => () => fn(...args)));
 
   const sqft = prop?.sqft || zonesToSqFt(prop?.zones);
   // sidewalk length: derive a sensible default from the property, editable later
   const linearFt = prop?.sidewalkFt || 80;
-  const q = quoteJob({ jobType, sqft, linearFt, property: prop, salt });
+  // The customer names the price. DRIFT only recommends (by square footage).
+  const [offer, setOffer] = useState(null);           // null = use the Recommended tier
+  useEffect(() => { setOffer(null); }, [jobType, prop?.id]);
+  const qRec = quoteJob({ jobType, sqft, linearFt, property: prop, salt });
+  const q = offer == null ? qRec : withOffer(qRec, offer);
+  const tierId = (qRec.tiers.find(t => t.offer === q.offer) || {}).id || "custom";
+  // One-tap extras (dig-out, jump-start, quick sidewalk) book at the Standard
+  // suggestion so their totals match what they used to cost. Price shown on the button.
+  const quickQuote = (type) => { const qq = quoteJob({ jobType: type, linearFt, property: prop }); return withOffer(qq, qq.standardOffer); };
+  const bump = (d) => setOffer(Math.min(OFFER_MAX, Math.max(OFFER_MIN, q.offer + d)));
   const animPrice = useCountUp(q.riderTotal);
   const first = state.profile.name ? state.profile.name.split(" ")[0] : null;
   const jt = JOB_TYPES[jobType];
@@ -1636,7 +1670,7 @@ function RiderHome({ go }) {
 
   // roadside / emergency dispatch — flat-rate, no property zones required
   const requestRoadside = (type) => {
-    const rq = quoteJob({ jobType: type, property: prop });
+    const rq = quickQuote(type);
     const rjt = JOB_TYPES[type];
     dispatch({ type: "REQUEST", order: {
       id: "o" + Date.now(), state: "requested", jobType: type, size: prop?.size || SIZES[1], property: prop,
@@ -1657,7 +1691,7 @@ function RiderHome({ go }) {
 
   // one-tap emergency dig-out (street-parked car buried by the city plow berm)
   const emergencyDigout = () => {
-    const eq = quoteJob({ jobType: "digout", property: prop });
+    const eq = quickQuote("digout");
     dispatch({ type: "REQUEST", order: {
       id: "o" + Date.now(), state: "requested", jobType: "digout", size: prop?.size || SIZES[1], property: prop,
       quote: eq, tool: eq.tool, emergency: true, createdAt: Date.now(),
@@ -1668,19 +1702,19 @@ function RiderHome({ go }) {
     autoMatch(dispatch, state);
   };
   const bookSidewalk = () => {
-    const oq = quoteJob({ jobType: "sidewalk", linearFt, property: prop });
+    const oq = quickQuote("sidewalk");
     dispatch({ type: "REQUEST", order: {
       id: "o" + Date.now(), state: "requested", jobType: "sidewalk", size: prop?.size || SIZES[1], property: prop,
       quote: oq, tool: oq.tool, createdAt: Date.now(), driverPos: { x: state.driver.x, y: state.driver.y },
       eta: 9, timeline: [{ k: "requested", t: "now", label: "Sidewalk clearing requested" }], photos: { before: [], after: [] },
     }});
-    dispatch({ type: "TOAST", msg: "Sidewalk crew requested — you'll be compliant" });
+    dispatch({ type: "TOAST", msg: "Sidewalk clearing requested" });
     autoMatch(dispatch, state);
   };
 
   const hour = new Date().getHours();
   const greet = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
-  const SERVICES = [["driveway", "Driveway"], ["sidewalk", "Sidewalk"], ["commercial", "Lot"]];
+  const SERVICES = [["driveway", "Driveway"], ["sidewalk", "Sidewalk"]];
   const basisLine = jt.basis === "area" ? `per plow · ${sqft.toLocaleString()} sq ft`
     : jt.basis === "linear" ? `per clearing · ~${linearFt} ft of walk`
     : `flat rate · ${jt.label.toLowerCase()}`;
@@ -1691,7 +1725,7 @@ function RiderHome({ go }) {
         {greet}{first ? `, ${first}` : ""}</h1>
 
       <StormBanner />
-      {SNOW_DEPTH_IN >= 2 && prop && <OrdinanceCountdown onBook={bookSidewalk} />}
+      {SNOW_DEPTH_IN >= 2 && prop && <OrdinanceCountdown price={quickQuote("sidewalk").riderTotal} onBook={guard(bookSidewalk)} />}
 
       {/* ---- THE primary action: your saved place + one button (Uber "Home" / DoorDash reorder) ---- */}
       {prop ? (
@@ -1743,46 +1777,92 @@ function RiderHome({ go }) {
               <div style={{ padding: "18px 2px 4px" }}>
                 <div style={{ font: `600 15px ${FB}`, color: C.ice }}>Outline this area to get a price</div>
                 <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 4, marginBottom: 14 }}>
-                  ${jt.base + PLATFORM_FEE} base + ${jt.rate.toFixed(2)} per sq ft. We'll place a starting outline for you.</div>
+                  Your square footage sets a suggested offer — you choose the final number. We'll place a starting outline for you.</div>
                 <Btn full onClick={() => go("props")}>Map it</Btn>
               </div>
             ) : (
               <>
-                {/* price */}
-                <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginTop: 18, gap: 12 }}>
+                {/* name your price — tiers are recommendations, not the price */}
+                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginTop: 18, gap: 10 }}>
+                  <div style={{ font: `600 15px ${FB}`, color: C.ice }}>What will you offer?</div>
+                  <div style={{ font: `400 12.5px ${FB}`, color: C.mistDim, whiteSpace: "nowrap" }}>{basisLine.replace("per plow · ", "")}</div>
+                </div>
+                <div role="radiogroup" aria-label="Offer" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 10 }}>
+                  {qRec.tiers.map(t => {
+                    const on = tierId === t.id;
+                    return (
+                      <button key={t.id} role="radio" aria-checked={on} onClick={() => setOffer(t.offer)}
+                        style={{ textAlign: "left", cursor: "pointer", padding: "10px 10px 9px", borderRadius: 13,
+                          background: on ? C.amber + "16" : C.night2, border: `1.5px solid ${on ? C.amber : "transparent"}`,
+                          transition: `background .15s, border-color .15s`, WebkitTapHighlightColor: "transparent" }}>
+                        <div style={{ font: `600 12px ${FB}`, color: on ? C.amber : C.mist }}>{t.label}</div>
+                        <div style={{ font: `700 20px/1.15 ${FD}`, letterSpacing: "-.02em", color: C.ice, marginTop: 3 }}>${t.offer}</div>
+                        <div style={{ font: `400 11.5px ${FB}`, color: C.mistDim, marginTop: 1 }}>{t.note}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+                {/* custom amount */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 8,
+                  background: C.night2, borderRadius: 13, padding: "6px 6px 6px 14px",
+                  border: `1.5px solid ${tierId === "custom" ? C.amber : "transparent"}` }}>
+                  <span style={{ font: `500 13px ${FB}`, color: tierId === "custom" ? C.ice : C.mist }}>
+                    {tierId === "custom" ? "Your offer" : "Or set your own"}</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <button onClick={() => bump(-OFFER_STEP)} aria-label="Lower offer" disabled={q.offer <= OFFER_MIN}
+                      style={{ ...miniBtn, width: 38, minHeight: 38, padding: 0, borderRadius: 10, opacity: q.offer <= OFFER_MIN ? .4 : 1 }}><Icon e="minus" s={16} /></button>
+                    <span style={{ minWidth: 56, textAlign: "center", font: `700 17px ${FD}`, color: C.ice }} aria-live="polite">${q.offer}</span>
+                    <button onClick={() => bump(OFFER_STEP)} aria-label="Raise offer"
+                      style={{ ...miniBtn, width: 38, minHeight: 38, padding: 0, borderRadius: 10 }}><Icon e="plus" s={16} /></button>
+                  </div>
+                </div>
+                {q.low && (
+                  <div role="note" style={{ display: "flex", gap: 9, alignItems: "flex-start", marginTop: 8, padding: "10px 12px",
+                    borderRadius: 12, background: C.amber + "12", border: `1px solid ${C.amber}40` }}>
+                    <span style={{ color: C.amber, display: "flex", marginTop: 1 }}><Icon e="warning" s={15} /></span>
+                    <span style={{ font: `400 13px/1.45 ${FB}`, color: C.mist }}>
+                      Offers under ${qRec.standardOffer} can take longer to get picked up — drivers choose which jobs to accept, especially mid-storm.</span>
+                  </div>
+                )}
+
+                {/* total */}
+                <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginTop: 16, gap: 12 }}>
                   <div>
-                    <div style={{ font: `700 34px/1 ${FD}`, letterSpacing: "-.02em", color: C.ice }}>${animPrice}</div>
-                    <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 6 }}>{basisLine}</div>
+                    <div style={{ font: `700 30px/1 ${FD}`, letterSpacing: "-.02em", color: C.ice }}>${animPrice}</div>
+                    <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 6 }}>total · ~{q.mins} min on site</div>
                   </div>
                   <div style={{ textAlign: "right", font: `400 13px/1.5 ${FB}`, color: C.mist }}>
-                    ~{q.mins} min on site<br /><span style={{ color: C.push, fontWeight: 600 }}>No contract</span></div>
+                    Charged when done<br /><span style={{ color: C.push, fontWeight: 600 }}>No contract</span></div>
                 </div>
 
                 <button onClick={() => setShowBreak(v => !v)} style={{ width: "100%", background: "none", border: "none",
                   cursor: "pointer", padding: "12px 0 4px", display: "flex", alignItems: "center", gap: 6,
                   font: `500 13px ${FB}`, color: C.mist, WebkitTapHighlightColor: "transparent" }}>
-                  How this price is built
+                  What's in the total
                   <span style={{ display: "flex", transform: showBreak ? "rotate(180deg)" : "none", transition: "transform .2s" }}><Icon e="chevrondown" s={14} /></span>
                 </button>
                 {showBreak && (
                   <div style={{ animation: "fadeIn .2s ease", padding: "4px 0 2px" }}>
-                    <Row label={`${jt.label} base`} value={`$${jt.base + PLATFORM_FEE}`} />
-                    {jt.basis === "area" && <Row label={`${sqft.toLocaleString()} sq ft × $${jt.rate.toFixed(3)}`} value={`$${Math.round(sqft * jt.rate)}`} />}
-                    {jt.basis === "linear" && <Row label={`${linearFt} ft × $${jt.rate.toFixed(2)}`} value={`$${Math.round(linearFt * jt.rate)}`} />}
-                    {modActive && <Row label={`Property factors ×${q.mod.toFixed(2)}`} value={q.mod > 1 ? "slope / hazards" : "shared drive"} />}
+                    <Row label="Your offer" value={`$${q.offer}`} />
+                    <Row label="Driver call-out fee (all to your driver)" value={`$${CALLOUT_FEE}`} />
+                    <Row label="DRIFT booking fee" value={`$${DRIFT_FEE}`} />
                     <div style={{ height: 1, background: C.line, margin: "8px 0" }} />
-                    <Row label="You pay" value={`$${q.riderTotal}`} big />
+                    <Row label="Total" value={`$${q.riderTotal}`} big />
+                    <div style={{ font: `400 12px/1.45 ${FB}`, color: C.mistDim, marginTop: 6 }}>
+                      Suggested offers are based on {jt.basis === "area" ? `${sqft.toLocaleString()} sq ft` : jt.basis === "linear" ? `~${linearFt} ft of walk` : "the job"}{modActive ? " and your property's slope and hazards" : ""}. Tips are optional and go 100% to your driver.</div>
                   </div>
                 )}
 
                 {/* the one button */}
                 <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-                  <Btn full onClick={startRequest}>Plow now · ${animPrice}</Btn>
-                  <button onClick={() => setShowSched(true)} aria-label="Schedule for later"
+                  <Btn full onClick={guard(startRequest)}>Send offer · ${animPrice}</Btn>
+                  <button onClick={guard(() => setShowSched(true))} aria-label="Schedule for later"
                     style={{ ...miniBtn, minHeight: TAP, width: TAP, padding: 0, borderRadius: 14 }}><Icon e="calendar" s={19} /></button>
                 </div>
-                <p style={{ font: `400 12.5px ${FB}`, color: C.mistDim, textAlign: "center", margin: "10px 0 4px" }}>
-                  You're only charged once it's done.</p>
+                <p style={{ font: `400 12.5px/1.5 ${FB}`, color: C.mistDim, textAlign: "center", margin: "10px 6px 4px" }}>
+                  You're only charged once it's done. Booking connects you with an independent operator under our{" "}
+                  <button onClick={() => setDoc("customerTerms")} style={legalLink}>Terms</button> and{" "}
+                  <button onClick={() => setDoc("customerRelease")} style={legalLink}>Release</button>.</p>
               </>
             )}
           </div>
@@ -1802,14 +1882,17 @@ function RiderHome({ go }) {
       <div style={{ marginTop: 28 }}>
         <Eyebrow>Other services</Eyebrow>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
-          <ServiceTile icon="car" title="Dig out my car" sub="Buried by the plow berm" onClick={emergencyDigout} disabled={!prop} />
-          <ServiceTile icon="battery" title="Jump-start" sub={`Flat $${JOB_TYPES.jumpstart.base}`} onClick={() => requestRoadside("jumpstart")} disabled={!prop} />
+          <ServiceTile icon="car" title="Dig out my car" sub={`Buried by the berm · $${quickQuote("digout").riderTotal}`} onClick={guard(emergencyDigout)} disabled={!prop} />
+          <ServiceTile icon="battery" title="Jump-start" sub={`Dead battery · $${quickQuote("jumpstart").riderTotal}`} onClick={guard(() => requestRoadside("jumpstart"))} disabled={!prop} />
         </div>
       </div>
 
       {showSched && <ScheduleSheet price={q.riderTotal} onClose={() => setShowSched(false)} onPick={schedule} />}
       {payOpen && <PaymentSheet amount={q.riderTotal} jobId={"pending"} customerId={state.userId || ""}
         onAuthorized={onAuthorized} onClose={() => setPayOpen(false)} />}
+      {gate && <ConsentGate role="customer" onClose={() => setGate(null)}
+        onAgree={(rec) => { acceptLegal(dispatch, rec, state.userId); const run = gate; setGate(null); run(); }} />}
+      {doc && <LegalReader docId={doc} onClose={() => setDoc(null)} />}
     </section></Fade>
   );
 }
@@ -2163,10 +2246,10 @@ function RiderTracking() {
       const after = { seed: 12, phase: "after", ts: Date.now() };
       dispatch({ type: "ADD_PHOTO", phase: "before", photo: before });
       dispatch({ type: "ADD_PHOTO", phase: "after", photo: after });
-      const tierPay = driverNetPay(o.quote, state.driver); // net of per-event insurance
-      settleJobPayment(o, tierPay, state.driver);
-      // credit earnings at the driver's real tier rate (minus any per-event insurance)
-      dispatch({ type: "COMPLETE", q: { ...o.quote, driverPay: tierPay }, size: o.size });
+      const driverPay = driverNetPay(o.quote, state.driver);
+      settleJobPayment(o, driverPay, state.driver);
+      // credit earnings at the driver's flat 80% share
+      dispatch({ type: "COMPLETE", q: { ...o.quote, driverPay }, size: o.size });
       dispatch({ type: "ORDER_STATE", patch: { state: "arrived_done", completed: true } });
       notify(dispatch, { kind: "job", title: "Your property is plowed",
         body: `${o.property?.label || "Your driveway"} is clear. Before & after photos are on your receipt.`, role: "rider" }, state.profile?.phone);
@@ -2296,8 +2379,14 @@ function RiderReceipt() {
       </div>
 
       <div style={{ background: C.night2, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 }}>
-        <Row label={`${jtR.label}${q.salt ? " + salt" : ""}`} value={`$${q.riderTotal}`} big />
-        <p style={{ font: `500 11px ${FB}`, color: C.mistDim, margin: "8px 0 0" }}>One flat price · charged to ···4242</p>
+        {q.offer != null && <>
+          <Row label="Your offer" value={`$${q.offer}`} />
+          <Row label="Driver call-out fee" value={`$${q.calloutFee || CALLOUT_FEE}`} />
+          <Row label="DRIFT booking fee" value={`$${q.driftFee || DRIFT_FEE}`} />
+          <div style={{ height: 1, background: C.line, margin: "8px 0" }} />
+        </>}
+        <Row label={q.offer != null ? "Total" : jtR.label} value={`$${q.riderTotal}`} big />
+        <p style={{ font: `400 12px ${FB}`, color: C.mistDim, margin: "8px 0 0" }}>Charged to ···4242 when the job was marked done</p>
       </div>
 
       {/* proof of work: before / after */}
@@ -2431,7 +2520,7 @@ function RiderProperties() {
           <Eyebrow color={C.plow}>Map &amp; outline the property</Eyebrow>
           <div style={{ height: 10 }} />
           <MapPropertyDesigner existing={existing}
-            onQuote={(sqft) => quoteJob({ jobType: "driveway", sqft, property: { grade, hazards, shared } }).riderTotal}
+            onQuote={(sqft) => quoteJob({ jobType: "driveway", sqft, property: { grade, hazards, shared } }).suggested}
             onDone={(data) => {
               const details = { grade, hazards, shared };
               const base = { addr: data.address || addr || "Property", center: data.center,
@@ -2485,7 +2574,8 @@ function RiderProperties() {
                   </div>
                 </div>
                 <div style={{ textAlign: "right", flexShrink: 0 }}>
-                  <div style={{ font: `700 19px ${FD}`, color: C.amber }}>${pq.riderTotal}</div>
+                  <div style={{ font: `400 11.5px ${FB}`, color: C.mistDim }}>Suggested</div>
+                  <div style={{ font: `700 19px ${FD}`, color: C.ice }}>${pq.suggested ?? pq.riderTotal}</div>
                   <button onClick={(ev) => { ev.stopPropagation(); startEdit(p); }}
                     style={{ ...miniBtn, minHeight: 32, fontSize: 12, marginTop: 7 }}>Edit</button>
                 </div>
@@ -2835,6 +2925,7 @@ function RiderAccount({ onReferral }) {
   const auth = useAuth();
   const p = state.profile, pay = state.payment;
   const ref = state.riderReferral;
+  const [legalOpen, setLegalOpen] = useState(false);
   return (
     <Fade k="acct"><section style={{ paddingTop: 10, paddingBottom: 28 }}>
       <div style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 22 }}>
@@ -2859,8 +2950,12 @@ function RiderAccount({ onReferral }) {
       <div style={{ height: 14 }} />
       <ListGroup>
         <ListRow icon="plowtruck" tint={C.amber} title="Drive with DRIFT" sub="Have a plow? Earn during storms"
-          onClick={() => dispatch({ type: "ROLE", role: "driver" })} last />
+          onClick={() => dispatch({ type: "ROLE", role: "driver" })} />
+        <ListRow icon="doc" tint={C.mist} title="Legal" sub="Terms, release, and what you agreed to"
+          onClick={() => setLegalOpen(true)} last />
       </ListGroup>
+      {legalOpen && <LegalHub onClose={() => setLegalOpen(false)}
+        acceptance={[state.legal?.customer, state.legal?.driver].filter(Boolean)} />}
 
       {auth?.isConfigured && auth?.session && (
         <button onClick={async () => { await auth.signOut(); dispatch({ type: "SIGNED_OUT" }); }}
@@ -2987,67 +3082,38 @@ function RiderReferral({ onBack }) {
 // DRIVER APP
 // ============================================================
 // ============================================================
-// DRIVER ONBOARDING — verify before you can go online
+// DRIVER ONBOARDING — finish setup before you can go online
 // ============================================================
 const TOOL_OPTIONS = [
-  { id: "Plow truck", icon: "plowtruck", label: "Plow truck", note: "Driveways, lots" },
+  { id: "Plow truck", icon: "plowtruck", label: "Plow truck", note: "Driveways" },
   { id: "Snowblower", icon: "broom", label: "Snowblower", note: "Sidewalks, walks" },
   { id: "Snowblower / shovel", icon: "car", label: "Shovel kit", note: "Car dig-outs" },
-  { id: "Skid steer", icon: "building", label: "Skid steer", note: "Commercial lots" },
   { id: "Roadside kit", icon: "battery", label: "Roadside kit", note: "Jump-starts" },
-];
-
-// Guided-insurance partners. Our target driver — a guy who plows his own drive —
-// almost never has commercial coverage yet, so onboarding HELPS him buy it
-// instead of turning him away. In production these are real broker quote APIs.
-const INSURANCE_PARTNERS = [
-  { id: "ncc", name: "North Country Commercial", monthly: 89, coverage: "$1M GL + plow endorsement",
-    badge: "Fastest bind", note: "MN-based · covers you same day", accent: C.push },
-  { id: "snowbelt", name: "Snowbelt Mutual", monthly: 74, coverage: "$500K GL + plow",
-    badge: "Budget pick", note: "Seasonal Nov–Apr option available", accent: C.amber },
-  { id: "frostline", name: "Frostline Coverage", monthly: 112, coverage: "$2M GL + commercial auto + plow",
-    badge: "Full coverage", note: "Best if you also run commercial lots", accent: C.plow },
 ];
 
 function DriverOnboarding() {
   const { state, dispatch } = useStore();
-  const [step, setStep] = useState(0); // 0 intro, 1 identity, 2 equipment, 3 insurance, 4 payout
+  const [step, setStep] = useState(0); // 0 intro, 1 identity, 2 equipment, 3 contractor agreement, 4 payout
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [truck, setTruck] = useState("");
   const [tools, setTools] = useState([]);
-  const [carrier, setCarrier] = useState("");
-  const [policy, setPolicy] = useState("");
   const [valid, setValid] = useState({});
   const [uploads, setUploads] = useState({});
-  // insurance step: "have" (verify own commercial policy) | "perEvent" (opt into DRIFT per-event coverage)
-  const [coverage, setCoverage] = useState(null);
-  const [perEventOptIn, setPerEventOptIn] = useState(false);
   const setV = (k, v) => setValid(s => ({ ...s, [k]: v }));
   const TOTAL = 4;
 
-  const step3Ready = coverage === "have" ? !!uploads.insurance
-    : coverage === "perEvent" ? perEventOptIn
-    : false;
 
   const upload = (k) => {
     setUploads(u => ({ ...u, [k]: "uploading" }));
     setTimeout(() => { setUploads(u => ({ ...u, [k]: "verified" }));
-      dispatch({ type: "TOAST", msg: "Document received — verifying" }); }, 900);
+      dispatch({ type: "TOAST", msg: "Document received" }); }, 900);
   };
 
   const finish = () => {
-    const perEvent = coverage === "perEvent";
-    const insured = (coverage === "have" && uploads.insurance) || (perEvent && perEventOptIn);
-    const carrierName = perEvent ? "DRIFT per-event coverage" : (carrier || "North Country Commercial");
-    const coverType = perEvent ? `Per-event · $${INSURANCE.perEvent}/job` : "Commercial GL + Plow";
     dispatch({ type: "DRIVER_ONBOARD_DONE", name, truck: truck || "F-350 · 9ft V-Plow", tools,
-      docs: { license: "verified", insurance: insured ? "verified" : "pending", plate: "verified", w9: "pending" },
-      insurancePlan: perEvent ? "perEvent" : "own",
-      insurance: { carrier: carrierName, type: coverType, expires: perEvent ? "per job" : "2026-11-01" } });
-    dispatch({ type: "TOAST", msg: insured
-      ? `You're verified, ${name.split(" ")[0] || "driver"}! Go online to start earning.`
-      : `Almost there, ${name.split(" ")[0] || "driver"} — you can go online once your coverage is confirmed.` });
+      docs: { license: uploads.license ? "received" : "pending", plate: uploads.plate ? "received" : "pending", w9: uploads.w9 ? "received" : "pending" } });
+    dispatch({ type: "TOAST", msg: `You're set up, ${name.split(" ")[0] || "driver"}. Go online whenever you want to work.` });
   };
 
   const UploadRow = ({ k, label, hint }) => {
@@ -3064,7 +3130,7 @@ function DriverOnboarding() {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ font: `700 13px ${FB}`, color: C.ice }}>{label}</div>
           <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 2 }}>
-            {st === "verified" ? "Uploaded · verifying" : st === "uploading" ? "Uploading…" : hint}</div>
+            {st === "verified" ? "Uploaded" : st === "uploading" ? "Uploading…" : hint}</div>
         </div>
         {!st && <span style={{ font: `700 12px ${FB}`, color: C.amber }}>Upload</span>}
       </button>
@@ -3092,12 +3158,12 @@ function DriverOnboarding() {
           <h1 style={{ font: `700 38px/1 ${FD}`, margin: "0 0 10px", textAlign: "center" }}>
             Plow on your<br />own schedule.</h1>
           <p style={{ ...sub, maxWidth: 300, margin: "0 auto 20px", textAlign: "center", fontSize: 15 }}>
-            Turn on when the snow flies. Take the jobs you want. Cash out the same day.
+            Turn on when the snow flies. Take the jobs you want. You're your own boss.
           </p>
           <div style={{ display: "grid", gap: 10, marginBottom: S.xl }}>
-            {[["cash", "Keep 80% of every job", "Plus 100% of tips · same rate for everyone"],
-              ["bolt", "Steady work every storm", "Jobs near you when it snows"],
-              ["bank", "Instant cash out", "Stripe Connect, same day"]].map(([i, t, d]) => (
+            {[["cash", "80% of every offer + $10 per job", "The call-out fee and all tips are yours"],
+              ["bolt", "Work when you want", "Go online during storms — take only the jobs you like"],
+              ["bank", "Paid through Stripe", "Payouts to your bank via Stripe Connect"]].map(([i, t, d]) => (
               <div key={t} style={{ display: "flex", gap: 12, alignItems: "center", background: C.slate,
                 border: `1px solid ${C.line}`, borderRadius: 14, padding: 13 }}>
                 <span style={{ fontSize: 19 }}><Icon e={i} s={19} /></span>
@@ -3117,7 +3183,7 @@ function DriverOnboarding() {
         <Fade k="d1">
           <Eyebrow color={C.push}>Step 1 · Identity</Eyebrow>
           <h2 style={h2}>Who's driving?</h2>
-          <p style={sub}>We verify every operator before they take jobs.</p>
+          <p style={sub}>Used for payouts and so customers know who's coming.</p>
           <div style={{ display: "grid", gap: 12, margin: "16px 0" }}>
             <Field label="Full name" icon="user" value={name} autoFocus onChange={setName}
               validate={validators.name} placeholder="Marcus Trent" onValid={v => setV("name", v)} />
@@ -3169,92 +3235,12 @@ function DriverOnboarding() {
 
       {step === 3 && (
         <Fade k="d3">
-          <Eyebrow color={C.push}>Step 3 · Insurance</Eyebrow>
-          <h2 style={h2}>Let's get you covered</h2>
-          <div style={{ display: "flex", gap: 11, alignItems: "flex-start", background: C.danger + "12",
-            border: `1px solid ${C.danger}44`, borderRadius: 14, padding: 14, margin: "14px 0" }}>
-            <span style={{ fontSize: 16 }}><Icon e="warning" s={16} /></span>
-            <div style={{ font: `500 12px/1.5 ${FB}`, color: C.mist }}>
-              Your <b style={{ color: C.ice }}>personal auto policy won't cover commercial plowing</b> — drop a blade on it
-              and the claim can be denied outright. Commercial coverage is required to take jobs. Most new drivers don't have it
-              yet — that's normal, and we'll help you get it in a few minutes.
-            </div>
-          </div>
-
-          {/* use your own vs opt into per-event coverage */}
-          <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
-            {[["have", "shield", "I have my own", "Commercial policy"], ["perEvent", "ticket", "Cover me per job", `No monthly bill`]].map(([id, ic, label, sub]) => {
-              const on = coverage === id;
-              return (
-                <button key={id} onClick={() => setCoverage(id)} style={{ flex: 1, cursor: "pointer", textAlign: "left",
-                  padding: 14, borderRadius: 14, background: on ? C.push + "14" : C.slate,
-                  border: `1.5px solid ${on ? C.push : C.line}`, transition: "all .18s", WebkitTapHighlightColor: "transparent" }}>
-                  <div style={{ fontSize: 20, marginBottom: 6 }}><Icon e={ic} s={20} /></div>
-                  <div style={{ font: `700 13px ${FB}`, color: on ? C.push : C.ice }}>{label}</div>
-                  <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 2 }}>{sub}</div>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* HAVE IT: verify existing policy */}
-          {coverage === "have" && (
-            <div style={{ display: "grid", gap: 12 }}>
-              <Field label="Insurance carrier" icon="building" value={carrier} onChange={setCarrier}
-                placeholder="North Country Commercial" autoFocus />
-              <Field label="Policy number" icon="#️⃣" value={policy} onChange={setPolicy} placeholder="NCC-4482910" />
-              <UploadRow k="insurance" label="Certificate of insurance" hint="Must show commercial plow coverage" />
-            </div>
-          )}
-
-          {/* PER-EVENT: opt into DRIFT coverage, paid only when you work */}
-          {coverage === "perEvent" && (
-            <div>
-              <div style={{ background: C.slate, border: `1px solid ${C.push}55`,
-                borderRadius: 16, padding: 18 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
-                  <div>
-                    <div style={{ font: `800 15px ${FD}`, color: C.ice }}>DRIFT per-event coverage</div>
-                    <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 4 }}>Commercial liability, active only while you're on a job.</div>
-                  </div>
-                  <div style={{ textAlign: "right", flexShrink: 0 }}>
-                    <div style={{ font: `800 22px ${FD}`, color: C.push }}>${INSURANCE.perEvent}</div>
-                    <div style={{ font: `500 10px ${FB}`, color: C.mistDim }}>per job</div>
-                  </div>
-                </div>
-                <div style={{ height: 1, background: C.line, margin: "14px 0" }} />
-                {[
-                  ["cash", "No monthly premium", "You only pay when you actually plow a job."],
-                  ["minus", "Deducted from your pay", `$${INSURANCE.perEvent} comes out of each job — nothing out of pocket.`],
-                  ["cloudsun", "Slow week? Pay nothing", "No storms, no jobs, no charge."],
-                ].map(([ic, t, d]) => (
-                  <div key={t} style={{ display: "flex", gap: 10, marginBottom: 10 }}>
-                    <span style={{ fontSize: 15 }}><Icon e={ic} s={15} /></span>
-                    <div><div style={{ font: `700 12px ${FB}`, color: C.ice }}>{t}</div>
-                      <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 1 }}>{d}</div></div>
-                  </div>
-                ))}
-              </div>
-              <button onClick={() => setPerEventOptIn(v => !v)} style={{ width: "100%", marginTop: 12, cursor: "pointer",
-                textAlign: "left", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 12,
-                background: perEventOptIn ? C.push + "12" : "transparent", border: `1px solid ${perEventOptIn ? C.push : C.line}` }}>
-                <span style={{ width: 20, height: 20, borderRadius: 6, flexShrink: 0, display: "grid", placeItems: "center",
-                  background: perEventOptIn ? C.push : "transparent", border: `2px solid ${perEventOptIn ? C.push : C.line}`,
-                  color: C.onPush, fontWeight: 900, fontSize: 11 }}>{perEventOptIn ? <Icon e="check" s={11} /> : ""}</span>
-                <span style={{ font: `500 12px ${FB}`, color: C.mist }}>
-                  I want DRIFT per-event coverage — deduct <b style={{ color: C.ice }}>${INSURANCE.perEvent}</b> from each job I complete.</span>
-              </button>
-            </div>
-          )}
-
-          <div style={{ position: "sticky", bottom: 16, marginTop: S.lg }}>
-            <Btn full kind="good" onClick={() => setStep(4)} disabled={!step3Ready}>
-              {!coverage ? "Choose an option above"
-                : coverage === "have" ? (uploads.insurance ? "Continue" : "Upload your certificate")
-                : perEventOptIn ? "Continue — you're covered per job"
-                : "Opt in to continue"}
-            </Btn>
-          </div>
+          <Eyebrow color={C.push}>Step 3 · Your agreement</Eyebrow>
+          <h2 style={h2}>You work for yourself</h2>
+          <p style={sub}>DRIFT is an app that connects you with customers — not your employer, and not your insurer. Confirm each point to continue.</p>
+          <div style={{ height: 16 }} />
+          <DriverConsent agreeLabel="Agree and continue"
+            onAgree={(rec) => { acceptLegal(dispatch, rec, state.userId); setStep(4); }} />
         </Fade>
       )}
 
@@ -3320,9 +3306,15 @@ function DriverDrive() {
 
   if (working) return <DriverActiveJob />;
 
+  // Contractor agreement must be signed (current version) before going online.
+  const [gate, setGate] = useState(false);
+  const goOnline = (v) => {
+    dispatch({ type: "ONLINE", v });
+    dispatch({ type: "TOAST", msg: v ? "You're online — requests will pop up here" : "You're offline" });
+  };
   const toggle = () => {
-    dispatch({ type: "ONLINE", v: !online });
-    dispatch({ type: "TOAST", msg: !online ? "You're online — requests will pop up here" : "You're offline" });
+    if (!online && !hasCurrentAcceptance(state.legal?.driver)) { setGate(true); return; }
+    goOnline(!online);
   };
 
   return (
@@ -3399,6 +3391,8 @@ function DriverDrive() {
       )}
 
       {incoming && <IncomingJob order={o} />}
+      {gate && <ConsentGate role="driver" onClose={() => setGate(false)}
+        onAgree={(rec) => { acceptLegal(dispatch, rec, state.userId); setGate(false); goOnline(true); }} />}
     </section></Fade>
   );
 }
@@ -3407,8 +3401,7 @@ function IncomingJob({ order }) {
   const { state, dispatch } = useStore();
   const q = order.quote;
   const prop = order.property;
-  const insFee = driverInsuranceFee(state.driver);
-  const dPay = driverNetPay(q, state.driver); // take-home, net of per-event insurance
+  const dPay = driverNetPay(q, state.driver); // take-home
   const dHourly = driverHourlyFor(dPay, order.size?.mins || q.mins);
   const jt = JOB_TYPES[order.jobType || "driveway"];
   const toolMatch = state.driver.tools?.includes(order.tool || jt.tool);
@@ -3458,6 +3451,10 @@ function IncomingJob({ order }) {
         <div style={{ font: `700 60px/1 ${FD}`, letterSpacing: "-.03em", color: C.ice, marginTop: 14 }}>${dPay}</div>
         <div style={{ font: `400 15px ${FB}`, color: C.mist, marginTop: 8 }}>
           {jt.label} · ~{order.size?.mins || q.mins} min on site · ~${dHourly}/hr</div>
+        {q.offer != null && (
+          <div style={{ font: `400 14px ${FB}`, color: C.mist, marginTop: 4 }}>
+            Customer offered ${q.offer} · you get 80% + the ${q.calloutFee || CALLOUT_FEE} call-out</div>
+        )}
         <div style={{ display: "flex", alignItems: "center", gap: 6, font: `500 15px ${FB}`, color: C.ice, marginTop: 14 }}>
           <span style={{ color: C.mist, display: "flex" }}><Icon e="pin" s={16} /></span>{prop?.addr || "Nearby"}</div>
 
@@ -3494,7 +3491,9 @@ function IncomingJob({ order }) {
 
         <div style={{ flex: 1, minHeight: 20 }} />
 
-        {/* one decision */}
+        {/* one decision — theirs */}
+        <p style={{ font: `400 12.5px/1.45 ${FB}`, color: C.mistDim, textAlign: "center", margin: "0 8px 10px" }}>
+          Your call. Accepting means you're taking this job as an independent contractor under your Driver Agreement.</p>
         <button onClick={accept} disabled={!toolMatch}
           style={{ width: "100%", minHeight: 64, borderRadius: 18, border: "none", cursor: toolMatch ? "pointer" : "not-allowed",
             background: toolMatch ? C.push : C.line, color: toolMatch ? C.onPush : C.mistDim,
@@ -3503,10 +3502,6 @@ function IncomingJob({ order }) {
         <button onClick={() => decline(false)}
           style={{ display: "block", margin: "10px auto 0", background: "none", border: "none", cursor: "pointer",
             font: `500 15px ${FB}`, color: C.mist, padding: 10 }}>Pass</button>
-        {insFee > 0 && (
-          <p style={{ font: `400 12px ${FB}`, color: C.mistDim, textAlign: "center", margin: "4px 0 0" }}>
-            Take-home after ${insFee} per-event insurance</p>
-        )}
       </div>
     </div>
   );
@@ -3562,9 +3557,7 @@ function ClusterRoute() {
 function DriverActiveJob() {
   const { state, dispatch } = useStore();
   const o = state.order, q = o.quote;
-  const insFee = driverInsuranceFee(state.driver);
-  const dGross = driverGrossPay(q, state.driver);
-  const dPay = driverNetPay(q, state.driver); // take-home after per-event insurance
+  const dPay = driverNetPay(q, state.driver); // take-home
   const dHourly = driverHourlyFor(dPay, o.size?.mins || q.mins);
   const [pos, setPos] = useState({ x: state.driver.x, y: state.driver.y });
   const [eta, setEta] = useState(o.eta || 8);
@@ -3636,8 +3629,6 @@ function DriverActiveJob() {
           <p style={{ ...sub, marginTop: 6 }}>Nice work. Payout added to today's earnings.</p>
         </div>
         <div style={{ background: C.night2, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 14 }}>
-          {insFee > 0 && <Row label="Job pay" value={`$${dGross}`} muted />}
-          {insFee > 0 && <Row label="Per-event insurance" value={`−$${insFee}`} amber />}
           <Row label="You earned" value={`$${dPay}`} big />
           <Row label="Effective rate" value={`$${dHourly}/hr`} amber />
         </div>
@@ -3887,7 +3878,7 @@ function DriverEarnings({ onReferral }) {
             <div style={{ font: `700 15px ${FB}`, color: C.ice }}>Set up your payouts</div>
           </div>
           <p style={{ font: `500 12px ${FB}`, color: C.mist, margin: "0 0 14px" }}>
-            Connect a bank account through Stripe to get paid — takes about 2 minutes. You keep {Math.round(driverPct(state.driver) * 100)}% of every job, deposited automatically.
+            Connect a bank account through Stripe to get paid — takes about 2 minutes. You keep 80% of every offer, the full ${CALLOUT_FEE} call-out fee, and all tips — deposited automatically.
           </p>
           <Btn full kind="dark" onClick={async () => {
             dispatch({ type: "TOAST", msg: "Opening secure Stripe setup…" });
@@ -3940,12 +3931,13 @@ function DriverAccount({ onReferral }) {
   const auth = useAuth();
   const d = state.driver;
   const ref = state.driverReferral;
+  const [legalOpen, setLegalOpen] = useState(false);
   const docRow = (label, status) => {
-    const ok = status === "verified";
+    const ok = status === "received" || status === "verified";
     return (
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "11px 0", borderBottom: `1px solid ${C.lineSoft}` }}>
         <span style={{ font: `600 13px ${FB}`, color: C.ice }}>{label}</span>
-        <Chip color={ok ? C.good : C.amber}>{status}</Chip>
+        <Chip color={ok ? C.good : C.amber}>{ok ? "On file" : "Needed"}</Chip>
       </div>
     );
   };
@@ -3963,9 +3955,9 @@ function DriverAccount({ onReferral }) {
       <Card style={{ marginBottom: 14 }}>
         <Eyebrow>Your share</Eyebrow>
         <div style={{ font: `700 32px/1 ${FD}`, letterSpacing: "-.02em", color: C.ice, marginTop: 8 }}>
-          80%<span style={{ font: `400 14px ${FB}`, color: C.mist, letterSpacing: 0 }}> of every job</span></div>
+          80%<span style={{ font: `400 14px ${FB}`, color: C.mist, letterSpacing: 0 }}> of every offer</span></div>
         <p style={{ font: `400 13px/1.45 ${FB}`, color: C.mist, margin: "8px 0 0" }}>
-          Plus 100% of tips. Same rate for every driver — nothing to unlock.</p>
+          Plus the full $10 call-out fee and 100% of tips. Customers set their offer — you choose which ones to take. Same rate for every driver.</p>
       </Card>
 
       {/* equipment — determines which job types you can accept */}
@@ -3988,21 +3980,16 @@ function DriverAccount({ onReferral }) {
         </div>
       </Card>
 
-      {/* documents & insurance */}
+      {/* documents */}
       <Card style={{ marginBottom: 14 }}>
-        <Eyebrow>Documents & insurance</Eyebrow>
+        <Eyebrow>Documents</Eyebrow>
         <div style={{ marginTop: 8 }}>
-          {docRow("Driver's license", d.docs.license)}
-          {docRow("Commercial plow insurance", d.docs.insurance)}
-          {docRow("Vehicle plate / registration", d.docs.plate)}
-          {docRow("W-9 / tax info", d.docs.w9)}
-        </div>
-        <div style={{ marginTop: 12, background: C.night, borderRadius: 12, padding: 12 }}>
-          <div style={{ font: `700 12px ${FB}`, color: C.ice }}>{d.insurancePolicy.carrier}</div>
-          <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 2 }}>{d.insurancePolicy.type} · expires {d.insurancePolicy.expires}</div>
+          {docRow("Driver's license", d.docs?.license || "pending")}
+          {docRow("Vehicle registration", d.docs?.plate || "pending")}
+          {docRow("W-9 / tax info", d.docs?.w9 || "pending")}
         </div>
         <p style={{ font: `500 11px ${FB}`, color: C.mistDim, margin: "10px 0 0" }}>
-          Commercial coverage is required to accept jobs. Platform verifies before you go online.
+          DRIFT doesn't provide insurance. Any coverage you carry is your own choice and your responsibility.
         </p>
       </Card>
 
@@ -4027,8 +4014,12 @@ function DriverAccount({ onReferral }) {
       <div style={{ height: 14 }} />
       <ListGroup>
         <ListRow icon="home" tint={C.plow} title="Switch to customer app" sub="Order a plow for your own place"
-          onClick={() => dispatch({ type: "ROLE", role: "rider" })} last />
+          onClick={() => dispatch({ type: "ROLE", role: "rider" })} />
+        <ListRow icon="doc" tint={C.mist} title="Legal" sub="Your contractor agreement and terms"
+          onClick={() => setLegalOpen(true)} last />
       </ListGroup>
+      {legalOpen && <LegalHub onClose={() => setLegalOpen(false)}
+        acceptance={[state.legal?.driver, state.legal?.customer].filter(Boolean)} />}
 
       {auth?.isConfigured && auth?.session && (
         <button onClick={async () => { await auth.signOut(); dispatch({ type: "SIGNED_OUT" }); }}
@@ -4335,11 +4326,10 @@ function OpsDashboard() {
 // so buttons, inputs and status colors follow light/dark like everything else.
 function restyleStatics() {
   Object.assign(sub, { color: C.mist });
+  Object.assign(legalLink, { color: C.plow });
   Object.assign(miniBtn, { background: C.slate, color: C.ice, border: `1px solid ${C.line}` });
   Object.assign(canvasBtn, { background: C.glassStrong, color: C.ice, border: `1px solid ${C.line}` });
   Object.assign(inp, { background: C.slate, border: `1px solid ${C.line}`, color: C.ice });
-  const acc = [C.push, C.amber, C.plow];
-  INSURANCE_PARTNERS.forEach((p, i) => { p.accent = acc[i] || C.amber; });
   const st = { requested: C.mist, accepted: C.plow, enroute: C.plow, plowing: C.amber, completed: C.push, cancelled: C.danger };
   Object.keys(st).forEach(k => { if (OPS_STATUS[k]) OPS_STATUS[k].c = st[k]; });
 }
@@ -4350,6 +4340,7 @@ function Shell() {
   const auth = useAuth();
   const [bypass, setBypass] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [legalDoc, setLegalDoc] = useState(null); // landing-page footer → document reader
   const [entered, setEntered] = useState(false); // false = show the marketing homepage first
   // Re-render everything when the theme flips (Account → Appearance, or the phone's setting in Auto).
   const [, setThemeTick] = useState(0);
@@ -4442,7 +4433,8 @@ function Shell() {
   }
   // Marketing homepage: the public front door for anyone not signed in yet.
   if (!auth.session && !bypass && !entered) {
-    return <>{SkipButton}<Landing onStart={() => setEntered(true)} /></>;
+    return <>{SkipButton}<Landing onStart={() => setEntered(true)} onLegal={setLegalDoc} />
+      {legalDoc && <LegalReader docId={legalDoc} onClose={() => setLegalDoc(null)} />}</>;
   }
 
   if (supabaseEnabled && !auth.session && !bypass) {
