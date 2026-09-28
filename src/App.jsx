@@ -10,35 +10,16 @@ import { deliverExternal } from "./lib/notify.js";
 import { surgePct as marketSurgePct, surgeLabel as marketSurgeLabel, SURGE, refreshMarket } from "./lib/market.js";
 import Landing from "./Landing.jsx";
 import Icon from "./Icon.jsx";
+import { C, E, FD, FB, applyTheme, getThemeMode, onThemeChange, isLight } from "./theme.js";
 
 // ============================================================
-// DRIFT — two-sided snowplow marketplace prototype
-// One app · Rider/Driver toggle · shared live state
-// Storm surcharge is small, capped, and shown as its own line item — never hidden.
-// Single-file. All data mocked; no network calls.
+// DRIFT — two-sided snowplow marketplace
+// Customer app + driver app share live state. Colors, type and depth come from
+// src/theme.js (dark + light), so every screen switches together.
 // ============================================================
-
-// ---- Design tokens ---------------------------------------------------------
-const C = {
-  night: "#0B0B0C", night2: "#131315", slate: "#1A1A1D", slate2: "#202024",
-  line: "#2A2A30", lineSoft: "#202024",
-  ice: "#F5F5F7", mist: "#A1A1AA", mistDim: "#6E6E77",
-  amber: "#FFB020", amberDeep: "#C7830F", amberSoft: "#FFC24D",
-  plow: "#0A84FF", push: "#32D74B", danger: "#FF453A", good: "#32D74B",
-};
-// SF-first system stack — matches the Apple ecosystem, no web-font download.
-const FD = '-apple-system,"SF Pro Display","SF Pro Text",system-ui,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif'; // display
-const FB = '-apple-system,"SF Pro Text",system-ui,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif';                 // body
 
 // spacing scale — everything snaps to this so rhythm is consistent
 const S = { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 28 };
-// elevation — depth cues like native apps
-const E = {
-  low: "0 1px 2px rgba(0,0,0,.30)",
-  mid: "0 6px 20px rgba(0,0,0,.28)",
-  high: "0 18px 44px rgba(0,0,0,.42)",
-  sheet: "0 -12px 40px rgba(0,0,0,.5)",
-};
 // motion — one easing curve everywhere (iOS-like)
 const EASE = "cubic-bezier(.22,1,.36,1)";
 // minimum touch target (Apple HIG / cold-weather gloves)
@@ -484,8 +465,9 @@ function reducer(s, a) {
 }
 
 // ---- UI atoms --------------------------------------------------------------
-function Eyebrow({ children, color = C.amber }) {
-  return <div style={{ font: `700 12px/1 ${FB}`, letterSpacing: ".16em", textTransform: "uppercase", color }}>{children}</div>;
+// Section label — sentence case, quiet. (Tracked uppercase labels read as generated.)
+function Eyebrow({ children, color }) {
+  return <div style={{ font: `600 13px/1.2 ${FB}`, letterSpacing: "-.005em", color: color || C.mist }}>{children}</div>;
 }
 function Stars({ v, size = 13, onSet }) {
   return (
@@ -515,11 +497,11 @@ function Btn({ children, onClick, kind = "primary", disabled, full, sm, style })
     opacity: disabled ? .35 : 1, WebkitTapHighlightColor: "transparent",
   };
   const kinds = {
-    primary: { background: `linear-gradient(180deg, ${C.amberSoft}, ${C.amber})`, color: "#231603", boxShadow: disabled ? "none" : "0 6px 20px rgba(255,176,32,.28)" },
+    primary: { background: C.amber, color: C.onAmber },
     ghost: { background: "transparent", color: C.ice, border: `1px solid ${C.line}` },
     dark: { background: C.slate, color: C.ice, border: `1px solid ${C.line}` },
     danger: { background: "transparent", color: C.danger, border: `1px solid ${C.danger}55` },
-    good: { background: `linear-gradient(180deg, #8BF5AE, ${C.push})`, color: "#07240F", boxShadow: disabled ? "none" : "0 6px 20px rgba(110,238,155,.26)" },
+    good: { background: C.push, color: C.onPush },
   };
   return (
     <button onClick={disabled ? undefined : onClick} disabled={disabled}
@@ -536,10 +518,10 @@ function Card({ children, style, active, onClick, flat }) {
       onPointerDown={() => onClick && setPress(true)}
       onPointerUp={() => setPress(false)} onPointerLeave={() => setPress(false)}
       style={{
-        background: active ? `linear-gradient(150deg, ${C.slate2}, ${C.slate})` : C.slate,
+        background: active ? C.slate2 : C.slate,
         border: `1px solid ${active ? C.amber : C.line}`,
         borderRadius: 16, padding: S.lg, cursor: onClick ? "pointer" : "default",
-        boxShadow: active ? `0 0 0 3px rgba(255,176,32,.13), ${E.mid}` : flat ? "none" : E.low,
+        boxShadow: active ? `0 0 0 1px ${C.amber}` : flat ? "none" : E.low,
         transform: press ? "scale(.99)" : "scale(1)",
         transition: `border-color .18s, box-shadow .18s, transform .18s ${EASE}`,
         WebkitTapHighlightColor: "transparent", ...style,
@@ -548,8 +530,8 @@ function Card({ children, style, active, onClick, flat }) {
 }
 
 function Chip({ children, color = C.mist, bg, solid }) {
-  return <span style={{ font: `700 11px ${FB}`, letterSpacing: ".06em", textTransform: "uppercase",
-    color: solid ? "#08121F" : color, background: solid ? color : (bg || color + "1C"),
+  return <span style={{ font: `600 11.5px ${FB}`,
+    color: solid ? C.night : color, background: solid ? color : (bg || color + "1C"),
     padding: "5px 10px", borderRadius: 20, whiteSpace: "nowrap",
     border: solid ? "none" : `1px solid ${color}2E` }}>{children}</span>;
 }
@@ -565,8 +547,8 @@ function Row({ label, value, muted, amber, big }) {
 function Avatar({ name, size = 44, color = C.amber }) {
   const init = (name || "?").split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
   return <div style={{ width: size, height: size, borderRadius: size * .32, flexShrink: 0,
-    background: `linear-gradient(140deg, ${color}, ${color}99)`, display: "grid", placeItems: "center",
-    font: `800 ${size * .36}px ${FD}`, color: "#08121F", boxShadow: E.low }}>{init}</div>;
+    background: color, display: "grid", placeItems: "center",
+    font: `800 ${size * .36}px ${FD}`, color: C.onAmber, boxShadow: E.low }}>{init}</div>;
 }
 
 // segmented control (iOS-style)
@@ -577,7 +559,7 @@ function Segmented({ options, value, onChange, color = C.amber }) {
         const on = value === o.id;
         return (
           <button key={o.id} onClick={() => onChange(o.id)} style={{ flex: 1, minHeight: 38, border: "none", cursor: "pointer",
-            borderRadius: 10, background: on ? color : "transparent", color: on ? "#08121F" : C.mist,
+            borderRadius: 10, background: on ? color : "transparent", color: on ? C.onAmber : C.mist,
             font: `700 13px ${FB}`, transition: `background .22s ${EASE}, color .22s`, WebkitTapHighlightColor: "transparent" }}>
             {o.label}
           </button>
@@ -590,7 +572,7 @@ function Segmented({ options, value, onChange, color = C.amber }) {
 // bottom sheet wrapper with backdrop + drag handle
 function Sheet({ children, onClose, maxWidth = 440 }) {
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(4,10,18,.76)",
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: C.scrim,
       backdropFilter: "blur(3px)", zIndex: 60, display: "flex", alignItems: "flex-end", justifyContent: "center",
       animation: "fadeIn .2s ease" }}>
       <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth, background: C.night2,
@@ -610,7 +592,7 @@ function Skeleton({ h = 16, w = "100%", r = 8, style }) {
     backgroundSize: "200% 100%", animation: "shimmer 1.4s infinite", ...style }} />;
 }
 
-const h2 = { font: `700 30px/1.05 ${FD}`, letterSpacing: ".01em", margin: "8px 0 8px" };
+const h2 = { font: `700 30px/1.08 ${FD}`, letterSpacing: "-.02em", margin: "8px 0 8px" };
 const sub = { font: `400 15px/1.5 ${FB}`, color: C.mist, margin: 0 };
 const miniBtn = { font: `600 13px ${FB}`, minHeight: 38, padding: "0 14px", borderRadius: 11, cursor: "pointer",
   background: C.slate, color: C.ice, border: `1px solid ${C.line}`, display: "inline-flex",
@@ -778,22 +760,21 @@ function StormMap({ blips = [], pin, selected, tracking, driverPos, height = 1.1
   }, []);
   return (
     <div style={{ position: "relative", width: "100%", aspectRatio: String(height),
-      background: `radial-gradient(120% 90% at 50% -10%, #12253C 0%, ${C.night} 70%)`,
+      background: C.mapBg,
       borderRadius: 16, overflow: "hidden", border: `1px solid ${C.line}` }}>
-      <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: .22 }}>
+      <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", opacity: .5 }}>
         <defs><pattern id="g" width="34" height="34" patternUnits="userSpaceOnUse">
-          <path d="M34 0H0V34" fill="none" stroke={C.line} strokeWidth="1" /></pattern></defs>
+          <path d="M34 0H0V34" fill="none" stroke={C.mapGrid} strokeWidth="1" /></pattern></defs>
         <rect width="100%" height="100%" fill="url(#g)" />
       </svg>
       <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} viewBox="0 0 100 100" preserveAspectRatio="none">
         {/* Lake Superior — Duluth's defining edge, runs SW→NE along the shore */}
         <path d="M100 42 L100 100 L38 100 Q58 76 78 58 Q88 49 100 42 Z"
-          fill="#0C2237" stroke="#1B4763" strokeWidth="0.8" opacity=".95" />
-        <text x="82" y="88" fill="#2E5F7E" fontSize="4.2" fontFamily="Inter, sans-serif"
-          fontWeight="700" letterSpacing="0.6" opacity=".85">LAKE SUPERIOR</text>
+          fill={C.plow + "1F"} stroke={C.plow + "40"} strokeWidth="0.8" />
+
 
         {/* the hillside ridge — Skyline Pkwy traces the top of the escarpment */}
-        <path d="M0 22 Q26 20 48 30 T100 18" stroke="#2A4A66" strokeWidth="1.4" fill="none"
+        <path d="M0 22 Q26 20 48 30 T100 18" stroke={C.mistDim} strokeWidth="1.2" fill="none"
           strokeDasharray="4 3" opacity=".7" />
 
         {/* arterials running parallel to the shore */}
@@ -809,13 +790,15 @@ function StormMap({ blips = [], pin, selected, tracking, driverPos, height = 1.1
             strokeDasharray="3 2" opacity=".8" />
         )}
       </svg>
+      <div style={{ position: "absolute", right: 12, bottom: 9, font: `600 11px ${FB}`, color: C.plow, opacity: .75,
+        pointerEvents: "none" }}>Lake Superior</div>
       {flakes.map((f, i) => <div key={i} style={{ position: "absolute", left: `${f.x}%`, top: `${f.y}%`,
-        width: f.s*2.4, height: f.s*2.4, borderRadius: "50%", background: "rgba(234,243,251,.65)", pointerEvents: "none" }} />)}
+        width: f.s*2.4, height: f.s*2.4, borderRadius: "50%", background: isLight ? "rgba(120,128,145,.35)" : "rgba(234,243,251,.5)", pointerEvents: "none" }} />)}
       {pin && (
         <div style={{ position: "absolute", left: "50%", top: "50%", transform: "translate(-50%,-100%)", textAlign: "center" }}>
-          <div style={{ width: 16, height: 16, borderRadius: "50%", background: C.amber, border: "3px solid #20140A",
-            margin: "0 auto", boxShadow: "0 0 0 6px rgba(255,176,32,.2)" }} />
-          <div style={{ font: `700 10px ${FB}`, color: C.amber, marginTop: 4, letterSpacing: ".1em" }}>{pin === true ? "YOU" : pin}</div>
+          <div style={{ width: 16, height: 16, borderRadius: "50%", background: C.amber, border: `3px solid ${C.slate}`,
+            margin: "0 auto", boxShadow: E.low }} />
+          <div style={{ font: `600 11px ${FB}`, color: C.ice, marginTop: 4 }}>{pin === true ? "You" : pin}</div>
         </div>
       )}
       {blips.map((d, idx) => {
@@ -830,8 +813,8 @@ function StormMap({ blips = [], pin, selected, tracking, driverPos, height = 1.1
             {isSel && <div style={{ position: "absolute", inset: -10, borderRadius: "50%", border: `2px solid ${C.amber}`,
               animation: "ping 1.4s ease-out infinite" }} />}
             <div style={{ width: 30, height: 30, borderRadius: 9, display: "grid", placeItems: "center",
-              background: isSel ? C.amber : C.night2, border: `2px solid ${isSel ? "#20140A" : C.line}`, fontSize: 15,
-              boxShadow: isSel ? "0 6px 18px rgba(255,176,32,.4)" : "0 4px 12px rgba(0,0,0,.4)" }}><Icon e="pickup" s={15} /></div>
+              background: isSel ? C.amber : C.slate, border: `1.5px solid ${isSel ? C.slate : C.line}`,
+              color: isSel ? C.onAmber : C.ice, boxShadow: E.mid }}><Icon e="pickup" s={15} /></div>
           </div>
         );
       })}
@@ -965,7 +948,7 @@ function PropertyDesigner({ onDone, existing, compact }) {
                 strokeLinejoin="round" strokeDasharray={draft.length >= 3 ? "none" : "3 2"} />}
               {draft.map((p, i) => (
                 <circle key={i} cx={p.x} cy={p.y} r={i === 0 ? (nearFirst ? 3.6 : 2.6) : 1.7}
-                  fill={i === 0 ? col : "#0A1626"} stroke={col} strokeWidth={i === 0 ? 1.4 : 1.1}
+                  fill={i === 0 ? col : C.night} stroke={col} strokeWidth={i === 0 ? 1.4 : 1.1}
                   style={{ transition: "r .12s" }} />
               ))}
               {draft.length >= 3 && (
@@ -980,7 +963,7 @@ function PropertyDesigner({ onDone, existing, compact }) {
 
         {/* live price chip — only meaningful in the plow phase */}
         {phase === 0 && (
-          <div style={{ position: "absolute", top: 10, right: 10, background: "rgba(10,22,38,.85)", backdropFilter: "blur(6px)",
+          <div style={{ position: "absolute", top: 10, right: 10, background: C.glassStrong, backdropFilter: "blur(6px)",
             border: `1px solid ${hasPlow ? C.amber : C.line}`, borderRadius: 12, padding: "8px 12px", textAlign: "right", transition: "border-color .2s" }}>
             <div style={{ font: `700 22px ${FD}`, color: hasPlow ? C.amber : C.mistDim, lineHeight: 1 }}>{hasPlow ? `$${animPrice}` : "—"}</div>
             <div style={{ font: `600 10px ${FB}`, color: C.mist, marginTop: 3 }}>{hasPlow ? `${animSqft.toLocaleString()} sq ft` : "outline to price"}</div>
@@ -990,7 +973,7 @@ function PropertyDesigner({ onDone, existing, compact }) {
         {/* on-canvas controls */}
         <div style={{ position: "absolute", bottom: 10, left: 10, right: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
           {draft.length >= 3 && (
-            <button onClick={() => commit(draft)} style={{ ...canvasBtn, background: col, color: "#0A1626", border: "none", fontWeight: 800 }}>
+            <button onClick={() => commit(draft)} style={{ ...canvasBtn, background: col, color: C.onAmber, border: "none", fontWeight: 800 }}>
               <Icon e="check" s={13} /> Finish shape</button>
           )}
           {draft.length > 0 && <button onClick={() => setDraft(d => d.slice(0, -1))} style={canvasBtn}><Icon e="undo" s={13} /> Undo point</button>}
@@ -1040,7 +1023,7 @@ function PropertyDesigner({ onDone, existing, compact }) {
   );
 }
 const canvasBtn = { font: `600 11px ${FB}`, padding: "8px 12px", borderRadius: 9, cursor: "pointer",
-  background: "rgba(10,22,38,.88)", backdropFilter: "blur(6px)", color: C.ice, border: `1px solid ${C.line}` };
+  background: C.glassStrong, backdropFilter: "blur(6px)", color: C.ice, border: `1px solid ${C.line}` };
 
 // small read-only property thumbnail
 function PropertyThumb({ zones, img }) {
@@ -1069,26 +1052,22 @@ function PropertyThumb({ zones, img }) {
 
 // bottom nav
 function TabBar({ tabs, active, onChange }) {
+  // iOS-style tab bar: glass, tint-only selection, no pills or glows.
   return (
     <nav style={{ position: "sticky", bottom: 0, display: "flex", gap: 4,
-      background: "rgba(14,30,49,.92)", backdropFilter: "blur(16px)",
+      background: C.glass, backdropFilter: "saturate(180%) blur(20px)", WebkitBackdropFilter: "saturate(180%) blur(20px)",
       borderTop: `1px solid ${C.line}`, zIndex: 20,
       padding: `6px ${S.sm}px calc(6px + env(safe-area-inset-bottom))` }}>
       {tabs.map(t => {
         const on = active === t.id;
         return (
-          <button key={t.id} onClick={() => onChange(t.id)} style={{ flex: 1, background: "transparent", border: "none",
-            cursor: "pointer", minHeight: 54, padding: "6px 2px", display: "flex", flexDirection: "column",
-            alignItems: "center", justifyContent: "center", gap: 3, position: "relative",
-            WebkitTapHighlightColor: "transparent" }}>
-            <div style={{ position: "absolute", top: 2, width: 44, height: 30, borderRadius: 10,
-              background: on ? C.amber + "1C" : "transparent", transition: `background .25s ${EASE}` }} />
-            <span style={{ fontSize: 19, position: "relative", zIndex: 1,
-              filter: on ? "none" : "grayscale(1) opacity(.5)",
-              transform: on ? "translateY(-1px) scale(1.06)" : "none",
-              transition: `transform .25s ${EASE}, filter .25s` }}><Icon e={t.icon} s={19} /></span>
-            <span style={{ font: `700 10px ${FB}`, color: on ? C.amber : C.mistDim,
-              transition: "color .25s", position: "relative", zIndex: 1 }}>{t.label}</span>
+          <button key={t.id} onClick={() => onChange(t.id)} aria-current={on ? "page" : undefined}
+            style={{ flex: 1, background: "transparent", border: "none",
+            cursor: "pointer", minHeight: 52, padding: "6px 2px", display: "flex", flexDirection: "column",
+            alignItems: "center", justifyContent: "center", gap: 4, color: on ? C.amber : C.mistDim,
+            transition: "color .2s", WebkitTapHighlightColor: "transparent" }}>
+            <Icon e={t.icon} s={22} strokeWidth={on ? 2 : 1.7} />
+            <span style={{ font: `600 10.5px ${FB}` }}>{t.label}</span>
           </button>
         );
       })}
@@ -1100,7 +1079,7 @@ function TabBar({ tabs, active, onChange }) {
 function Toast({ msg }) {
   if (!msg) return null;
   return <div style={{ position: "fixed", bottom: 96, left: "50%", transform: "translateX(-50%)", zIndex: 80,
-    background: "rgba(27,51,78,.97)", backdropFilter: "blur(12px)", border: `1px solid ${C.line}`, color: C.ice,
+    background: C.glassStrong, backdropFilter: "blur(12px)", border: `1px solid ${C.line}`, color: C.ice,
     font: `600 13px/1.4 ${FB}`, padding: "13px 18px", borderRadius: 14, boxShadow: E.high, maxWidth: 340,
     display: "flex", alignItems: "center", gap: 10, animation: `toastIn .34s ${EASE}` }}>
     <span style={{ fontSize: 15, flexShrink: 0 }}><Icon e="snowflake" s={15} /></span>{msg}</div>;
@@ -1283,7 +1262,7 @@ function AddressSearch({ value, onChange, picked, onPick, compact }) {
           borderRadius: 14, padding: 14, animation: `rise .25s ${EASE}` }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
             <span style={{ width: 26, height: 26, borderRadius: "50%", background: C.push, display: "grid",
-              placeItems: "center", fontSize: 13, color: "#07240F", fontWeight: 900, flexShrink: 0 }}><Icon e="check" s={13} /></span>
+              placeItems: "center", fontSize: 13, color: C.onPush, fontWeight: 900, flexShrink: 0 }}><Icon e="check" s={13} /></span>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ font: `700 14px ${FB}`, color: C.ice }}>{picked.line1}</div>
               <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 1 }}>
@@ -1349,12 +1328,12 @@ function Onboarding() {
         <Fade k="w" style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", paddingBottom: 24 }}>
           {/* ambient hero */}
           <div style={{ position: "relative", height: 190, marginBottom: S.lg, borderRadius: 22, overflow: "hidden",
-            background: `radial-gradient(120% 100% at 50% 0%, #16324F 0%, ${C.night} 72%)`, border: `1px solid ${C.line}` }}>
+            background: "radial-gradient(120% 100% at 50% 0%, #202026 0%, #141418 72%)", color: "#F5F5F7", border: `1px solid ${C.line}` }}>
             <HeroSnow />
             <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
               <div style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 52, filter: "drop-shadow(0 6px 18px rgba(255,176,32,.4))" }}><Icon e="snowflake" s={52} /></div>
-                <div style={{ font: `700 13px ${FB}`, letterSpacing: ".3em", color: C.amber, marginTop: 6 }}>DRIFT</div>
+                <div style={{ fontSize: 52, color: "#F5F5F7" }}><Icon e="snowflake" s={52} /></div>
+                <div style={{ font: `700 13px ${FB}`, letterSpacing: ".08em", color: "#FFB020", marginTop: 6 }}>DRIFT</div>
               </div>
             </div>
             {/* faux truck ticker */}
@@ -1377,7 +1356,7 @@ function Onboarding() {
               {["JM", "SP", "RK"].map((n, i) => (
                 <div key={n} style={{ marginLeft: i ? -9 : 0, width: 26, height: 26, borderRadius: "50%",
                   background: [C.amber, C.plow, C.push][i], border: `2px solid ${C.night}`, display: "grid",
-                  placeItems: "center", font: `800 9px ${FB}`, color: "#08121F" }}>{n}</div>
+                  placeItems: "center", font: `800 9px ${FB}`, color: C.onAmber }}>{n}</div>
               ))}
             </div>
             <div style={{ font: `600 12px ${FB}`, color: C.mist }}>
@@ -1400,8 +1379,8 @@ function Onboarding() {
       {step === 1 && (
         <Fade k="map">
           <Eyebrow>Step 1 · Map your property</Eyebrow>
-          <h2 style={h2}>Draw what needs clearing</h2>
-          <p style={sub}>Search your address, then outline the plow &amp; push zones right on the satellite image. We measure it and set the price automatically.</p>
+          <h2 style={h2}>Where should we plow?</h2>
+          <p style={sub}>Search your address and we'll place a starting outline on the satellite view. Confirm it or redraw it — we measure it and price it for you.</p>
           <div style={{ height: 14 }} />
           <MapPropertyDesigner existing={prop} saveLabel="Continue"
             onQuote={(sqft) => quoteJob({ jobType: "driveway", sqft }).riderTotal}
@@ -1438,17 +1417,17 @@ function Onboarding() {
           <p style={sub}>You're only charged after a job is done. No storm, no charge.</p>
           {/* live card preview */}
           <div style={{ margin: "16px 0", borderRadius: 16, padding: 18, position: "relative", overflow: "hidden",
-            background: "linear-gradient(120deg,#14304d,#0d2138)", border: `1px solid ${C.line}`, minHeight: 130 }}>
+            background: C.slate2, border: `1px solid ${C.line}`, minHeight: 130 }}>
             <div style={{ position: "absolute", top: -30, right: -20, width: 120, height: 120, borderRadius: "50%", background: C.amber + "22" }} />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ font: `700 12px ${FB}`, color: C.mist, letterSpacing: ".1em" }}>DRIFT</span>
+              <span style={{ font: `700 12px ${FB}`, color: C.mist, letterSpacing: ".08em" }}>DRIFT</span>
               <span style={{ fontSize: 20 }}><Icon e="card" s={20} /></span>
             </div>
             <div style={{ font: `600 19px ${FB}`, letterSpacing: ".08em", color: C.ice, margin: "22px 0 14px" }}>
               {card.num || "•••• •••• •••• ••••"}
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", font: `500 12px ${FB}`, color: C.mist }}>
-              <span>{profile.name || "YOUR NAME"}</span><span>{card.exp || "MM/YY"}</span>
+              <span>{profile.name || "Your name"}</span><span>{card.exp || "MM/YY"}</span>
             </div>
           </div>
           <div style={{ display: "grid", gap: 12 }}>
@@ -1522,30 +1501,18 @@ function OrdinanceCountdown({ onBook }) {
     return () => clearInterval(t);
   }, []);
   const h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60);
-  const pct = left / (DEADLINE_HRS * 3600);
   const urgent = h < 6;
   const col = urgent ? C.danger : C.amber;
   return (
-    <div style={{ marginBottom: 14, background: `linear-gradient(120deg, ${col}18, ${C.night2})`,
-      border: `1.5px solid ${col}55`, borderRadius: 14, padding: 15 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 11, marginBottom: 11 }}>
-        <div style={{ width: 38, height: 38, borderRadius: 11, background: col + "26", display: "grid",
-          placeItems: "center", fontSize: 19, flexShrink: 0 }}><Icon e="broom" s={19} /></div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ font: `700 13px ${FB}`, color: C.ice }}>Sidewalk ordinance deadline</div>
-          <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 2 }}>
-            Duluth requires walks cleared within 24 hrs</div>
-        </div>
-        <div style={{ textAlign: "right", flexShrink: 0 }}>
-          <div style={{ font: `700 22px ${FD}`, color: col, lineHeight: 1 }}>{h}h {String(m).padStart(2, "0")}m</div>
-          <div style={{ font: `600 10px ${FB}`, color: C.mistDim, marginTop: 2 }}>remaining</div>
-        </div>
+    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 14, marginBottom: 12,
+      background: C.slate, border: `1px solid ${urgent ? C.danger + "66" : C.line}` }}>
+      <div style={{ width: 36, height: 36, borderRadius: 10, background: col + "1F", color: col,
+        display: "grid", placeItems: "center", flexShrink: 0 }}><Icon e="broom" s={18} /></div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ font: `600 14px ${FB}`, color: C.ice, whiteSpace: "nowrap" }}>Sidewalk due in {h}h {String(m).padStart(2, "0")}m</div>
+        <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 2 }}>City rule: 24 hrs after snow</div>
       </div>
-      <div style={{ height: 6, borderRadius: 6, background: C.night, overflow: "hidden", marginBottom: 12 }}>
-        <div style={{ width: `${pct * 100}%`, height: "100%", background: `linear-gradient(90deg,${col},${col}88)`,
-          transition: "width 1s linear" }} />
-      </div>
-      <Btn full sm onClick={onBook}>Clear my sidewalk — stay compliant</Btn>
+      <Btn sm kind="dark" onClick={onBook} style={{ padding: "0 14px" }}>Clear it</Btn>
     </div>
   );
 }
@@ -1581,19 +1548,38 @@ function StormBanner() {
   const accent = active ? C.amber : C.plow;
   const title = active ? `Storm active · ${depth}" down` : "Snow day likely";
   const body = active
-    ? "Roads and driveways are rough — book now before the morning rush."
-    : `${f.low}–${f.high}" expected ${f.when}. Line up your plow before everyone else does.`;
+    ? "Plows ~9 min out · 4 working nearby"
+    : `${f.low}–${f.high}" expected ${f.when}. Book ahead of the rush.`;
   return (
-    <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "12px 14px", borderRadius: 14, marginBottom: 14,
-      background: `linear-gradient(120deg, ${accent}22, ${C.night2})`, border: `1px solid ${accent}66` }}>
-      <div style={{ fontSize: 24, animation: active ? "bob 2.4s ease-in-out infinite" : "none" }}>{active ? <Icon e="snow" s={24} /> : <Icon e="snowflake" s={24} />}</div>
+    <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "12px 12px 12px 14px", borderRadius: 14, marginBottom: 12,
+      background: C.slate, border: `1px solid ${C.line}` }}>
+      <div style={{ width: 36, height: 36, borderRadius: 10, background: accent + "1F", color: accent,
+        display: "grid", placeItems: "center", flexShrink: 0 }}><Icon e={active ? "snow" : "snowflake"} s={19} /></div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ font: `700 13px ${FB}`, color: C.ice }}>{title}</div>
-        <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 2, lineHeight: 1.35 }}>{body}</div>
+        <div style={{ font: `600 14px ${FB}`, color: C.ice }}>{title}</div>
+        <div style={{ font: `400 13px/1.35 ${FB}`, color: C.mist, marginTop: 2 }}>{body}</div>
       </div>
       <button onClick={() => setHide(true)} aria-label="Dismiss" style={{ background: "none", border: "none",
-        color: C.mistDim, fontSize: 20, cursor: "pointer", padding: 4, lineHeight: 1, WebkitTapHighlightColor: "transparent" }}>×</button>
+        color: C.mistDim, cursor: "pointer", padding: 6, display: "grid", placeItems: "center",
+        WebkitTapHighlightColor: "transparent" }}><Icon e="close" s={16} /></button>
     </div>
+  );
+}
+
+// Small secondary-service tile (dig-out, jump-start) — deliberately quieter than the main card.
+function ServiceTile({ icon, title, sub, onClick, disabled, tone }) {
+  const col = tone || C.ice;
+  return (
+    <button onClick={disabled ? undefined : onClick} disabled={disabled}
+      style={{ textAlign: "left", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? .45 : 1,
+        background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: "14px 14px 13px",
+        display: "flex", flexDirection: "column", gap: 10, WebkitTapHighlightColor: "transparent" }}>
+      <span style={{ color: col, display: "flex" }}><Icon e={icon} s={20} /></span>
+      <span>
+        <span style={{ display: "block", font: `600 14px ${FB}`, color: C.ice }}>{title}</span>
+        <span style={{ display: "block", font: `400 12.5px ${FB}`, color: C.mist, marginTop: 2 }}>{sub}</span>
+      </span>
+    </button>
   );
 }
 
@@ -1603,7 +1589,7 @@ function RiderHome({ go }) {
   const [jobType, setJobType] = useState("driveway");
   const [showSched, setShowSched] = useState(false);
   const [salt, setSalt] = useState(false);
-  const [showBreak, setShowBreak] = useState(true); // price breakdown open by default (transparency)
+  const [showBreak, setShowBreak] = useState(false); // breakdown one tap away — keeps the card calm
   const [payOpen, setPayOpen] = useState(false);    // Stripe authorization sheet (only when keys are set)
 
   const sqft = prop?.sqft || zonesToSqFt(prop?.zones);
@@ -1669,213 +1655,156 @@ function RiderHome({ go }) {
     go("trips");
   };
 
+  // one-tap emergency dig-out (street-parked car buried by the city plow berm)
+  const emergencyDigout = () => {
+    const eq = quoteJob({ jobType: "digout", property: prop });
+    dispatch({ type: "REQUEST", order: {
+      id: "o" + Date.now(), state: "requested", jobType: "digout", size: prop?.size || SIZES[1], property: prop,
+      quote: eq, tool: eq.tool, emergency: true, createdAt: Date.now(),
+      driverPos: { x: state.driver.x, y: state.driver.y }, eta: 6,
+      timeline: [{ k: "requested", t: "now", label: "Dig-out request sent" }], photos: { before: [], after: [] },
+    }});
+    dispatch({ type: "TOAST", msg: "Dig-out requested — finding the nearest crew" });
+    autoMatch(dispatch, state);
+  };
+  const bookSidewalk = () => {
+    const oq = quoteJob({ jobType: "sidewalk", linearFt, property: prop });
+    dispatch({ type: "REQUEST", order: {
+      id: "o" + Date.now(), state: "requested", jobType: "sidewalk", size: prop?.size || SIZES[1], property: prop,
+      quote: oq, tool: oq.tool, createdAt: Date.now(), driverPos: { x: state.driver.x, y: state.driver.y },
+      eta: 9, timeline: [{ k: "requested", t: "now", label: "Sidewalk clearing requested" }], photos: { before: [], after: [] },
+    }});
+    dispatch({ type: "TOAST", msg: "Sidewalk crew requested — you'll be compliant" });
+    autoMatch(dispatch, state);
+  };
+
+  const hour = new Date().getHours();
+  const greet = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  const SERVICES = [["driveway", "Driveway"], ["sidewalk", "Sidewalk"], ["commercial", "Lot"]];
+  const basisLine = jt.basis === "area" ? `per plow · ${sqft.toLocaleString()} sq ft`
+    : jt.basis === "linear" ? `per clearing · ~${linearFt} ft of walk`
+    : `flat rate · ${jt.label.toLowerCase()}`;
+
   return (
-    <Fade k="home"><section style={{ paddingTop: 4 }}>
-      <div style={{ marginBottom: 12 }}>
-        <Eyebrow>{first ? `Hi ${first}` : "On-demand snow removal"}</Eyebrow>
-        <h1 style={{ font: `700 32px/1 ${FD}`, margin: "8px 0 8px" }}>What needs clearing?</h1>
-      </div>
+    <Fade k="home"><section style={{ paddingTop: 10, paddingBottom: 28 }}>
+      <h1 style={{ font: `700 30px/1.1 ${FD}`, letterSpacing: "-.02em", color: C.ice, margin: "4px 0 18px" }}>
+        {greet}{first ? `, ${first}` : ""}</h1>
 
       <StormBanner />
+      {SNOW_DEPTH_IN >= 2 && prop && <OrdinanceCountdown onBook={bookSidewalk} />}
 
-      {/* emergency dispatch — one tap when you're blocked in */}
-      {SNOW_DEPTH_IN >= 3 && prop && (
-        <button onClick={() => {
-            const eq = quoteJob({ jobType: "digout", property: prop });
-            dispatch({ type: "REQUEST", order: {
-              id: "o" + Date.now(), state: "requested", jobType: "digout", size: prop?.size || SIZES[1], property: prop,
-              quote: eq, tool: eq.tool, emergency: true, createdAt: Date.now(),
-              driverPos: { x: state.driver.x, y: state.driver.y }, eta: 6,
-              timeline: [{ k: "requested", t: "now", label: "Emergency request sent" }], photos: { before: [], after: [] },
-            }});
-            dispatch({ type: "TOAST", msg: "Emergency dispatch — prioritizing the nearest crew" });
-            autoMatch(dispatch, state);
-          }}
-          style={{ width: "100%", marginBottom: 14, cursor: "pointer", textAlign: "left",
-            background: `linear-gradient(120deg, ${C.danger}22, ${C.night2})`, border: `1.5px solid ${C.danger}66`,
-            borderRadius: 14, padding: "14px 16px", display: "flex", alignItems: "center", gap: 13 }}>
-          <div style={{ width: 40, height: 40, borderRadius: 11, background: C.danger + "26", display: "grid", placeItems: "center", fontSize: 20, flexShrink: 0 }}><Icon e="sos" s={20} /></div>
-          <div style={{ flex: 1 }}>
-            <div style={{ font: `700 14px ${FB}`, color: C.ice }}>Blocked in? Emergency dig-out</div>
-            <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 2 }}>Fastest crew, priority queue · one tap</div>
+      {/* ---- THE primary action: your saved place + one button (Uber "Home" / DoorDash reorder) ---- */}
+      {prop ? (
+        <div style={{ marginTop: 4, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 20,
+          padding: 8, boxShadow: E.low }}>
+          {/* map of the property */}
+          <div style={{ borderRadius: 14, overflow: "hidden", position: "relative" }}>
+            {prop.mapImg ? (
+              <img src={prop.mapImg} alt="" style={{ width: "100%", height: 150, objectFit: "cover", display: "block" }} />
+            ) : MAP_ENABLED && prop.center ? (
+              <LiveMap center={prop.center} height={150} interactive={false} markers={[
+                { lng: prop.center.lng, lat: prop.center.lat, size: 26 },
+                { lng: prop.center.lng + 0.0034, lat: prop.center.lat + 0.0016, size: 22, kind: "truck" },
+                { lng: prop.center.lng - 0.0041, lat: prop.center.lat - 0.0025, size: 22, kind: "truck" },
+              ]} />
+            ) : (
+              <StormMap pin blips={[{ id: 1, x: 62, y: 38 }, { id: 2, x: 30, y: 64 }]} height={2.5} />
+            )}
           </div>
-          <span style={{ color: C.danger, fontSize: 18 }}>›</span>
-        </button>
-      )}
 
-      {/* Duluth 24-hr sidewalk ordinance countdown */}
-      {SNOW_DEPTH_IN >= 2 && prop && <OrdinanceCountdown onBook={() => {
-        const oq = quoteJob({ jobType: "sidewalk", linearFt, property: prop });
-        dispatch({ type: "REQUEST", order: {
-          id: "o" + Date.now(), state: "requested", jobType: "sidewalk", size: prop?.size || SIZES[1], property: prop,
-          quote: oq, tool: oq.tool, createdAt: Date.now(), driverPos: { x: state.driver.x, y: state.driver.y },
-          eta: 9, timeline: [{ k: "requested", t: "now", label: "Sidewalk clearing requested" }], photos: { before: [], after: [] },
-        }});
-        dispatch({ type: "TOAST", msg: "Sidewalk crew requested — you'll be compliant" });
-        autoMatch(dispatch, state);
-      }} />}
-
-      {/* SNOW REMOVAL — the main event. Driveway plowing leads. */}
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 8 }}>
-        <Eyebrow>Snow removal</Eyebrow>
-        <span style={{ font: `500 11px ${FB}`, color: C.mistDim }}>pick what needs clearing</span>
-      </div>
-      <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4, marginBottom: 14 }}>
-        {Object.values(JOB_TYPES).filter(t => !ROADSIDE.includes(t.id)).map(t => {
-          const on = jobType === t.id;
-          const hero = t.id === "driveway";
-          return (
-            <button key={t.id} onClick={() => setJobType(t.id)} style={{ flex: "0 0 auto", cursor: "pointer", position: "relative",
-              minWidth: hero ? 128 : 104, padding: "13px 12px", borderRadius: 14, textAlign: "left",
-              background: on ? C.amber + "18" : C.slate, border: `1.5px solid ${on ? C.amber : hero ? C.amber + "77" : C.line}`,
-              transition: "all .15s" }}>
-              {hero && <span style={{ position: "absolute", top: 8, right: 9, font: `800 8px ${FB}`, letterSpacing: ".09em", color: C.push }}>POPULAR</span>}
-              <div style={{ fontSize: hero ? 26 : 22, marginBottom: 6 }}><Icon e={t.icon} s={22} /></div>
-              <div style={{ font: `700 ${hero ? 13 : 12}px ${FB}`, color: on ? C.amber : C.ice }}>{t.label}</div>
-              <div style={{ font: `500 10px ${FB}`, color: C.mist, marginTop: 2 }}>{t.tool}</div>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Roadside jump-start — minor, clearly-secondary add-on */}
-      {prop && (
-        <button onClick={() => requestRoadside("jumpstart")} style={{ width: "100%", marginBottom: 14, cursor: "pointer",
-          textAlign: "left", display: "flex", alignItems: "center", gap: 11, padding: "11px 13px", borderRadius: 12,
-          background: C.slate, border: `1px solid ${C.line}`, WebkitTapHighlightColor: "transparent" }}>
-          <span style={{ fontSize: 18 }}><Icon e="battery" s={18} /></span>
-          <div style={{ flex: 1, font: `600 12px ${FB}`, color: C.mist }}>Dead battery? Roadside jump-start · flat ${JOB_TYPES.jumpstart.base}</div>
-          <span style={{ color: C.mistDim, fontSize: 15 }}>›</span>
-        </button>
-      )}
-
-      {/* live weather / demand strip */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 12, overflowX: "auto", paddingBottom: 2 }}>
-        {[["snow", `${SNOW_DEPTH_IN}" now`, "lake-effect"], ["timer", "~9 min", "nearest crew"], ["plowtruck", "4 rigs", "in your area"]].map(([i, a, b], k) => (
-          <div key={k} style={{ flex: "0 0 auto", display: "flex", gap: 9, alignItems: "center", background: C.slate,
-            border: `1px solid ${C.line}`, borderRadius: 12, padding: "10px 13px" }}>
-            <span style={{ fontSize: 17 }}><Icon e={i} s={17} /></span>
-            <div><div style={{ font: `700 12px ${FB}`, color: C.ice }}>{a}</div>
-              <div style={{ font: `500 11px ${FB}`, color: C.mist }}>{b}</div></div>
-          </div>
-        ))}
-      </div>
-
-      {MAP_ENABLED && prop?.center ? (
-        <LiveMap center={prop.center} height={200} markers={[
-          { lng: prop.center.lng, lat: prop.center.lat, size: 28 },
-          { lng: prop.center.lng + 0.0034, lat: prop.center.lat + 0.0016, size: 20 },
-          { lng: prop.center.lng - 0.0041, lat: prop.center.lat - 0.0025, size: 20 },
-          { lng: prop.center.lng + 0.0019, lat: prop.center.lat - 0.0037, size: 20 },
-        ]} />
-      ) : (
-        <StormMap pin blips={[{ id: 1, x: 62, y: 38 }, { id: 2, x: 40, y: 61 }, { id: 3, x: 74, y: 66 }]} />
-      )}
-
-      {/* property selector */}
-      <Card style={{ marginTop: 14, display: "flex", alignItems: "center", justifyContent: "space-between" }} onClick={() => go("props")}>
-        <div style={{ display: "flex", gap: 12, alignItems: "center", minWidth: 0 }}>
-          {prop ? <PropertyThumb zones={prop.zones} img={prop.mapImg} /> : <span style={{ fontSize: 22 }}><Icon e="plus" s={22} /></span>}
-          <div style={{ minWidth: 0 }}>
-            <div style={{ font: `700 14px ${FB}` }}>{prop ? prop.label : "Add a property"}</div>
-            <div style={{ font: `500 12px ${FB}`, color: C.mist, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {prop ? prop.addr : "Draw your plow & push zones"}</div>
-            {prop && modActive && (
-              <div style={{ marginTop: 5, display: "flex", gap: 5, flexWrap: "wrap" }}>
-                {prop.grade && prop.grade !== "flat" && <Chip color={C.amber}>{MODIFIERS.grade[prop.grade].label}</Chip>}
-                {(prop.hazards || []).slice(0, 2).map(h => <Chip key={h} color={C.danger}>{MODIFIERS.hazards[h]?.label}</Chip>)}
+          <div style={{ padding: "12px 8px 6px" }}>
+            {/* place row */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ width: 34, height: 34, borderRadius: "50%", background: C.night2, color: C.ice,
+                display: "grid", placeItems: "center", flexShrink: 0 }}><Icon e="home" s={17} /></div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ font: `600 16px ${FB}`, color: C.ice }}>{prop.label}</div>
+                <div style={{ font: `400 13px ${FB}`, color: C.mist, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {prop.addr}{modActive && prop.grade && prop.grade !== "flat" ? ` · ${MODIFIERS.grade[prop.grade].label.toLowerCase()}` : ""}</div>
               </div>
+              <button onClick={() => go("props")} style={{ background: "none", border: "none", cursor: "pointer",
+                font: `600 14px ${FB}`, color: C.plow, padding: "6px 4px", WebkitTapHighlightColor: "transparent" }}>Edit</button>
+            </div>
+
+            {/* what to clear */}
+            <div style={{ display: "flex", background: C.night2, borderRadius: 11, padding: 3, marginTop: 14 }}>
+              {SERVICES.map(([id, label]) => {
+                const on = jobType === id;
+                return (
+                  <button key={id} onClick={() => setJobType(id)} style={{ flex: 1, minHeight: 36, border: "none", borderRadius: 9,
+                    cursor: "pointer", font: `600 13px ${FB}`, color: on ? C.ice : C.mist,
+                    background: on ? C.slate2 : "transparent", boxShadow: on ? E.low : "none",
+                    transition: `background .2s ${EASE}`, WebkitTapHighlightColor: "transparent" }}>{label}</button>
+                );
+              })}
+            </div>
+
+            {needsOutline ? (
+              <div style={{ padding: "18px 2px 4px" }}>
+                <div style={{ font: `600 15px ${FB}`, color: C.ice }}>Outline this area to get a price</div>
+                <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 4, marginBottom: 14 }}>
+                  ${jt.base + PLATFORM_FEE} base + ${jt.rate.toFixed(2)} per sq ft. We'll place a starting outline for you.</div>
+                <Btn full onClick={() => go("props")}>Map it</Btn>
+              </div>
+            ) : (
+              <>
+                {/* price */}
+                <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginTop: 18, gap: 12 }}>
+                  <div>
+                    <div style={{ font: `700 34px/1 ${FD}`, letterSpacing: "-.02em", color: C.ice }}>${animPrice}</div>
+                    <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 6 }}>{basisLine}</div>
+                  </div>
+                  <div style={{ textAlign: "right", font: `400 13px/1.5 ${FB}`, color: C.mist }}>
+                    ~{q.mins} min on site<br /><span style={{ color: C.push, fontWeight: 600 }}>No contract</span></div>
+                </div>
+
+                <button onClick={() => setShowBreak(v => !v)} style={{ width: "100%", background: "none", border: "none",
+                  cursor: "pointer", padding: "12px 0 4px", display: "flex", alignItems: "center", gap: 6,
+                  font: `500 13px ${FB}`, color: C.mist, WebkitTapHighlightColor: "transparent" }}>
+                  How this price is built
+                  <span style={{ display: "flex", transform: showBreak ? "rotate(180deg)" : "none", transition: "transform .2s" }}><Icon e="chevrondown" s={14} /></span>
+                </button>
+                {showBreak && (
+                  <div style={{ animation: "fadeIn .2s ease", padding: "4px 0 2px" }}>
+                    <Row label={`${jt.label} base`} value={`$${jt.base + PLATFORM_FEE}`} />
+                    {jt.basis === "area" && <Row label={`${sqft.toLocaleString()} sq ft × $${jt.rate.toFixed(3)}`} value={`$${Math.round(sqft * jt.rate)}`} />}
+                    {jt.basis === "linear" && <Row label={`${linearFt} ft × $${jt.rate.toFixed(2)}`} value={`$${Math.round(linearFt * jt.rate)}`} />}
+                    {modActive && <Row label={`Property factors ×${q.mod.toFixed(2)}`} value={q.mod > 1 ? "slope / hazards" : "shared drive"} />}
+                    <div style={{ height: 1, background: C.line, margin: "8px 0" }} />
+                    <Row label="You pay" value={`$${q.riderTotal}`} big />
+                  </div>
+                )}
+
+                {/* the one button */}
+                <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                  <Btn full onClick={startRequest}>Plow now · ${animPrice}</Btn>
+                  <button onClick={() => setShowSched(true)} aria-label="Schedule for later"
+                    style={{ ...miniBtn, minHeight: TAP, width: TAP, padding: 0, borderRadius: 14 }}><Icon e="calendar" s={19} /></button>
+                </div>
+                <p style={{ font: `400 12.5px ${FB}`, color: C.mistDim, textAlign: "center", margin: "10px 0 4px" }}>
+                  You're only charged once it's done.</p>
+              </>
             )}
           </div>
         </div>
-        <span style={{ color: C.mist, fontSize: 18 }}>›</span>
-      </Card>
-
-      {/* price card */}
-      <div style={{ marginTop: 16 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <Eyebrow>Your price</Eyebrow>
-          {jt.basis === "area" && sqft > 0 && <button onClick={() => go("props")} style={{ ...miniBtn, padding: "6px 11px" }}>Edit outline</button>}
+      ) : (
+        <div style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 20, padding: 20 }}>
+          <div style={{ width: 44, height: 44, borderRadius: 12, background: C.amber + "1F", color: C.amber,
+            display: "grid", placeItems: "center", marginBottom: 14 }}><Icon e="home" s={22} /></div>
+          <div style={{ font: `700 20px ${FD}`, letterSpacing: "-.01em", color: C.ice }}>Add your driveway</div>
+          <div style={{ font: `400 14px/1.5 ${FB}`, color: C.mist, margin: "6px 0 18px" }}>
+            Search your address and we'll place a starting outline. Takes about a minute — then it's one tap every storm.</div>
+          <Btn full onClick={() => go("props")}>Add my driveway</Btn>
         </div>
-        <div style={{ marginTop: 10, background: C.night2, border: `1px solid ${C.line}`, borderRadius: 14, padding: 16 }}>
-          {!needsOutline ? (
-            <>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 12 }}>
-                <div>
-                  <div style={{ font: `700 34px ${FD}`, color: C.amber, lineHeight: 1 }}>${animPrice}</div>
-                  <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 4 }}>
-                    {jt.basis === "area" ? `per job · ${sqft.toLocaleString()} sq ft`
-                      : jt.basis === "linear" ? `per job · ~${linearFt} ft of walk`
-                      : `flat rate · ${jt.label.toLowerCase()}`}</div>
-                </div>
-                <span style={{ fontSize: 30 }}><Icon e={jt.icon} s={30} /></span>
-              </div>
-              <div style={{ height: 1, background: C.line, margin: "4px 0 10px" }} />
-              <button onClick={() => setShowBreak(v => !v)} style={{ width: "100%", background: "none", border: "none",
-                cursor: "pointer", padding: "2px 0 8px", display: "flex", alignItems: "center", justifyContent: "space-between",
-                font: `700 12px ${FB}`, color: C.mist, WebkitTapHighlightColor: "transparent" }}>
-                <span>How this price is built</span>
-                <span style={{ fontSize: 13, transform: showBreak ? "rotate(180deg)" : "none", transition: "transform .2s" }}><Icon e="chevrondown" s={13} /></span>
-              </button>
-              {showBreak && (
-                <div style={{ animation: "fadeIn .2s ease" }}>
-                  <Row label={`${jt.label} base`} value={`$${jt.base + PLATFORM_FEE}`} />
-                  {jt.basis === "area" && <Row label={`${sqft.toLocaleString()} sq ft × $${jt.rate.toFixed(2)}`} value={`$${Math.round(sqft * jt.rate)}`} />}
-                  {jt.basis === "linear" && <Row label={`${linearFt} ft × $${jt.rate.toFixed(2)}`} value={`$${Math.round(linearFt * jt.rate)}`} />}
-                  {modActive && <Row label={`Property factors ×${q.mod.toFixed(2)}`} value={q.mod > 1 ? "surcharge" : "discount"} amber />}
-                  {q.surge && <Row label={`${q.surgeLabel} +${Math.round(q.surgePct * 100)}%`} value={`+$${q.surgeFee}`} amber />}
-                  {q.salt && <Row label="Salt / ice-melt add-on" value={`+$${q.saltFee}`} amber />}
-                  <div style={{ height: 1, background: C.line, margin: "8px 0" }} />
-                  <Row label="You pay" value={`$${q.riderTotal}`} big />
-                </div>
-              )}
-              <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 7, font: `600 12px ${FB}`, color: C.mist }}>
-                <span style={{ fontSize: 13 }}><Icon e={jt.icon} s={13} /></span> Sends a <b style={{ color: C.ice }}>{q.tool}</b>{q.salt ? " + salt" : ""} · ~{q.mins} min on site
-              </div>
-              <div style={{ marginTop: 9, display: "flex", alignItems: "center", gap: 6, font: `600 11px ${FB}`, color: C.push }}>
-                <span style={{ fontSize: 12 }}><Icon e="check" s={12} /></span> No contracts · no membership · {q.surge ? "demand surcharge shown above" : "no hidden fees"}
-              </div>
-            </>
-          ) : (
-            <div style={{ textAlign: "center", padding: "8px 4px" }}>
-              <div style={{ fontSize: 26, marginBottom: 6 }}><Icon e="edit" s={26} /></div>
-              <div style={{ font: `700 14px ${FB}`, marginBottom: 4 }}>Outline the area to see the price</div>
-              <div style={{ font: `500 12px ${FB}`, color: C.mist, marginBottom: 12 }}>${jt.base + PLATFORM_FEE} base + ${jt.rate.toFixed(2)} per sq ft.</div>
-              <Btn sm onClick={() => go("props")}>Map it</Btn>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* salt / ice-melt add-on — stacks on the job selected above */}
-      {canSalt && prop && !needsOutline && (
-        <button onClick={() => setSalt(v => !v)} style={{ width: "100%", marginTop: 14, cursor: "pointer",
-          textAlign: "left", display: "flex", alignItems: "center", gap: 12, padding: "13px 15px", borderRadius: 14,
-          background: salt ? C.amber + "14" : C.slate, border: `1.5px solid ${salt ? C.amber : C.line}`,
-          transition: "all .18s", WebkitTapHighlightColor: "transparent" }}>
-          <div style={{ width: 38, height: 38, borderRadius: 11, flexShrink: 0, display: "grid", placeItems: "center",
-            background: salt ? C.amber + "26" : C.night2, fontSize: 19 }}><Icon e="snowflake" s={19} /></div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ font: `700 13px ${FB}`, color: C.ice }}>Add salt / ice-melt</div>
-            <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 2 }}>
-              {salt ? "Keeps the cleared surface from re-freezing" : "Prevent re-freeze after we clear it"}</div>
-          </div>
-          <span style={{ font: `700 13px ${FD}`, color: salt ? C.amber : C.mistDim }}>
-            {salt ? `+$${q.saltFee}` : "+15%"}</span>
-        </button>
       )}
 
-      <div style={{ position: "sticky", bottom: 14, marginTop: 18, marginBottom: 4, paddingTop: 6,
-        background: `linear-gradient(transparent, ${C.night} 30%)` }}>
-        <div style={{ display: "flex", gap: 10 }}>
-          <Btn full onClick={startRequest} disabled={!prop || needsOutline}>Clear now · ${animPrice}</Btn>
-          <Btn kind="dark" onClick={() => setShowSched(true)} disabled={!prop || needsOutline}>
-            <span style={{ display: "flex", alignItems: "center", gap: 6 }}><Icon e="calendar" s={16} /></span>
-          </Btn>
+      {/* ---- secondary: quieter, below the fold ---- */}
+      <div style={{ marginTop: 28 }}>
+        <Eyebrow>Other services</Eyebrow>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+          <ServiceTile icon="car" title="Dig out my car" sub="Buried by the plow berm" onClick={emergencyDigout} disabled={!prop} />
+          <ServiceTile icon="battery" title="Jump-start" sub={`Flat $${JOB_TYPES.jumpstart.base}`} onClick={() => requestRoadside("jumpstart")} disabled={!prop} />
         </div>
-        <p style={{ font: `500 11px ${FB}`, color: C.mistDim, textAlign: "center", marginTop: 10 }}>
-          One flat price · you're only charged when it's done.
-        </p>
       </div>
 
       {showSched && <ScheduleSheet price={q.riderTotal} onClose={() => setShowSched(false)} onPick={schedule} />}
@@ -1923,10 +1852,10 @@ function ScheduleSheet({ onClose, onPick, price }) {
         {days.map((d, i) => (
           <button key={i} onClick={() => setDay(i)} style={{ flex: "0 0 auto", cursor: "pointer",
             padding: "11px 15px", borderRadius: 14, textAlign: "center", minWidth: 66, minHeight: 62,
-            background: day === i ? `linear-gradient(180deg, ${C.amberSoft}, ${C.amber})` : C.slate,
+            background: day === i ? C.amber : C.slate,
             border: `1px solid ${day === i ? C.amber : C.line}`,
-            color: day === i ? "#231603" : C.ice, transition: `all .2s ${EASE}`,
-            boxShadow: day === i ? "0 4px 14px rgba(255,176,32,.28)" : "none", WebkitTapHighlightColor: "transparent" }}>
+            color: day === i ? C.onAmber : C.ice, transition: `all .2s ${EASE}`,
+            boxShadow: "none", WebkitTapHighlightColor: "transparent" }}>
             <div style={{ font: `700 11px ${FB}`, opacity: .85 }}>{dayLabel(d, i)}</div>
             <div style={{ font: `700 19px ${FD}`, marginTop: 2 }}>{d.getDate()}</div>
           </button>
@@ -2077,7 +2006,7 @@ function JobChat({ jobId, senderId, peerName, seed }) {
           <div style={{ font: `500 12px ${FB}`, color: C.mistDim, textAlign: "center", padding: "6px 0" }}>Say hi <Icon e="wave" s={12} /></div>
         ) : msgs.map((m, i) => (
           <div key={m.id || i} style={{ display: "flex", justifyContent: m.me ? "flex-end" : "flex-start", marginBottom: 6 }}>
-            <span style={{ font: `500 13px ${FB}`, background: m.me ? C.amber : C.slate, color: m.me ? "#20140A" : C.ice,
+            <span style={{ font: `500 13px ${FB}`, background: m.me ? C.amber : C.slate, color: m.me ? C.onAmber : C.ice,
               padding: "7px 11px", borderRadius: 12, maxWidth: "80%" }}>{m.t}</span>
           </div>
         ))}
@@ -2247,107 +2176,83 @@ function RiderTracking() {
     return () => clearTimeout(t);
   }, [o.state, state.driverOnline]);
 
-  const steps = [
-    { k: "requested", label: "Request sent", short: "Sent", icon: "send" },
-    { k: "accepted", label: `${d.name} accepted`, short: "Accepted", icon: "handshake" },
-    { k: "enroute", label: "En route to you", short: "En route", icon: "pickup" },
-    { k: "plowing", label: "Plowing your property", short: "Plowing", icon: "plowtruck" },
-    { k: "arrived_done", label: "Complete", short: "Done", icon: "checkfill" },
-  ];
-  const order = ["requested", "accepted", "enroute", "plowing", "arrived_done"];
-  const curIdx = Math.max(order.indexOf(o.state), o.state === "accepted" ? 1 : 0);
-
   if (o.state === "arrived_done") return <RiderReceipt />;
 
+  const first = d.name.split(" ")[0];
+  const finding = o.state === "requested";
+  const stage = finding ? 0 : arrived ? 2 : 1;         // 0 sent · 1 on the way · 2 plowing · 3 done
+  const big = finding ? "Finding your plow" : arrived ? "Plowing now" : `${Math.max(1, Math.ceil(eta))} min`;
+  const line = finding ? "Sent to plows near you — usually under 2 minutes"
+    : arrived ? `${first} is clearing ${o.property?.label?.toLowerCase() === "home" ? "your driveway" : (o.property?.label || "your property")}`
+    : `${first} is on the way`;
+
   return (
-    <section style={{ paddingTop: 4 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 12 }}>
-        <div>
-          <Eyebrow color={arrived ? C.push : C.amber}>{arrived ? "Plowing now" : "On the way"}</Eyebrow>
-          <h2 style={{ font: `700 30px ${FD}`, margin: "6px 0 0" }}>{arrived ? "In progress" : `${Math.ceil(eta)} min away`}</h2>
-        </div>
-        <Chip color={C.plow}>{o.property?.label}</Chip>
+    <section style={{ paddingTop: 10, paddingBottom: 28 }}>
+      {/* map first — it's what people actually look at */}
+      <div style={{ borderRadius: 20, overflow: "hidden", border: `1px solid ${C.line}` }}>
+        {MAP_ENABLED && trackCenter ? (
+          <LiveMap center={trackCenter} height={300}
+            route={finding ? [] : [[driverLL.lng, driverLL.lat], [trackCenter.lng, trackCenter.lat]]}
+            markers={finding ? [{ lng: trackCenter.lng, lat: trackCenter.lat, size: 26 }] : [
+              { lng: trackCenter.lng, lat: trackCenter.lat, size: 26 },
+              { lng: driverLL.lng, lat: driverLL.lat, size: 30, kind: "truck", pulse: true },
+            ]} />
+        ) : (
+          <StormMap pin blips={finding ? [] : [{ id: d.id || "d", x: pos.x, y: pos.y }]} selected={{ id: d.id || "d" }}
+            tracking driverPos={pos} showRoute={!finding} height={1.3} />
+        )}
       </div>
 
-      {MAP_ENABLED && trackCenter ? (
-        <LiveMap center={trackCenter} height={220}
-          route={[[driverLL.lng, driverLL.lat], [trackCenter.lng, trackCenter.lat]]}
-          markers={[
-            { lng: trackCenter.lng, lat: trackCenter.lat, size: 26 },
-            { lng: driverLL.lng, lat: driverLL.lat, size: 26, pulse: true },
-          ]} />
-      ) : (
-        <StormMap pin blips={[{ id: d.id || "d", x: pos.x, y: pos.y }]} selected={{ id: d.id || "d" }}
-          tracking driverPos={pos} showRoute />
-      )}
-
-      {/* horizontal status stepper (DoorDash-style) */}
-      <div style={{ margin: "16px 0", background: C.night2, border: `1px solid ${C.line}`, borderRadius: 14, padding: "18px 14px 14px" }}>
-        <div style={{ font: `700 13px ${FB}`, color: C.ice, marginBottom: 14 }}>
-          {curIdx >= 4 ? "All done — your property is clear." : steps[curIdx]?.label}
+      {/* one big number, one line, one thin progress bar (Uber / DoorDash) */}
+      <div style={{ padding: "20px 2px 0" }}>
+        <div style={{ font: `700 ${finding || arrived ? 28 : 40}px/1.05 ${FD}`, letterSpacing: "-.02em", color: C.ice }}>{big}</div>
+        <div style={{ font: `400 15px ${FB}`, color: C.mist, marginTop: 6 }}>{line}</div>
+        <div style={{ display: "flex", gap: 5, marginTop: 16 }} aria-label={`Step ${stage + 1} of 4`}>
+          {[0, 1, 2, 3].map(i => (
+            <div key={i} style={{ flex: 1, height: 4, borderRadius: 4, overflow: "hidden", background: C.line }}>
+              <div style={{ height: "100%", borderRadius: 4, background: C.amber,
+                width: i < stage ? "100%" : i === stage ? "55%" : "0%",
+                animation: i === stage ? "pulse 1.6s ease-in-out infinite" : "none",
+                transition: `width .6s ${EASE}` }} />
+            </div>
+          ))}
         </div>
-        <div style={{ position: "relative", display: "flex", justifyContent: "space-between" }}>
-          {/* track behind the nodes */}
-          <div style={{ position: "absolute", top: 15, left: 15, right: 15, height: 3, background: C.line, borderRadius: 3 }} />
-          <div style={{ position: "absolute", top: 15, left: 15, height: 3, borderRadius: 3, background: `linear-gradient(90deg, ${C.amber}, ${C.amberSoft})`,
-            width: `calc((100% - 30px) * ${steps.length > 1 ? curIdx / (steps.length - 1) : 0})`, transition: "width .6s cubic-bezier(.22,1,.36,1)" }} />
-          {steps.map((s, i) => {
-            const done = i < curIdx, current = i === curIdx;
-            return (
-              <div key={s.k} style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 7, flex: "0 0 auto", width: 56 }}>
-                <div style={{ width: 30, height: 30, borderRadius: "50%", display: "grid", placeItems: "center", fontSize: 14,
-                  background: done ? C.amber : current ? C.night2 : C.night2,
-                  border: `2.5px solid ${done || current ? C.amber : C.line}`,
-                  boxShadow: current ? `0 0 0 5px ${C.amber}22` : "none", color: done ? "#20140A" : C.ice,
-                  transition: "all .3s" }}>
-                  {done ? <Icon e="check" s={15} /> : <Icon e={s.icon} s={16} />}
-                </div>
-                <span style={{ font: `${current ? 700 : 600} 10px ${FB}`, color: done || current ? C.ice : C.mistDim, textAlign: "center", lineHeight: 1.1 }}>{s.short}</span>
-              </div>
-            );
-          })}
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 7, font: `500 11.5px ${FB}`, color: C.mistDim }}>
+          <span>Sent</span><span>On the way</span><span>Plowing</span><span>Done</span>
         </div>
       </div>
 
       {/* driver card */}
-      <Card style={{ padding: S.lg }}>
-        <div style={{ display: "flex", gap: 13, alignItems: "center" }}>
-          <div style={{ position: "relative", flexShrink: 0 }}>
-            <Avatar name={d.name} size={52} />
-            <div style={{ position: "absolute", bottom: -2, right: -2, width: 19, height: 19, borderRadius: "50%",
-              background: C.push, border: `2.5px solid ${C.slate}`, display: "grid", placeItems: "center",
-              fontSize: 9, color: "#07240F", fontWeight: 900 }}><Icon e="check" s={9} /></div>
+      {!finding && (
+        <div style={{ marginTop: 20, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 18, padding: 16 }}>
+          <div style={{ display: "flex", gap: 13, alignItems: "center" }}>
+            <Avatar name={d.name} size={50} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ font: `600 16px ${FB}`, color: C.ice }}>{d.name}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3, font: `400 13px ${FB}`, color: C.mist }}>
+                <span style={{ color: C.amber, display: "flex" }}><Icon e="star" s={12} /></span>
+                {d.rating} · {d.jobs} plows · {d.truck}</div>
+            </div>
           </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <div style={{ font: `700 17px ${FB}`, letterSpacing: "-.01em" }}>{d.name}</div>
-              <Chip color={C.amber} solid>{d.tier}</Chip></div>
-            <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 4 }}>
-              <Stars v={d.rating} size={12} />
-              <span style={{ font: `600 12px ${FB}`, color: C.mist }}>{d.rating} · {d.jobs} jobs</span></div>
-            <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 4 }}>{d.truck}</div>
+          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+            <button onClick={() => dispatch({ type: "TOAST", msg: `Calling ${first}…` })}
+              style={{ ...miniBtn, flex: 1, minHeight: 44, fontSize: 14, background: C.night2 }}><Icon e="phone" s={15} /> Call</button>
+            <button onClick={() => document.getElementById("chatbox")?.scrollIntoView({ behavior: "smooth" })}
+              style={{ ...miniBtn, flex: 1, minHeight: 44, fontSize: 14, background: C.night2 }}><Icon e="chat" s={15} /> Message</button>
+            <button onClick={() => dispatch({ type: "TOAST", msg: "Live location shared with your contact" })} aria-label="Share live location"
+              style={{ ...miniBtn, minHeight: 44, width: 44, padding: 0, background: C.night2 }}><Icon e="link" s={15} /></button>
           </div>
         </div>
-        {/* actions */}
-        <div style={{ display: "flex", gap: 9, marginTop: S.md, paddingTop: S.md, borderTop: `1px solid ${C.line}66` }}>
-          <button onClick={() => dispatch({ type: "TOAST", msg: `Calling ${d.name.split(" ")[0]}…` })}
-            style={{ ...miniBtn, flex: 1, minHeight: 44, fontSize: 14 }}><Icon e="phone" s={14} /> Call</button>
-          <button onClick={() => document.getElementById("chatbox")?.scrollIntoView({ behavior: "smooth" })}
-            style={{ ...miniBtn, flex: 1, minHeight: 44, fontSize: 14 }}><Icon e="chat" s={14} /> Message</button>
-          <button onClick={() => dispatch({ type: "TOAST", msg: "Live location shared with your contact" })}
-            style={{ ...miniBtn, minHeight: 44, fontSize: 14, paddingLeft: 14, paddingRight: 14 }}>↗</button>
-        </div>
-      </Card>
+      )}
 
       {/* chat — real Supabase thread when the job is persisted, else in-session */}
-      <JobChat jobId={o.jobId} senderId={state.userId} peerName={d.name.split(" ")[0]}
-        seed={[{ me: false, t: "On my way — about 8 min." }]} />
+      {!finding && <JobChat jobId={o.jobId} senderId={state.userId} peerName={first}
+        seed={[{ me: false, t: "On my way — about 8 min." }]} />}
 
       {!arrived && (
-        <div style={{ marginTop: 14 }}>
-          <Btn kind="danger" full sm onClick={() => { dispatch({ type: "CLEAR_ORDER" }); dispatch({ type: "TOAST", msg: "Order cancelled" }); }}>
-            Cancel request</Btn>
-        </div>
+        <button onClick={() => { dispatch({ type: "CLEAR_ORDER" }); dispatch({ type: "TOAST", msg: "Request cancelled" }); }}
+          style={{ display: "block", margin: "18px auto 0", background: "none", border: "none", cursor: "pointer",
+            font: `500 14px ${FB}`, color: C.danger, padding: 8 }}>Cancel request</button>
       )}
     </section>
   );
@@ -2423,7 +2328,7 @@ function RiderReceipt() {
         <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
           {[5, 10, 15].map(t => (
             <button key={t} onClick={() => setTip(tip === t ? 0 : t)} style={{ ...miniBtn, background: tip === t ? C.amber : C.night2,
-              color: tip === t ? "#20140A" : C.ice, border: tip === t ? "none" : `1px solid ${C.line}` }}>Tip ${t}</button>
+              color: tip === t ? C.onAmber : C.ice, border: tip === t ? "none" : `1px solid ${C.line}` }}>Tip ${t}</button>
           ))}
         </div>
       </div>
@@ -2657,9 +2562,9 @@ function RiderProperties() {
 
 function Toggle({ on }) {
   return <div style={{ width: 50, height: 30, borderRadius: 20, flexShrink: 0,
-    background: on ? `linear-gradient(180deg, ${C.amberSoft}, ${C.amber})` : C.line,
+    background: on ? C.amber : C.line,
     position: "relative", transition: `background .28s ${EASE}`,
-    boxShadow: on ? "0 2px 10px rgba(255,176,32,.34)" : "inset 0 1px 3px rgba(0,0,0,.3)" }}>
+    boxShadow: "none" }}>
     <div style={{ position: "absolute", top: 3, left: on ? 23 : 3, width: 24, height: 24, borderRadius: "50%",
       background: "#fff", transition: `left .28s ${EASE}`, boxShadow: "0 2px 5px rgba(0,0,0,.28)" }} /></div>;
 }
@@ -2851,7 +2756,7 @@ function PhotoViewer({ job, onClose }) {
   const after = job.photos?.after?.[0] || { seed: 3, phase: "after" };
   const [wipe, setWipe] = useState(50);
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(5,12,22,.9)", zIndex: 50,
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: C.scrim, zIndex: 50,
       display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 400 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
@@ -2877,53 +2782,97 @@ function PhotoViewer({ job, onClose }) {
   );
 }
 
+// ---- iOS-style grouped list (Settings / Account screens) -------------------
+function ListGroup({ children, style }) {
+  return <div style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 16, overflow: "hidden", ...style }}>{children}</div>;
+}
+function ListRow({ icon, tint, title, sub, right, onClick, last }) {
+  const Tag = onClick ? "button" : "div";
+  return (
+    <Tag onClick={onClick} style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "13px 14px",
+      background: "transparent", border: "none", borderBottom: last ? "none" : `1px solid ${C.lineSoft}`,
+      cursor: onClick ? "pointer" : "default", textAlign: "left", WebkitTapHighlightColor: "transparent" }}>
+      <span style={{ width: 32, height: 32, borderRadius: 9, background: (tint || C.mist) + "1F", color: tint || C.mist,
+        display: "grid", placeItems: "center", flexShrink: 0 }}><Icon e={icon} s={17} /></span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ display: "block", font: `600 15px ${FB}`, color: C.ice }}>{title}</span>
+        {sub && <span style={{ display: "block", font: `400 13px ${FB}`, color: C.mist, marginTop: 1 }}>{sub}</span>}
+      </span>
+      {right}
+      {onClick && <span style={{ color: C.mistDim, display: "flex" }}><Icon e="chevronright" s={16} /></span>}
+    </Tag>
+  );
+}
+
+// Appearance: Auto follows the phone; Light is easier to read outside in bright snow.
+function AppearancePicker() {
+  const [mode, setMode] = useState(getThemeMode());
+  const opts = [["auto", "Auto", "auto"], ["light", "Light", "sun"], ["dark", "Dark", "moon"]];
+  return (
+    <ListGroup style={{ padding: 14 }}>
+      <div style={{ font: `600 15px ${FB}`, color: C.ice }}>Appearance</div>
+      <div style={{ font: `400 13px/1.4 ${FB}`, color: C.mist, marginTop: 2 }}>
+        Light is easier to read outside in bright snow. Auto follows your phone.</div>
+      <div role="radiogroup" aria-label="Appearance" style={{ display: "flex", background: C.night2, borderRadius: 11, padding: 3, marginTop: 12 }}>
+        {opts.map(([id, label, ic]) => {
+          const on = mode === id;
+          return (
+            <button key={id} role="radio" aria-checked={on} onClick={() => { setMode(id); applyTheme(id); }}
+              style={{ flex: 1, minHeight: 38, border: "none", borderRadius: 9, cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                font: `600 13px ${FB}`, color: on ? C.ice : C.mist, background: on ? C.slate2 : "transparent",
+                boxShadow: on ? E.low : "none", WebkitTapHighlightColor: "transparent" }}>
+              <Icon e={ic} s={15} />{label}</button>
+          );
+        })}
+      </div>
+    </ListGroup>
+  );
+}
+
 function RiderAccount({ onReferral }) {
   const { state, dispatch } = useStore();
   const auth = useAuth();
   const p = state.profile, pay = state.payment;
   const ref = state.riderReferral;
   return (
-    <Fade k="acct"><section style={{ paddingTop: 4 }}>
-      <div style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 18 }}>
-        <Avatar name={p.name || "You"} size={56} />
-        <div><div style={{ font: `700 19px ${FB}` }}>{p.name || "Your account"}</div>
-          <div style={{ font: `500 12px ${FB}`, color: C.mist }}>{p.phone || "—"} · {p.email || "—"}</div></div>
+    <Fade k="acct"><section style={{ paddingTop: 10, paddingBottom: 28 }}>
+      <div style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 22 }}>
+        <Avatar name={p.name || "You"} size={58} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ font: `700 22px ${FD}`, letterSpacing: "-.01em", color: C.ice }}>{p.name || "Your account"}</div>
+          <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 2 }}>{[p.phone, p.email].filter(Boolean).join(" · ") || "Add your contact info"}</div>
+        </div>
       </div>
-      <div style={{ display: "grid", gap: 10 }}>
-        <Card style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}><span style={{ fontSize: 20 }}><Icon e="card" s={20} /></span>
-            <div><div style={{ font: `700 13px ${FB}` }}>{pay ? `${pay.brand} ···${pay.last4}` : "No card on file"}</div>
-              <div style={{ font: `500 12px ${FB}`, color: C.mist }}>Default payment</div></div></div>
-          <Chip color={C.good}>Active</Chip>
-        </Card>
-        {/* referral card — opens full screen */}
-        <Card onClick={onReferral} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
-          borderColor: C.amber + "55", background: `linear-gradient(120deg, ${C.slate}, ${C.night2})` }}>
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}><span style={{ fontSize: 20 }}><Icon e="gift" s={20} /></span>
-            <div><div style={{ font: `700 13px ${FB}` }}>Refer neighbors · earn ${ref.reward} each</div>
-              <div style={{ font: `500 12px ${FB}`, color: C.mist }}>
-                {ref.credit > 0 ? `$${ref.credit} earned · ${ref.invited} invited` : "You both get $" + ref.reward}</div></div></div>
-          <span style={{ color: C.amber, fontSize: 18 }}>›</span>
-        </Card>
-        <Card style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}><span style={{ fontSize: 20 }}><Icon e="lifebuoy" s={20} /></span>
-            <div><div style={{ font: `700 13px ${FB}` }}>Help & support</div>
-              <div style={{ font: `500 12px ${FB}`, color: C.mist }}>Report an issue, get help</div></div></div>
-          <span style={{ color: C.mist }}>›</span>
-        </Card>
-      </div>
+
+      <ListGroup>
+        <ListRow icon="card" tint={C.plow} title={pay ? `${pay.brand} ···${pay.last4}` : "Add a card"} sub="Charged only after a job is done" />
+        <ListRow icon="gift" tint={C.amber} title={`Invite neighbors · $${ref.reward} each`}
+          sub={ref.credit > 0 ? `$${ref.credit} earned · ${ref.invited} invited` : `You both get $${ref.reward}`} onClick={onReferral} />
+        <ListRow icon="lifebuoy" tint={C.push} title="Help" sub="Report an issue or get support" last
+          onClick={() => dispatch({ type: "TOAST", msg: "Support: text (218) 555-0199 — we answer fast during storms" })} />
+      </ListGroup>
+
+      <div style={{ height: 14 }} />
+      <AppearancePicker />
+
+      <div style={{ height: 14 }} />
+      <ListGroup>
+        <ListRow icon="plowtruck" tint={C.amber} title="Drive with DRIFT" sub="Have a plow? Earn during storms"
+          onClick={() => dispatch({ type: "ROLE", role: "driver" })} last />
+      </ListGroup>
+
       {auth?.isConfigured && auth?.session && (
         <button onClick={async () => { await auth.signOut(); dispatch({ type: "SIGNED_OUT" }); }}
-          style={{ width: "100%", marginTop: 12, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 12,
-            color: C.ice, font: `700 13px ${FB}`, cursor: "pointer", padding: 13 }}>
-          Sign out
-        </button>
+          style={{ width: "100%", marginTop: 14, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14,
+            color: C.danger, font: `600 15px ${FB}`, cursor: "pointer", padding: 14 }}>Sign out</button>
       )}
-      <button onClick={() => dispatch({ type: "RESET" })}
-        style={{ width: "100%", marginTop: 12, background: "transparent", border: `1px dashed ${C.line}`, borderRadius: 12,
-          color: C.mistDim, font: `600 12px ${FB}`, cursor: "pointer", padding: 12 }}>
-        <Icon e="undo" s={13} /> Reset demo (replay onboarding)
-      </button>
+      {!supabaseEnabled && (
+        <button onClick={() => dispatch({ type: "RESET" })}
+          style={{ display: "flex", alignItems: "center", gap: 6, margin: "18px auto 0", background: "none", border: "none",
+            color: C.mistDim, font: `500 13px ${FB}`, cursor: "pointer", padding: 8 }}>
+          <Icon e="undo" s={13} /> Reset demo</button>
+      )}
     </section></Fade>
   );
 }
@@ -2934,9 +2883,9 @@ function ReferralHero({ code, reward, subtitle, accent = C.amber }) {
   const copy = () => dispatch({ type: "TOAST", msg: `Code ${code} copied to clipboard` });
   return (
     <div style={{ borderRadius: 16, padding: 20, position: "relative", overflow: "hidden",
-      background: `linear-gradient(135deg, ${accent}22, ${C.night2})`, border: `1px solid ${accent}55` }}>
+      background: C.slate, border: `1px solid ${accent}55` }}>
       <div style={{ position: "absolute", top: -40, right: -30, fontSize: 130, opacity: .08 }}><Icon e="gift" s={130} /></div>
-      <div style={{ font: `700 13px ${FB}`, color: accent, letterSpacing: ".08em" }}>YOUR CODE</div>
+      <div style={{ font: `700 13px ${FB}`, color: accent, letterSpacing: ".01em" }}>Your code</div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "8px 0 14px" }}>
         <div style={{ font: `700 26px ${FD}`, letterSpacing: ".04em", color: C.ice }}>{code}</div>
         <button onClick={copy} style={{ ...miniBtn, padding: "6px 10px", borderColor: accent + "66" }}>Copy</button>
@@ -3002,7 +2951,7 @@ function RiderReferral({ onBack }) {
             ["3", "You both earn", "$" + ref.reward + " credit lands when their plow completes."]].map(([n, t, d]) => (
             <div key={n} style={{ display: "flex", gap: 12, alignItems: "flex-start", background: C.slate,
               border: `1px solid ${C.line}`, borderRadius: 12, padding: 13 }}>
-              <div style={{ width: 22, height: 22, borderRadius: "50%", background: C.amber, color: "#20140A",
+              <div style={{ width: 22, height: 22, borderRadius: "50%", background: C.amber, color: C.onAmber,
                 display: "grid", placeItems: "center", font: `800 12px ${FB}`, flexShrink: 0 }}>{n}</div>
               <div><div style={{ font: `700 13px ${FB}` }}>{t}</div>
                 <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 2 }}>{d}</div></div>
@@ -3134,10 +3083,10 @@ function DriverOnboarding() {
       {step === 0 && (
         <Fade k="di" style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", paddingBottom: 24 }}>
           <div style={{ position: "relative", height: 170, marginBottom: S.lg, borderRadius: 22, overflow: "hidden",
-            background: `radial-gradient(120% 100% at 50% 0%, #133D2C 0%, ${C.night} 74%)`, border: `1px solid ${C.push}44` }}>
+            background: "radial-gradient(120% 100% at 50% 0%, #202026 0%, #141418 74%)", color: "#F5F5F7", border: `1px solid ${C.push}44` }}>
             <HeroSnow />
             <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
-              <div style={{ fontSize: 50 }}><Icon e="plowtruck" s={50} /></div>
+              <div style={{ fontSize: 50, color: "#F5F5F7" }}><Icon e="plowtruck" s={50} /></div>
             </div>
           </div>
           <h1 style={{ font: `700 38px/1 ${FD}`, margin: "0 0 10px", textAlign: "center" }}>
@@ -3146,7 +3095,7 @@ function DriverOnboarding() {
             Turn on when the snow flies. Take the jobs you want. Cash out the same day.
           </p>
           <div style={{ display: "grid", gap: 10, marginBottom: S.xl }}>
-            {[["cash", "Keep up to 85% per job", "Starts at 70% · first jobs pay 90%"],
+            {[["cash", "Keep 80% of every job", "Plus 100% of tips · same rate for everyone"],
               ["bolt", "Steady work every storm", "Jobs near you when it snows"],
               ["bank", "Instant cash out", "Stripe Connect, same day"]].map(([i, t, d]) => (
               <div key={t} style={{ display: "flex", gap: 12, alignItems: "center", background: C.slate,
@@ -3203,7 +3152,7 @@ function DriverOnboarding() {
                   </div>
                   <span style={{ width: 24, height: 24, borderRadius: 8, display: "grid", placeItems: "center",
                     background: on ? C.push : "transparent", border: `2px solid ${on ? C.push : C.line}`,
-                    color: "#07240F", fontWeight: 900, fontSize: 12 }}>{on ? <Icon e="check" s={12} /> : ""}</span>
+                    color: C.onPush, fontWeight: 900, fontSize: 12 }}>{on ? <Icon e="check" s={12} /> : ""}</span>
                 </button>
               );
             })}
@@ -3261,7 +3210,7 @@ function DriverOnboarding() {
           {/* PER-EVENT: opt into DRIFT coverage, paid only when you work */}
           {coverage === "perEvent" && (
             <div>
-              <div style={{ background: `linear-gradient(130deg, ${C.push}14, ${C.night2})`, border: `1px solid ${C.push}55`,
+              <div style={{ background: C.slate, border: `1px solid ${C.push}55`,
                 borderRadius: 16, padding: 18 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
                   <div>
@@ -3291,7 +3240,7 @@ function DriverOnboarding() {
                 background: perEventOptIn ? C.push + "12" : "transparent", border: `1px solid ${perEventOptIn ? C.push : C.line}` }}>
                 <span style={{ width: 20, height: 20, borderRadius: 6, flexShrink: 0, display: "grid", placeItems: "center",
                   background: perEventOptIn ? C.push : "transparent", border: `2px solid ${perEventOptIn ? C.push : C.line}`,
-                  color: "#07240F", fontWeight: 900, fontSize: 11 }}>{perEventOptIn ? <Icon e="check" s={11} /> : ""}</span>
+                  color: C.onPush, fontWeight: 900, fontSize: 11 }}>{perEventOptIn ? <Icon e="check" s={11} /> : ""}</span>
                 <span style={{ font: `500 12px ${FB}`, color: C.mist }}>
                   I want DRIFT per-event coverage — deduct <b style={{ color: C.ice }}>${INSURANCE.perEvent}</b> from each job I complete.</span>
               </button>
@@ -3315,9 +3264,9 @@ function DriverOnboarding() {
           <h2 style={h2}>Where should we send it?</h2>
           <p style={sub}>Payouts run through Stripe Connect. Cash out the same day.</p>
           <div style={{ margin: "16px 0", borderRadius: 16, padding: 18, position: "relative", overflow: "hidden",
-            background: `linear-gradient(135deg, ${C.push}1E, ${C.night2})`, border: `1px solid ${C.push}44` }}>
+            background: C.slate, border: `1px solid ${C.push}44` }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-              <span style={{ font: `700 11px ${FB}`, letterSpacing: ".14em", color: C.push }}>PAYOUT ACCOUNT</span>
+              <span style={{ font: `700 11px ${FB}`, letterSpacing: ".01em", color: C.push }}>Payout account</span>
               <span style={{ fontSize: 19 }}><Icon e="bank" s={19} /></span>
             </div>
             <div style={{ font: `700 20px ${FB}`, letterSpacing: ".08em", color: C.ice }}>•••• •••• 6789</div>
@@ -3371,121 +3320,84 @@ function DriverDrive() {
 
   if (working) return <DriverActiveJob />;
 
-  return (
-    <Fade k="drive"><section style={{ paddingTop: 4 }}>
-      {/* status hero */}
-      <div style={{ position: "relative", borderRadius: 20, overflow: "hidden", marginBottom: S.md,
-        background: online
-          ? `linear-gradient(150deg, ${C.push}1E, ${C.night2})`
-          : `linear-gradient(150deg, ${C.slate2}, ${C.night2})`,
-        border: `1px solid ${online ? C.push + "55" : C.line}`, padding: S.lg,
-        transition: `all .3s ${EASE}` }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: S.sm }}>
-          <span style={{ width: 9, height: 9, borderRadius: "50%", background: online ? C.push : C.mistDim,
-            boxShadow: online ? `0 0 10px ${C.push}` : "none",
-            animation: online ? "pulse 1.6s infinite" : "none" }} />
-          <span style={{ font: `700 11px ${FB}`, letterSpacing: ".16em", textTransform: "uppercase",
-            color: online ? C.push : C.mistDim }}>{online ? "Online · taking jobs" : "Offline"}</span>
-        </div>
-        <h1 style={{ font: `700 30px/1.02 ${FD}`, margin: "0 0 4px" }}>
-          {online ? "Watching for jobs" : "Go online to earn"}</h1>
-        <p style={{ font: `500 13px ${FB}`, color: C.mist, margin: 0 }}>
-          {online ? `${SNOW_DEPTH_IN}" falling · demand is high right now`
-            : "Heavy snow means surge pay. Flip on when you're ready."}</p>
+  const toggle = () => {
+    dispatch({ type: "ONLINE", v: !online });
+    dispatch({ type: "TOAST", msg: !online ? "You're online — requests will pop up here" : "You're offline" });
+  };
 
-        {/* today's earnings inline */}
-        <div style={{ display: "flex", gap: S.lg, marginTop: S.lg, paddingTop: S.md, borderTop: `1px solid ${C.line}66` }}>
-          <div>
-            <div style={{ font: `700 24px ${FD}`, color: C.amber }}>${state.earnings.today}</div>
-            <div style={{ font: `500 11px ${FB}`, color: C.mist }}>Today</div>
-          </div>
-          <div>
-            <div style={{ font: `700 24px ${FD}`, color: C.ice }}>{state.earnings.jobsToday}</div>
-            <div style={{ font: `500 11px ${FB}`, color: C.mist }}>Jobs</div>
-          </div>
-          <div>
-            <div style={{ font: `700 24px ${FD}`, color: C.ice }}>${state.earnings.week}</div>
-            <div style={{ font: `500 11px ${FB}`, color: C.mist }}>This week</div>
-          </div>
-        </div>
+  return (
+    <Fade k="drive"><section style={{ paddingTop: 10, paddingBottom: 28 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, font: `500 14px ${FB}`, color: online ? C.push : C.mist }}>
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: online ? C.push : C.mistDim,
+          animation: online ? "pulse 1.6s infinite" : "none" }} />
+        {online ? "Online" : "Offline"}
+      </div>
+      <h1 style={{ font: `700 30px/1.1 ${FD}`, letterSpacing: "-.02em", color: C.ice, margin: "6px 0 4px" }}>
+        {online ? "Watching for requests" : "Ready to plow?"}</h1>
+      <p style={{ font: `400 15px ${FB}`, color: C.mist, margin: "0 0 16px" }}>
+        {online ? `${SNOW_DEPTH_IN}" down · 12 open requests nearby` : `${SNOW_DEPTH_IN}" down in Duluth — demand is high right now.`}</p>
+
+      <div style={{ borderRadius: 20, overflow: "hidden", border: `1px solid ${C.line}` }}>
+        {MAP_ENABLED && state.driver.lng ? (
+          <LiveMap center={{ lng: state.driver.lng, lat: state.driver.lat }} height={210}
+            markers={[{ lng: state.driver.lng, lat: state.driver.lat, size: 30, kind: "truck", pulse: online }]} />
+        ) : (
+          <StormMap blips={[{ id: "me", x: state.driver.x, y: state.driver.y }]} selected={online ? { id: "me" } : null} height={1.75} />
+        )}
       </div>
 
-      {MAP_ENABLED && state.driver.lng ? (
-        <LiveMap center={{ lng: state.driver.lng, lat: state.driver.lat }} height={200}
-          markers={[{ lng: state.driver.lng, lat: state.driver.lat, size: 28, pulse: true }]} />
-      ) : (
-        <StormMap pin="JOB" blips={[{ id: "me", x: state.driver.x, y: state.driver.y }]} selected={{ id: "me" }} />
-      )}
-
-      {/* big online switch — primary action, oversized for gloves */}
-      <button onClick={() => { dispatch({ type: "ONLINE", v: !online }); dispatch({ type: "TOAST", msg: !online ? "You're online — jobs will come in" : "You're offline" }); }}
-        style={{ width: "100%", marginTop: S.lg, minHeight: 60, borderRadius: 16, cursor: "pointer",
-          border: "none", font: `700 17px ${FB}`, letterSpacing: "-.01em",
+      {/* THE primary action — oversized for gloves */}
+      <button onClick={toggle} aria-pressed={online}
+        style={{ width: "100%", marginTop: 14, minHeight: 68, borderRadius: 18, cursor: "pointer",
+          font: `700 19px ${FB}`, letterSpacing: "-.01em",
           display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
-          background: online ? C.slate : `linear-gradient(180deg, #8BF5AE, ${C.push})`,
-          color: online ? C.ice : "#07240F",
-          boxShadow: online ? `inset 0 0 0 1px ${C.line}` : "0 8px 26px rgba(110,238,155,.3)",
-          transition: `all .28s ${EASE}`, WebkitTapHighlightColor: "transparent" }}>
-        <span style={{ fontSize: 19 }}>{online ? <Icon e="pause" s={19} /> : <Icon e="play" s={19} />}</span>
+          background: online ? C.slate : C.push, color: online ? C.ice : C.onPush,
+          border: online ? `1px solid ${C.line}` : "none",
+          transition: `background .25s ${EASE}, color .25s`, WebkitTapHighlightColor: "transparent" }}>
+        <Icon e={online ? "pause" : "play"} s={20} />
         {online ? "Go offline" : "Go online"}
       </button>
 
-      {/* demand heat strip */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginTop: S.lg }}>
-        {[
-          { v: `${SNOW_DEPTH_IN}"`, l: "Snow depth", c: C.plow, i: "snow" },
-          { v: `${Math.round(driverPct(state.driver) * 100)}%`, l: "You keep", c: C.push, i: "cash" },
-          { v: "12", l: "Open jobs", c: C.push, i: "pin" },
-        ].map((s, i) => (
-          <div key={i} style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: "13px 11px" }}>
-            <div style={{ fontSize: 15, marginBottom: 5 }}><Icon e={s.i} s={15} /></div>
-            <div style={{ font: `700 20px ${FD}`, color: s.c, lineHeight: 1 }}>{s.v}</div>
-            <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 4 }}>{s.l}</div>
+      {/* today at a glance — one card, three numbers */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", marginTop: 14, background: C.slate,
+        border: `1px solid ${C.line}`, borderRadius: 16 }}>
+        {[[`$${state.earnings.today}`, "Today"], [state.earnings.jobsToday, "Jobs"], [`$${state.earnings.week}`, "This week"]].map(([v, l], i) => (
+          <div key={l} style={{ padding: "14px 12px", borderLeft: i ? `1px solid ${C.lineSoft}` : "none" }}>
+            <div style={{ font: `700 21px/1 ${FD}`, letterSpacing: "-.01em", color: C.ice }}>{v}</div>
+            <div style={{ font: `400 12.5px ${FB}`, color: C.mist, marginTop: 5 }}>{l}</div>
           </div>
         ))}
       </div>
 
-      {/* storm connectivity */}
-      <button onClick={() => { dispatch({ type: "OFFLINE", v: !state.offline });
-          if (!state.offline) { dispatch({ type: "QUEUE" }); dispatch({ type: "TOAST", msg: "Signal lost — job data cached locally" }); } }}
-        style={{ width: "100%", marginTop: S.md, cursor: "pointer", textAlign: "left", display: "flex",
-          alignItems: "center", gap: 11, padding: "13px 15px", borderRadius: 14, minHeight: TAP,
-          background: state.offline ? C.danger + "14" : C.slate,
-          border: `1px solid ${state.offline ? C.danger + "55" : C.line}`, WebkitTapHighlightColor: "transparent" }}>
-        <span style={{ fontSize: 17 }}>{state.offline ? <Icon e="signal" s={17} /> : <Icon e="signal" s={17} />}</span>
-        <div style={{ flex: 1 }}>
-          <div style={{ font: `700 13px ${FB}`, color: state.offline ? C.danger : C.ice }}>
-            {state.offline ? "Offline — cached mode" : "Signal good"}</div>
-          <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 2 }}>
-            {state.offline ? "Jobs stay on-device until signal returns" : "Tap to simulate a hillside dead zone"}</div>
-        </div>
-      </button>
-
-      {/* waiting state with skeletons — feels alive, not empty */}
+      {/* waiting state — calm, not empty */}
       {online && !incoming && (
-        <div style={{ marginTop: S.lg }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: S.md, justifyContent: "center" }}>
-            <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.push, animation: "pulse 1.4s infinite" }} />
-            <span style={{ font: `600 13px ${FB}`, color: C.mist }}>Listening for nearby requests…</span>
-          </div>
-          <div style={{ display: "grid", gap: 8, opacity: .45 }}>
+        <div style={{ marginTop: 18 }}>
+          <div style={{ font: `500 13px ${FB}`, color: C.mist, textAlign: "center", marginBottom: 10 }}>
+            Listening for nearby requests…</div>
+          <div style={{ display: "grid", gap: 8, opacity: .5 }}>
             {[0, 1].map(i => (
               <div key={i} style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: 14,
                 display: "flex", gap: 12, alignItems: "center" }}>
-                <Skeleton h={38} w={38} r={11} />
-                <div style={{ flex: 1 }}>
-                  <Skeleton h={11} w="62%" />
-                  <div style={{ height: 7 }} />
-                  <Skeleton h={9} w="40%" />
-                </div>
-                <Skeleton h={22} w={52} r={8} />
+                <Skeleton h={36} w={36} r={10} />
+                <div style={{ flex: 1 }}><Skeleton h={11} w="60%" /><div style={{ height: 7 }} /><Skeleton h={9} w="38%" /></div>
+                <Skeleton h={20} w={48} r={8} />
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* incoming job request */}
+      {/* demo: hillside dead-zone simulator (hidden once real accounts are on) */}
+      {!supabaseEnabled && (
+        <button onClick={() => { dispatch({ type: "OFFLINE", v: !state.offline });
+            if (!state.offline) { dispatch({ type: "QUEUE" }); dispatch({ type: "TOAST", msg: "Signal lost — job data cached locally" }); } }}
+          style={{ display: "flex", alignItems: "center", gap: 6, margin: "18px auto 0", background: "none", border: "none",
+            cursor: "pointer", font: `500 13px ${FB}`, color: state.offline ? C.danger : C.mistDim, padding: 8 }}>
+          <Icon e={state.offline ? "nosignal" : "signal"} s={14} />
+          {state.offline ? "Offline mode — tap to reconnect" : "Simulate a dead zone"}
+        </button>
+      )}
+
       {incoming && <IncomingJob order={o} />}
     </section></Fade>
   );
@@ -3503,8 +3415,11 @@ function IncomingJob({ order }) {
   const hazards = (prop?.hazards || []).map(h => MODIFIERS.hazards[h]?.label).filter(Boolean);
   const steep = prop?.grade === "steep";
   const markedHazards = (prop?.features || []).filter(f => f.geometry?.type === "Point").map(f => f.properties?.label).filter(Boolean);
+  const headsUp = [...(steep ? ["Steep hillside"] : []), ...hazards, ...markedHazards];
+  const plowN = prop?.zones?.filter(z => z.mode === "plow").length || (prop?.features || []).filter(f => f.geometry?.type === "Polygon" && f.properties?.mode !== "push").length;
+  const pushN = prop?.zones?.filter(z => z.mode === "push").length || (prop?.features || []).filter(f => f.properties?.mode === "push").length;
 
-  // 15s auto-decline countdown (jobs are time-sensitive in a storm)
+  // 15s auto-pass countdown (jobs are time-sensitive in a storm)
   const [secs, setSecs] = useState(15);
   useEffect(() => {
     if (secs <= 0) { decline(true); return; }
@@ -3517,113 +3432,80 @@ function IncomingJob({ order }) {
       timeline: [...(order.timeline || []), { k: "accepted", t: "now", label: "You accepted" }] }});
     dispatch({ type: "TOAST", msg: "Job accepted — navigate to the property" });
   };
-  const decline = (auto) => { dispatch({ type: "CLEAR_ORDER" }); dispatch({ type: "TOAST", msg: auto ? "Job passed to next driver" : "Job declined" }); };
+  const decline = (auto) => { dispatch({ type: "CLEAR_ORDER" }); dispatch({ type: "TOAST", msg: auto ? "Request passed to the next driver" : "Request passed" }); };
 
+  // Full-screen takeover: one decision, nothing else competing for attention.
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(5,12,22,.8)", zIndex: 40, display: "flex",
-      alignItems: "flex-end", justifyContent: "center", padding: 12 }}>
-      <div style={{ width: "100%", maxWidth: 416, background: C.night2, border: `2px solid ${C.amber}`, borderRadius: 20,
-        padding: 18, boxShadow: "0 -10px 50px rgba(0,0,0,.6)", animation: "rise .22s ease" }}>
+    <div role="dialog" aria-modal="true" aria-label="New plow request" style={{ position: "fixed", inset: 0, zIndex: 40,
+      background: C.night, display: "flex", justifyContent: "center", animation: "fadeIn .18s ease" }}>
+      <div style={{ width: "100%", maxWidth: 440, display: "flex", flexDirection: "column",
+        padding: "calc(18px + env(safe-area-inset-top)) 20px calc(18px + env(safe-area-inset-bottom))", overflowY: "auto" }}>
 
-        {/* header: job type + countdown ring */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ fontSize: 26 }}><Icon e={jt.icon} s={26} /></span>
-            <div><div style={{ font: `700 15px ${FB}`, color: C.ice }}>{jt.label}</div>
-              <div style={{ font: `600 11px ${FB}`, color: C.mist }}>{order.size?.mins || q.mins} min on site</div></div>
-          </div>
-          <div style={{ position: "relative", width: 46, height: 46 }}>
-            <svg width="46" height="46" style={{ transform: "rotate(-90deg)" }}>
-              <circle cx="23" cy="23" r="19" fill="none" stroke={C.line} strokeWidth="4" />
-              <circle cx="23" cy="23" r="19" fill="none" stroke={secs <= 5 ? C.danger : C.amber} strokeWidth="4"
-                strokeDasharray={119} strokeDashoffset={119 * (1 - secs / 15)} strokeLinecap="round" style={{ transition: "stroke-dashoffset 1s linear" }} />
+        {/* top: label + countdown */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ font: `600 15px ${FB}`, color: C.amber }}>New request</div>
+          <div style={{ position: "relative", width: 44, height: 44 }} aria-label={`${secs} seconds left`}>
+            <svg width="44" height="44" style={{ transform: "rotate(-90deg)" }}>
+              <circle cx="22" cy="22" r="18" fill="none" stroke={C.line} strokeWidth="3.5" />
+              <circle cx="22" cy="22" r="18" fill="none" stroke={secs <= 5 ? C.danger : C.amber} strokeWidth="3.5"
+                strokeDasharray={113} strokeDashoffset={113 * (1 - secs / 15)} strokeLinecap="round" style={{ transition: "stroke-dashoffset 1s linear" }} />
             </svg>
-            <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", font: `700 15px ${FD}`, color: secs <= 5 ? C.danger : C.ice }}>{secs}</div>
+            <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", font: `600 15px ${FB}`, color: secs <= 5 ? C.danger : C.ice }}>{secs}</div>
           </div>
         </div>
 
-        {/* pay — huge */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
-          <div style={{ font: `700 44px ${FD}`, color: C.push, lineHeight: 1 }}>${dPay}</div>
-          <Chip color={C.amber}>${dHourly}/hr est</Chip>
+        {/* pay — the number that matters */}
+        <div style={{ font: `700 60px/1 ${FD}`, letterSpacing: "-.03em", color: C.ice, marginTop: 14 }}>${dPay}</div>
+        <div style={{ font: `400 15px ${FB}`, color: C.mist, marginTop: 8 }}>
+          {jt.label} · ~{order.size?.mins || q.mins} min on site · ~${dHourly}/hr</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, font: `500 15px ${FB}`, color: C.ice, marginTop: 14 }}>
+          <span style={{ color: C.mist, display: "flex" }}><Icon e="pin" s={16} /></span>{prop?.addr || "Nearby"}</div>
+
+        {/* where + what */}
+        <div style={{ marginTop: 16, borderRadius: 18, overflow: "hidden", border: `1px solid ${C.line}` }}>
+          {prop?.mapImg ? (
+            <img src={prop.mapImg} alt="" style={{ width: "100%", height: 170, objectFit: "cover", display: "block" }} />
+          ) : MAP_ENABLED && prop?.center ? (
+            <LiveMap center={prop.center} height={170} interactive={false} markers={[{ lng: prop.center.lng, lat: prop.center.lat, size: 26 }]} />
+          ) : (
+            <StormMap pin="Job" height={2.2} />
+          )}
         </div>
-        <div style={{ font: `500 13px ${FB}`, color: C.mist, marginBottom: 14 }}>{prop?.addr}</div>
+        <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 8 }}>
+          Follow the customer's outline — {plowN || 1} plow area{(plowN || 1) !== 1 ? "s" : ""}{pushN ? `, ${pushN} snow pile spot${pushN !== 1 ? "s" : ""}` : ""}.</div>
 
-        {/* tool match */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderRadius: 11, marginBottom: 10,
-          background: toolMatch ? C.push + "14" : C.danger + "14", border: `1px solid ${toolMatch ? C.push + "55" : C.danger + "55"}` }}>
-          <span style={{ fontSize: 15 }}>{toolMatch ? <Icon e="checkfill" s={15} /> : <Icon e="warning" s={15} />}</span>
-          <span style={{ font: `600 12px ${FB}`, color: toolMatch ? C.push : C.danger }}>
-            {toolMatch ? `Requires ${order.tool || jt.tool} — you're equipped` : `Requires ${order.tool || jt.tool} — not on your profile`}</span>
-        </div>
-
-        {/* salting add-on — customer paid for ice-melt, pay reflects it */}
-        {q.salt && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderRadius: 11, marginBottom: 10,
-            background: C.amber + "14", border: `1px solid ${C.amber}55` }}>
-            <span style={{ fontSize: 15 }}><Icon e="snowflake" s={15} /></span>
-            <span style={{ font: `600 12px ${FB}`, color: C.amber }}>Customer added salting — bring ice-melt (+${q.saltFee} in your pay)</span>
-          </div>
-        )}
-
-        {/* hazard warnings — surfaced BEFORE accept */}
-        {(hazards.length > 0 || steep) && (
-          <div style={{ padding: "11px 12px", borderRadius: 11, marginBottom: 12,
-            background: C.danger + "12", border: `1px solid ${C.danger}44` }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: hazards.length ? 7 : 0 }}>
-              <span style={{ fontSize: 14 }}><Icon e="warning" s={14} /></span>
-              <span style={{ font: `700 11px ${FB}`, color: C.danger, letterSpacing: ".05em" }}>SITE HAZARDS</span>
-            </div>
+        {/* heads up — hazards before you accept */}
+        {headsUp.length > 0 && (
+          <div style={{ marginTop: 14, padding: "12px 14px", borderRadius: 14, background: C.danger + "12", border: `1px solid ${C.danger}40` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 7, font: `600 14px ${FB}`, color: C.danger, marginBottom: 8 }}>
+              <Icon e="warning" s={15} /> Heads up</div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {steep && <Chip color={C.danger}>Steep hillside</Chip>}
-              {hazards.map((h, i) => <Chip key={i} color={C.danger}>{h}</Chip>)}
+              {headsUp.map((h, i) => <Chip key={i} color={C.danger}>{h}</Chip>)}
             </div>
           </div>
         )}
 
-        {/* customer-marked hazards (dropped pins) — avoid these */}
-        {markedHazards.length > 0 && (
-          <div style={{ padding: "11px 12px", borderRadius: 11, marginBottom: 12,
-            background: C.danger + "12", border: `1px solid ${C.danger}44` }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 7 }}>
-              <span style={{ fontSize: 14 }}><Icon e="cone" s={14} /></span>
-              <span style={{ font: `700 11px ${FB}`, color: C.danger, letterSpacing: ".05em" }}>AVOID — CUSTOMER-MARKED</span>
-            </div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {markedHazards.map((h, i) => <Chip key={i} color={C.danger}><Icon e="cone" s={12} /> {h}</Chip>)}
-            </div>
-          </div>
+        {!toolMatch && (
+          <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8, padding: "11px 14px", borderRadius: 14,
+            background: C.slate, border: `1px solid ${C.line}`, font: `500 13px ${FB}`, color: C.mist }}>
+            <span style={{ color: C.danger, display: "flex" }}><Icon e="warning" s={15} /></span>
+            Needs a {(order.tool || jt.tool).toLowerCase()} — add it in Account to accept jobs like this.</div>
         )}
 
-        {/* property map + zones */}
-        <div style={{ display: "flex", gap: 12, alignItems: "center", background: C.slate, borderRadius: 12, padding: 12, marginBottom: 12 }}>
-          <PropertyThumb zones={prop?.zones} img={prop?.mapImg} />
-          <div style={{ font: `500 12px ${FB}`, color: C.mist }}>
-            <span style={{ color: C.plow }}>{prop?.zones?.filter(z => z.mode === "plow").length || 0} plow</span> ·
-            <span style={{ color: C.push }}> {prop?.zones?.filter(z => z.mode === "push").length || 0} push</span> zones mapped
-            <div style={{ marginTop: 3, color: C.mistDim, font: `500 11px ${FB}` }}>Follow the customer's outline exactly</div>
-          </div>
-        </div>
+        <div style={{ flex: 1, minHeight: 20 }} />
 
-        {/* density hint: nearby cluster */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, font: `600 11px ${FB}`, color: C.plow }}>
-          <span style={{ fontSize: 13 }}><Icon e="pin" s={13} /></span> 2 more jobs within 3 blocks — accept to see the cluster route
-        </div>
-
-        {/* glove-friendly buttons: big targets */}
-        <div style={{ display: "flex", gap: 10 }}>
-          <button onClick={() => decline(false)} style={{ flex: "0 0 34%", padding: "18px 0", borderRadius: 14, cursor: "pointer",
-            background: C.slate, color: C.mist, border: `1px solid ${C.line}`, font: `700 15px ${FB}` }}>Pass</button>
-          <button onClick={accept} disabled={!toolMatch} style={{ flex: 1, padding: "18px 0", borderRadius: 14, cursor: toolMatch ? "pointer" : "not-allowed",
-            background: toolMatch ? C.push : C.line, color: toolMatch ? "#0A2015" : C.mistDim, border: "none", font: `700 17px ${FB}`,
-            boxShadow: toolMatch ? "0 6px 20px rgba(124,242,156,.3)" : "none" }}>
-            Accept · ${dPay}
-          </button>
-        </div>
+        {/* one decision */}
+        <button onClick={accept} disabled={!toolMatch}
+          style={{ width: "100%", minHeight: 64, borderRadius: 18, border: "none", cursor: toolMatch ? "pointer" : "not-allowed",
+            background: toolMatch ? C.push : C.line, color: toolMatch ? C.onPush : C.mistDim,
+            font: `700 19px ${FB}`, letterSpacing: "-.01em", WebkitTapHighlightColor: "transparent" }}>
+          Accept · ${dPay}</button>
+        <button onClick={() => decline(false)}
+          style={{ display: "block", margin: "10px auto 0", background: "none", border: "none", cursor: "pointer",
+            font: `500 15px ${FB}`, color: C.mist, padding: 10 }}>Pass</button>
         {insFee > 0 && (
-          <p style={{ font: `500 10px ${FB}`, color: C.mistDim, textAlign: "center", marginTop: 8 }}>
-            Take-home after ${insFee} per-event insurance
-          </p>
+          <p style={{ font: `400 12px ${FB}`, color: C.mistDim, textAlign: "center", margin: "4px 0 0" }}>
+            Take-home after ${insFee} per-event insurance</p>
         )}
       </div>
     </div>
@@ -3796,7 +3678,7 @@ function DriverActiveJob() {
             { lng: (gps || driverLLD).lng, lat: (gps || driverLLD).lat, size: 26, pulse: true },
           ]} />
       ) : (
-        <StormMap pin="SITE" blips={[{ id: "me", x: pos.x, y: pos.y }]} selected={{ id: "me" }} tracking driverPos={pos} showRoute />
+        <StormMap pin="Site" blips={[{ id: "me", x: pos.x, y: pos.y }]} selected={{ id: "me" }} tracking driverPos={pos} showRoute />
       )}
 
       {/* navigation / address */}
@@ -3873,7 +3755,7 @@ function DriverActiveJob() {
                       background: C.slate, border: `1px solid ${checks[i] ? C.push : C.line}`, borderRadius: 12, padding: 13 }}>
                     <span style={{ width: 22, height: 22, borderRadius: 6, flexShrink: 0, display: "grid", placeItems: "center",
                       background: checks[i] ? C.push : "transparent", border: `2px solid ${checks[i] ? C.push : C.line}`,
-                      color: "#0A2015", fontWeight: 800 }}>{checks[i] ? <Icon e="check" s={13} /> : ""}</span>
+                      color: C.onPush, fontWeight: 800 }}>{checks[i] ? <Icon e="check" s={13} /> : ""}</span>
                     <span style={{ font: `600 13px ${FB}`, color: C.ice }}>Plow zone {i + 1} cleared</span>
                   </button>
                 ))}
@@ -3946,7 +3828,7 @@ function DriverEarnings({ onReferral }) {
     <Fade k="earn"><section style={{ paddingTop: 4 }}>
       {/* hero balance */}
       <div style={{ borderRadius: 20, padding: S.xl, marginBottom: S.lg, position: "relative", overflow: "hidden",
-        background: `linear-gradient(150deg, ${C.amber}1E, ${C.night2})`, border: `1px solid ${C.amber}44` }}>
+        background: C.slate, border: `1px solid ${C.amber}44` }}>
         <div style={{ position: "absolute", top: -46, right: -30, fontSize: 150, opacity: .06 }}><Icon e="cash" s={150} /></div>
         <Eyebrow>This week</Eyebrow>
         <div style={{ font: `700 46px/1 ${FD}`, color: C.amber, margin: "8px 0 4px" }}>${animWeek}</div>
@@ -3959,7 +3841,7 @@ function DriverEarnings({ onReferral }) {
         </div>
         <div style={{ height: 8, borderRadius: 8, background: C.night, overflow: "hidden" }}>
           <div style={{ width: `${goalPct * 100}%`, height: "100%",
-            background: `linear-gradient(90deg, ${C.amber}, ${C.push})`, transition: `width .8s ${EASE}` }} />
+            background: C.amber, transition: `width .8s ${EASE}` }} />
         </div>
       </div>
 
@@ -3987,8 +3869,7 @@ function DriverEarnings({ onReferral }) {
                 style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 7,
                   background: "none", border: "none", cursor: "pointer", padding: 0, WebkitTapHighlightColor: "transparent" }}>
                 <div style={{ width: "100%", height: `${(p.amt / max) * 92}px`, borderRadius: "8px 8px 3px 3px",
-                  background: on ? `linear-gradient(${C.push},${C.amber})` : `linear-gradient(${C.amber},${C.amberDeep})`,
-                  boxShadow: on ? `0 0 0 2px ${C.push}55` : "none",
+                  background: on ? C.push : C.amber,
                   transition: `all .25s ${EASE}` }} />
                 <span style={{ font: `600 11px ${FB}`, color: on ? C.ice : C.mist }}>{p.d}</span>
               </button>
@@ -3999,7 +3880,7 @@ function DriverEarnings({ onReferral }) {
 
       {/* cash out / payout setup */}
       {STRIPE_ENABLED && !state.driver.stripeAccountId ? (
-        <div style={{ background: `linear-gradient(140deg, ${C.plow}18, ${C.night2})`, border: `1px solid ${C.plow}55`,
+        <div style={{ background: C.slate, border: `1px solid ${C.plow}55`,
           borderRadius: 16, padding: S.lg, marginBottom: S.md }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
             <span style={{ fontSize: 22 }}><Icon e="bank" s={22} /></span>
@@ -4041,14 +3922,14 @@ function DriverEarnings({ onReferral }) {
 
       {/* referral CTA */}
       <Card onClick={onReferral} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
-        borderColor: C.push + "55", background: `linear-gradient(120deg, ${C.slate}, ${C.night2})` }}>
+        borderColor: C.push + "55", background: C.slate }}>
         <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: C.push + "1E", display: "grid",
             placeItems: "center", fontSize: 19, flexShrink: 0 }}><Icon e="handshake" s={19} /></div>
           <div><div style={{ font: `700 14px ${FB}` }}>Refer a driver · earn ${ref.reward}</div>
             <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 2 }}>
               {ref.credit > 0 ? `$${ref.credit} earned · ${ref.invited} referred` : `Paid when they finish ${ref.threshold} jobs`}</div></div></div>
-        <span style={{ color: C.push, fontSize: 18 }}>›</span>
+        <Icon e="chevronright" s={16} color={C.mistDim} />
       </Card>
     </section></Fade>
   );
@@ -4078,62 +3959,14 @@ function DriverAccount({ onReferral }) {
             <Stars v={d.rating} size={13} /><span style={{ font: `600 12px ${FB}`, color: C.mist }}>{d.rating} · {d.jobs} jobs</span></div></div>
       </div>
 
-      {/* tier — how much of each job you keep, and how to climb */}
-      {(() => {
-        const cur = driverTier(d);
-        const jobs = d.jobs || 0;
-        // ladder shown low → high; New-driver bonus sits on top when active
-        const ladder = [...DRIVER_TIERS].slice().reverse(); // rookie, pro, veteran, blizzard
-        const next = ladder.find(t => t.minJobs > jobs && !cur.intro && t.pct > cur.pct)
-          || (cur.intro ? null : ladder.find(t => t.minJobs > jobs));
-        return (
-          <Card style={{ marginBottom: 14 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-              <div>
-                <Eyebrow>You keep</Eyebrow>
-                <div style={{ font: `800 30px ${FD}`, color: C.push, marginTop: 2, lineHeight: 1 }}>
-                  {Math.round(cur.pct * 100)}%<span style={{ font: `600 13px ${FB}`, color: C.mistDim }}> of each job</span>
-                </div>
-              </div>
-              <Chip color={cur.intro ? C.amber : C.push} solid>{cur.label}</Chip>
-            </div>
-
-            {cur.intro ? (
-              <p style={{ font: `600 12px ${FB}`, color: C.amber, margin: "10px 0 0" }}>
-                Welcome bonus — your first {INTRO_JOBS} jobs pay {Math.round(INTRO_PCT * 100)}%. {Math.max(0, INTRO_JOBS - jobs)} to go, then you start at Rookie (70%) and climb.
-              </p>
-            ) : next ? (
-              <p style={{ font: `500 12px ${FB}`, color: C.mistDim, margin: "10px 0 0" }}>
-                {next.minJobs - jobs} more jobs → <b style={{ color: C.mist }}>{next.label}</b>, keep {Math.round(next.pct * 100)}%.
-              </p>
-            ) : (
-              <p style={{ font: `500 12px ${FB}`, color: C.mistDim, margin: "10px 0 0" }}>
-                Top tier — you keep the most of every job. Nice work.
-              </p>
-            )}
-
-            {/* the ladder */}
-            <div style={{ marginTop: 12, display: "grid", gap: 6 }}>
-              {ladder.map(t => {
-                const active = !cur.intro && cur.id === t.id;
-                const reached = jobs >= t.minJobs;
-                return (
-                  <div key={t.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-                    padding: "8px 11px", borderRadius: 10,
-                    background: active ? C.push + "18" : C.slate,
-                    border: `1px solid ${active ? C.push + "66" : C.line}`, opacity: reached || active ? 1 : 0.6 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ font: `700 12px ${FB}`, color: active ? C.push : C.mist }}>{t.label}</span>
-                      <span style={{ font: `500 10px ${FB}`, color: C.mistDim }}>{t.minJobs}+ jobs</span>
-                    </div>
-                    <span style={{ font: `700 13px ${FD}`, color: active ? C.push : C.mistDim }}>{Math.round(t.pct * 100)}%</span>
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
-        );
-      })()}
+      {/* your share — one flat rate, no tiers */}
+      <Card style={{ marginBottom: 14 }}>
+        <Eyebrow>Your share</Eyebrow>
+        <div style={{ font: `700 32px/1 ${FD}`, letterSpacing: "-.02em", color: C.ice, marginTop: 8 }}>
+          80%<span style={{ font: `400 14px ${FB}`, color: C.mist, letterSpacing: 0 }}> of every job</span></div>
+        <p style={{ font: `400 13px/1.45 ${FB}`, color: C.mist, margin: "8px 0 0" }}>
+          Plus 100% of tips. Same rate for every driver — nothing to unlock.</p>
+      </Card>
 
       {/* equipment — determines which job types you can accept */}
       <Card style={{ marginBottom: 14 }}>
@@ -4186,8 +4019,16 @@ function DriverAccount({ onReferral }) {
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}><span style={{ fontSize: 20 }}><Icon e="handshake" s={20} /></span>
           <div><div style={{ font: `700 13px ${FB}` }}>Refer drivers · earn ${ref.reward} each</div>
             <div style={{ font: `500 12px ${FB}`, color: C.mist }}>Bring on plow operators you trust</div></div></div>
-        <span style={{ color: C.push, fontSize: 18 }}>›</span>
+        <span style={{ color: C.push, display: "flex" }}><Icon e="chevronright" s={16} /></span>
       </Card>
+
+      <div style={{ height: 14 }} />
+      <AppearancePicker />
+      <div style={{ height: 14 }} />
+      <ListGroup>
+        <ListRow icon="home" tint={C.plow} title="Switch to customer app" sub="Order a plow for your own place"
+          onClick={() => dispatch({ type: "ROLE", role: "rider" })} last />
+      </ListGroup>
 
       {auth?.isConfigured && auth?.session && (
         <button onClick={async () => { await auth.signOut(); dispatch({ type: "SIGNED_OUT" }); }}
@@ -4243,7 +4084,7 @@ function DriverReferral({ onBack }) {
                   <Chip color={C.amber}>{x.jobs}/{ref.threshold} jobs</Chip>
                 </div>
                 <div style={{ height: 6, borderRadius: 6, background: C.night, overflow: "hidden" }}>
-                  <div style={{ width: `${(x.jobs / ref.threshold) * 100}%`, height: "100%", background: `linear-gradient(90deg,${C.push},${C.amber})` }} />
+                  <div style={{ width: `${(x.jobs / ref.threshold) * 100}%`, height: "100%", background: C.push }} />
                 </div>
               </div>
             ))}
@@ -4297,7 +4138,7 @@ function AuthScreen({ auth, onDemo }) {
       <style>{`*{box-sizing:border-box;-webkit-font-smoothing:antialiased} input::placeholder{color:${C.mistDim}}`}</style>
       <div style={{ width: "100%", maxWidth: 440, minHeight: "100vh", display: "flex", flexDirection: "column", justifyContent: "center", padding: "0 24px" }}>
         <div style={{ textAlign: "center", marginBottom: 22 }}>
-          <div style={{ fontSize: 44, filter: "drop-shadow(0 6px 18px rgba(255,176,32,.4))" }}><Icon e="snowflake" s={44} /></div>
+          <div style={{ fontSize: 44, color: C.amber }}><Icon e="snowflake" s={44} /></div>
           <div style={{ font: `700 26px ${FD}`, letterSpacing: ".08em", marginTop: 6 }}>DRIFT</div>
           <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 4 }}>
             {mode === "signup" ? "Create your account" : "Welcome back"}</div>
@@ -4362,7 +4203,7 @@ const OPS_STATUS = {
 function OpsTile({ label, value, accent = C.ice, sub }) {
   return (
     <div style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: "14px 16px" }}>
-      <div style={{ font: `600 11px ${FB}`, letterSpacing: ".08em", textTransform: "uppercase", color: C.mistDim }}>{label}</div>
+      <div style={{ font: `500 12px ${FB}`, letterSpacing: ".01em", color: C.mistDim }}>{label}</div>
       <div style={{ font: `800 26px ${FD}`, color: accent, marginTop: 6, lineHeight: 1 }}>{value}</div>
       {sub && <div style={{ font: `500 11px ${FB}`, color: C.mistDim, marginTop: 5 }}>{sub}</div>}
     </div>
@@ -4416,9 +4257,9 @@ function OpsDashboard() {
         {/* header */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ width: 30, height: 30, borderRadius: 9, background: `linear-gradient(150deg, ${C.amberSoft}, ${C.amber})`,
-              color: "#231603", display: "grid", placeItems: "center", fontWeight: 800 }}><Icon e="snowflake" s={18} /></div>
-            <div style={{ font: `800 22px ${FD}`, letterSpacing: ".06em" }}>DRIFT OPS</div>
+            <div style={{ width: 30, height: 30, borderRadius: 9, background: C.amber,
+              color: C.onAmber, display: "grid", placeItems: "center", fontWeight: 800 }}><Icon e="snowflake" s={18} /></div>
+            <div style={{ font: `800 22px ${FD}`, letterSpacing: ".01em" }}>DRIFT Ops</div>
           </div>
           <a href="/" style={{ font: `700 12px ${FB}`, color: C.mist, textDecoration: "none",
             border: `1px solid ${C.line}`, borderRadius: 10, padding: "8px 12px" }}>← Back to app</a>
@@ -4450,7 +4291,7 @@ function OpsDashboard() {
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 560 }}>
                 <thead>
-                  <tr style={{ font: `600 10px ${FB}`, letterSpacing: ".07em", textTransform: "uppercase", color: C.mistDim }}>
+                  <tr style={{ font: `600 12px ${FB}`, letterSpacing: ".01em", color: C.mistDim }}>
                     {["Status", "Type", "Location", "Customer", "Driver", "Price", "Pay"].map(h => (
                       <th key={h} style={{ textAlign: h === "Price" || h === "Pay" ? "right" : "left", padding: "10px 14px", fontWeight: 600 }}>{h}</th>
                     ))}
@@ -4490,6 +4331,19 @@ function OpsDashboard() {
   );
 }
 
+// A few style objects are built once at load; refresh them when the theme flips
+// so buttons, inputs and status colors follow light/dark like everything else.
+function restyleStatics() {
+  Object.assign(sub, { color: C.mist });
+  Object.assign(miniBtn, { background: C.slate, color: C.ice, border: `1px solid ${C.line}` });
+  Object.assign(canvasBtn, { background: C.glassStrong, color: C.ice, border: `1px solid ${C.line}` });
+  Object.assign(inp, { background: C.slate, border: `1px solid ${C.line}`, color: C.ice });
+  const acc = [C.push, C.amber, C.plow];
+  INSURANCE_PARTNERS.forEach((p, i) => { p.accent = acc[i] || C.amber; });
+  const st = { requested: C.mist, accepted: C.plow, enroute: C.plow, plowing: C.amber, completed: C.push, cancelled: C.danger };
+  Object.keys(st).forEach(k => { if (OPS_STATUS[k]) OPS_STATUS[k].c = st[k]; });
+}
+
 function Shell() {
   const [state, dispatch] = useReducer(reducer, initial);
   const store = useMemo(() => ({ state, dispatch }), [state]);
@@ -4497,6 +4351,9 @@ function Shell() {
   const [bypass, setBypass] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [entered, setEntered] = useState(false); // false = show the marketing homepage first
+  // Re-render everything when the theme flips (Account → Appearance, or the phone's setting in Auto).
+  const [, setThemeTick] = useState(0);
+  useEffect(() => onThemeChange(() => { restyleStatics(); setThemeTick(t => t + 1); }), []);
 
   useEffect(() => {
     if (!state.toast) return;
@@ -4561,11 +4418,10 @@ function Shell() {
   const devSkip = () => { setBypass(true); dispatch({ type: "DEV_SKIP" }); };
   const SkipButton = (
     <button onClick={devSkip} title="Dev: skip setup"
-      style={{ position: "fixed", top: "calc(10px + env(safe-area-inset-top))", right: 12, zIndex: 9999,
-        font: `700 11px ${FB}`, letterSpacing: ".04em", color: "#231603",
-        background: `linear-gradient(180deg, ${C.amberSoft}, ${C.amber})`, border: "none",
-        padding: "7px 12px", borderRadius: 20, cursor: "pointer",
-        boxShadow: "0 3px 12px rgba(0,0,0,.4)", WebkitTapHighlightColor: "transparent" }}>
+      style={{ position: "fixed", bottom: "calc(84px + env(safe-area-inset-bottom))", left: 12, zIndex: 9999,
+        font: `600 11px ${FB}`, color: C.mist, background: C.glassStrong, border: `1px solid ${C.line}`,
+        padding: "6px 11px", borderRadius: 20, cursor: "pointer", opacity: .85,
+        WebkitTapHighlightColor: "transparent" }}>
       Skip <Icon e="skipnext" s={11} />
     </button>
   );
@@ -4595,7 +4451,7 @@ function Shell() {
 
   return (
     <StoreCtx.Provider value={store}>
-      {SkipButton}
+      {inSetup && SkipButton}
       <div style={{ minHeight: "100vh", background: C.night, color: C.ice, fontFamily: FB, display: "flex", justifyContent: "center" }}>
         <style>{`
           *{box-sizing:border-box;-webkit-font-smoothing:antialiased} button{font-family:inherit} input{font-family:inherit}
@@ -4617,46 +4473,37 @@ function Shell() {
         <div style={{ width: "100%", maxWidth: 440, minHeight: "100vh", background: C.night, display: "flex", flexDirection: "column", position: "relative" }}>
           <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
             padding: `calc(${S.md}px + env(safe-area-inset-top)) ${S.xl}px ${S.md}px`, position: "sticky", top: 0, zIndex: 30,
-            background: "rgba(8,18,31,.86)", backdropFilter: "blur(16px)",
-            borderBottom: `1px solid ${C.line}66` }}>
+            background: C.glass, backdropFilter: "saturate(180%) blur(20px)", WebkitBackdropFilter: "saturate(180%) blur(20px)",
+            borderBottom: `1px solid ${C.line}` }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ width: 32, height: 32, borderRadius: 10,
-                background: `linear-gradient(150deg, ${C.amberSoft}, ${C.amber})`, color: "#231603",
-                display: "grid", placeItems: "center", fontSize: 17, fontWeight: 800,
-                boxShadow: "0 4px 14px rgba(255,176,32,.32)" }}><Icon e="snowflake" s={17} /></div>
+              <div style={{ width: 32, height: 32, borderRadius: 9, background: C.amber, color: C.onAmber,
+                display: "grid", placeItems: "center" }}><Icon e="snowflake" s={17} /></div>
               <div>
-                <div style={{ font: `700 20px/1 ${FD}`, letterSpacing: ".07em" }}>DRIFT</div>
-                <div style={{ font: `600 9px ${FB}`, letterSpacing: ".14em", color: C.mistDim, marginTop: 1 }}>DULUTH, MN</div>
+                <div style={{ font: `700 18px/1 ${FD}`, letterSpacing: ".04em", color: C.ice }}>DRIFT</div>
+                <div style={{ font: `500 11px ${FB}`, color: C.mistDim, marginTop: 2 }}>
+                  {state.role === "driver" && !inSetup ? "Driver · Duluth, MN" : "Duluth, MN"}</div>
               </div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <Bell count={unreadCount(state)} onClick={() => setNotifOpen(true)} />
-              {inSetup ? (
+              {/* During signup only: a quiet link for people who meant to drive (or meant to order). */}
+              {inSetup && (
                 <button onClick={() => dispatch({ type: "ROLE", role: onboarding ? "driver" : "rider" })}
-                  style={{ ...miniBtn, minHeight: 34, fontSize: 12 }}>
-                  {onboarding ? "Drive & earn ›" : "Need a plow ›"}</button>
-              ) : (
-                <div style={{ display: "flex", background: C.night2, border: `1px solid ${C.line}`, borderRadius: 22, padding: 3 }}>
-                  {["rider", "driver"].map(r => (
-                    <button key={r} onClick={() => dispatch({ type: "ROLE", role: r })}
-                      style={{ font: `700 12px ${FB}`, minHeight: 32, padding: "0 15px", borderRadius: 18, cursor: "pointer", border: "none",
-                        background: state.role === r ? `linear-gradient(180deg, ${C.amberSoft}, ${C.amber})` : "transparent",
-                        color: state.role === r ? "#231603" : C.mist, textTransform: "capitalize",
-                        boxShadow: state.role === r ? "0 2px 8px rgba(255,176,32,.3)" : "none",
-                        transition: `background .25s ${EASE}, color .2s`, WebkitTapHighlightColor: "transparent" }}>{r}</button>
-                  ))}
-                </div>
+                  style={{ background: "none", border: "none", cursor: "pointer", font: `600 13px ${FB}`, color: C.mist,
+                    padding: "8px 4px", WebkitTapHighlightColor: "transparent" }}>
+                  {onboarding ? "Drive with DRIFT" : "I need a plow"}</button>
               )}
+              <Bell count={unreadCount(state)} onClick={() => setNotifOpen(true)} />
             </div>
           </header>
 
           <OfflineBanner />
 
-          {state.order && !inSetup && (
-            <div style={{ margin: "0 20px 8px", background: C.slate2, border: `1px solid ${C.amber}55`, borderRadius: 10,
-              padding: "8px 12px", font: `600 11px ${FB}`, color: C.amber, display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: C.amber, boxShadow: `0 0 8px ${C.amber}` }} />
-              Live job — visible on both sides. Toggle above to watch the other.
+          {/* Demo-only hint (hidden once real accounts are on) */}
+          {state.order && !inSetup && !supabaseEnabled && (
+            <div style={{ margin: "10px 20px 0", background: C.slate, border: `1px solid ${C.line}`, borderRadius: 10,
+              padding: "8px 12px", font: `500 12px ${FB}`, color: C.mist, display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: C.amber }} />
+              Demo: this job is live on both sides — switch views from Account.
             </div>
           )}
 

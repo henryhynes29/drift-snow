@@ -40,6 +40,11 @@ const P = {
 
   // ui / status
   check: <><path d="M4.5 12.5l5 5 10-11"/></>,
+  close: <><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></>,
+  chevronright: <><path d="M9 6l6 6-6 6"/></>,
+  sun: <><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></>,
+  moon: <><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></>,
+  auto: <><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17" /><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" stroke="none"/></>,
   checkfill: <><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.5 2.5 5.5-6" stroke="#0B0B0C" strokeWidth="2.2"/></>,
   plus: <><path d="M12 5v14M5 12h14"/></>,
   minus: <><path d="M5 12h14"/></>,
