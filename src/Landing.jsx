@@ -1,6 +1,7 @@
 // DRIFT — marketing homepage. Self-contained (own tokens) so it stays independent
 // of the app shell. Rich, image-forward, with an interactive phone demo and FAQ.
 import React, { useState, useEffect, useRef } from "react";
+import EmojiIcon from "./Icon.jsx";
 
 const C = {
   night: "#08121F", night2: "#0E1E31", slate: "#152A42", slate2: "#1B334E", line: "#24435F",
@@ -152,7 +153,7 @@ function PhoneDemo() {
             background: "#060d16", borderRadius: 12, zIndex: 5 }} />
           {/* status bar */}
           <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 18px 0", font: `700 10px ${FB}`, color: C.mist }}>
-            <span>9:41</span><span>❄ 7"</span>
+            <span>9:41</span><span><EmojiIcon e="snowflake" s={10} /> 7"</span>
           </div>
           {/* screen content */}
           <div key={i} style={{ padding: "14px 14px 16px", animation: "fadeUp .5s ease" }}>
@@ -194,7 +195,7 @@ function DemoMap() {
           <circle cx="62" cy="84" r="3" fill={C.amber} /><circle cx="40" cy="84" r="3" fill={C.amber} />
         </svg>
         <div style={{ position: "absolute", bottom: 8, left: 8, background: "rgba(8,18,31,.82)", borderRadius: 8,
-          padding: "5px 9px", font: `700 10px ${FB}`, color: C.ice }}>📐 620 sq ft outlined</div>
+          padding: "5px 9px", font: `700 10px ${FB}`, color: C.ice }}>620 sq ft outlined</div>
       </div>
       <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 10 }}>Tap the corners of your drive — no measuring, no phone calls.</div>
     </div>
@@ -219,7 +220,7 @@ function DemoPrice() {
         <div style={{ height: 1, background: C.line, margin: "8px 0" }} />
         <Row l="You pay" v="$55" strong />
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 9, font: `600 10px ${FB}`, color: C.push }}>
-          <span>✓</span> No contracts · no hidden fees
+          <span><EmojiIcon e="check" s={10} /></span> No contracts · no hidden fees
         </div>
       </div>
       <div style={{ marginTop: 10, background: `linear-gradient(180deg,${C.amberSoft},${C.amber})`, color: "#231603",
@@ -235,7 +236,7 @@ function DemoTrack() {
           <path d="M12 74 Q 50 60 66 40 T 112 20" fill="none" stroke={`${C.plow}`} strokeWidth="2.4" strokeDasharray="4 4" opacity=".7" />
           <circle cx="112" cy="20" r="5" fill={C.amber} />
           <g style={{ animation: "truck 4s ease-in-out infinite" }}>
-            <text x="10" y="78" fontSize="15">🛻</text>
+            <g transform="translate(4,64)"><EmojiIcon e="pickup" s={18} color={C.ice} /></g>
           </g>
         </svg>
         <div style={{ position: "absolute", top: 8, right: 8, background: "rgba(8,18,31,.82)", borderRadius: 8,
@@ -249,7 +250,7 @@ function DemoTrack() {
           <div key={s} style={{ position: "relative", zIndex: 1, textAlign: "center", width: 48 }}>
             <div style={{ width: 18, height: 18, borderRadius: "50%", margin: "0 auto",
               background: k <= 2 ? C.amber : C.night2, border: `2px solid ${k <= 2 ? C.amber : C.line}`,
-              color: "#231603", font: `800 9px ${FB}`, display: "grid", placeItems: "center" }}>{k <= 2 ? "✓" : ""}</div>
+              color: "#231603", font: `800 9px ${FB}`, display: "grid", placeItems: "center" }}>{k <= 2 ? <EmojiIcon e="check" s={9} /> : ""}</div>
             <div style={{ font: `600 8px ${FB}`, color: k <= 2 ? C.ice : C.mistDim, marginTop: 4 }}>{s}</div>
           </div>
         ))}
@@ -290,7 +291,7 @@ export default function Landing({ onStart }) {
       <nav style={{ position: "sticky", top: 0, zIndex: 30, background: "rgba(8,18,31,.82)", backdropFilter: "blur(14px)", borderBottom: `1px solid ${C.line}66` }}>
         <div style={{ maxWidth: 1080, margin: "0 auto", padding: "13px 22px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ width: 30, height: 30, borderRadius: 9, background: `linear-gradient(150deg,${C.amberSoft},${C.amber})`, color: "#231603", display: "grid", placeItems: "center", fontWeight: 800 }}>❄</div>
+            <div style={{ width: 30, height: 30, borderRadius: 9, background: `linear-gradient(150deg,${C.amberSoft},${C.amber})`, color: "#231603", display: "grid", placeItems: "center", fontWeight: 800 }}><EmojiIcon e="snowflake" s={18} /></div>
             <div style={{ font: `800 22px ${FD}`, letterSpacing: ".06em" }}>DRIFT</div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -316,7 +317,7 @@ export default function Landing({ onStart }) {
           <div className="rise">
             <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: C.slate, border: `1px solid ${C.line}`,
               borderRadius: 22, padding: "7px 13px", font: `700 12px ${FB}`, color: C.push }}>
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: C.push, boxShadow: `0 0 8px ${C.push}` }} /> Live in Duluth &amp; the Northland
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: C.push, boxShadow: `0 0 8px ${C.push}` }} /> Duluth · Superior · Cloquet · Hermantown
             </div>
             <h1 style={{ font: `800 clamp(42px,6.4vw,72px)/1 ${FD}`, letterSpacing: ".01em", margin: "18px 0 16px" }}>
               Your driveway,<br /><span style={{ color: C.amber }}>plowed on demand.</span>
@@ -329,7 +330,7 @@ export default function Landing({ onStart }) {
               <Btn big ghost onClick={goDrive}>I have a plow — earn</Btn>
             </div>
             <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: 24, font: `600 13px ${FB}`, color: C.mist }}>
-              <span>❄ Pay per storm</span><span>📍 Local drivers</span><span>📸 Photo proof</span>
+              <span><EmojiIcon e="snowflake" s={13} /> Pay per storm</span><span><EmojiIcon e="pin" s={13} /> Local drivers</span><span><EmojiIcon e="camera" s={13} /> Photo proof</span>
             </div>
           </div>
           <div className="rise" style={{ animationDelay: ".15s" }}><PhoneDemo /></div>
@@ -358,14 +359,14 @@ export default function Landing({ onStart }) {
       <Section title="From flurry to cleared in four taps" lead="Set it up once. Then it's automatic — or one tap away.">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: 14 }}>
           {[
-            ["📍", "Map your driveway", "Outline it on a satellite map — no measuring."],
-            ["❄️", "Set your snow trigger", "Auto-book at the depth you choose, or tap on demand."],
-            ["🛻", "A local plow rolls out", "Accepts, heads over, and you track them live."],
-            ["📸", "Pay only when plowed", "One honest price, with before & after photos."],
+            ["pin", "Map your driveway", "Outline it on a satellite map — no measuring."],
+            ["snowflake", "Set your snow trigger", "Auto-book at the depth you choose, or tap on demand."],
+            ["pickup", "A local plow rolls out", "Accepts, heads over, and you track them live."],
+            ["camera", "Pay only when plowed", "One honest price, with before & after photos."],
           ].map(([ic, t, d], k) => (
             <div key={t} style={{ background: C.night2, border: `1px solid ${C.line}`, borderRadius: 16, padding: 22, position: "relative" }}>
               <div style={{ position: "absolute", top: 16, right: 18, font: `800 30px ${FD}`, color: C.line }}>{k + 1}</div>
-              <div style={{ fontSize: 30 }}>{ic}</div>
+              <div style={{ fontSize: 30 }}><EmojiIcon e={ic} s={28} /></div>
               <h3 style={{ font: `700 16px ${FB}`, margin: "12px 0 6px" }}>{t}</h3>
               <p style={{ margin: 0, color: C.mist, font: `400 14px/1.5 ${FB}` }}>{d}</p>
             </div>
@@ -377,17 +378,17 @@ export default function Landing({ onStart }) {
       <Section title="Built for the whole storm" lead="Plowing leads the way — with backup for everything else winter drops on you.">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
           {[
-            ["🚜", "Driveway plowing", "Cleared to the apron", true],
-            ["🧹", "Sidewalk clearing", "Ordinance-compliant"],
-            ["🧂", "Salting & ice-melt", "Stop the re-freeze"],
-            ["🚗", "Car dig-outs", "Freed from the berm"],
-            ["🔋", "Roadside jump-start", "Dead battery help"],
-            ["🏢", "Commercial lots", "Businesses & multi-bay"],
+            ["plowtruck", "Driveway plowing", "Cleared to the apron", true],
+            ["broom", "Sidewalk clearing", "Ordinance-compliant"],
+            ["snowflake", "Salting & ice-melt", "Stop the re-freeze"],
+            ["car", "Car dig-outs", "Freed from the berm"],
+            ["battery", "Roadside jump-start", "Dead battery help"],
+            ["building", "Commercial lots", "Businesses & multi-bay"],
           ].map(([ic, t, d, hero]) => (
             <div key={t} style={{ background: hero ? `linear-gradient(140deg,${C.amber}1c,${C.night2})` : C.slate,
               border: `1px solid ${hero ? C.amber + "66" : C.line}`, borderRadius: 14, padding: 18, position: "relative" }}>
               {hero && <span style={{ position: "absolute", top: 12, right: 12, font: `800 8px ${FB}`, letterSpacing: ".08em", color: C.push }}>MOST BOOKED</span>}
-              <div style={{ fontSize: 24 }}>{ic}</div>
+              <div style={{ fontSize: 24 }}><EmojiIcon e={ic} s={24} /></div>
               <div style={{ font: `700 14px ${FB}`, marginTop: 8 }}>{t}</div>
               <div style={{ font: `400 12px ${FB}`, color: C.mist, marginTop: 3 }}>{d}</div>
             </div>
