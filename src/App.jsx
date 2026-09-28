@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef, useMemo, createContext, useContext,
 import MapPropertyDesigner, { staticMapUrl, LiveMap, MAP_ENABLED } from "./PropertyMap.jsx";
 import { useAuth } from "./lib/auth.jsx";
 import { supabaseEnabled } from "./lib/supabase.js";
-import { recordLegalAcceptance, loadProperties, replaceProperties, rateJob, pushDriverLocation, subscribeToDriverLocation, createJobFromOrder, patchJob, sendMessage, subscribeToMessages } from "./lib/db.js";
+import { recordLegalAcceptance, loadProperties, replaceProperties, rateJob, pushDriverLocation, subscribeToDriverLocation, createJobFromOrder, patchJob, sendMessage, subscribeToMessages, loadMessages,
+  rowToOrder, fetchJob, listOpenJobs, subscribeOpenJobs, claimJob, getProfile, profileToDriver, setDriverStatus, becomeDriver, cancelJob, expireJob, subscribeToJob, loadActiveJob } from "./lib/db.js";
 import { STRIPE_ENABLED, getStripe, createPaymentIntent, capturePayment, createConnectAccount, sendTip } from "./lib/payments.js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { snowDepthNow, nextStorm, refreshConditions } from "./lib/weather.js";
@@ -334,11 +335,32 @@ function acceptLegal(dispatch, rec, userId) {
   if (supabaseEnabled && userId) recordLegalAcceptance(userId, rec);
 }
 
+// LIVE = real accounts + a real database. Otherwise the app runs its built-in demo.
+const isLive = (state) => supabaseEnabled && !!state?.userId;
+
+// Orders the customer cancelled before the database confirmed them — if the
+// insert lands afterwards we cancel it right away so no driver can take it.
+const cancelledBeforeSaved = new Set();
+
 function persistNewJob(dispatch, order, userId) {
   if (!supabaseEnabled || !userId) return;
   createJobFromOrder(order, userId)
-    .then((res) => { if (res?.data?.id) dispatch({ type: "ORDER_STATE", patch: { jobId: res.data.id } }); })
-    .catch(() => { /* best-effort — the demo flow never depends on this */ });
+    .then((res) => {
+      const row = res?.data;
+      if (!row?.id) {
+        dispatch({ type: "CLEAR_ORDER" });
+        dispatch({ type: "TOAST", msg: res?.error?.message ? `Couldn't send your request — ${res.error.message}` : "Couldn't send your request. Check your connection and try again." });
+        return;
+      }
+      if (cancelledBeforeSaved.has(order.id)) { cancelledBeforeSaved.delete(order.id); cancelJob(row.id); return; }
+      dispatch({ type: "ORDER_STATE", patch: { jobId: row.id, live: true,
+        expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : null,
+        quote: { ...order.quote, riderTotal: Number(row.price), driverPay: Number(row.driver_pay) } } });
+    })
+    .catch(() => {
+      dispatch({ type: "CLEAR_ORDER" });
+      dispatch({ type: "TOAST", msg: "Couldn't send your request. Check your connection and try again." });
+    });
 }
 
 // Open real turn-by-turn directions in the device's native maps app.
@@ -391,11 +413,21 @@ function reducer(s, a) {
         activity: [{ name: a.name || "Invited driver", jobs: 0, status: "signed-up" }, ...r.activity] } };
     }
     case "HYDRATE_USER": {
-      if (a.role === "driver") return { ...s, userId: a.userId, role: "driver", profile: a.profile || s.profile };
+      // Real account: drop the demo's made-up earnings, trips and driver.
+      const real = { earnings: { today: 0, week: 0, jobsToday: 0, payouts: [] }, history: s.userId === a.userId ? s.history : [] };
+      if (a.role === "driver") {
+        const d = a.driver || {};
+        return { ...s, ...real, userId: a.userId, role: "driver", profile: a.profile || s.profile,
+          driverOnboarded: !!a.isDriver,
+          driver: { ...s.driver, id: a.userId, name: d.name || a.profile?.name || s.driver.name,
+            truck: d.truck || s.driver.truck, tools: d.tools?.length ? d.tools : s.driver.tools,
+            rating: d.rating ?? s.driver.rating, jobs: d.jobs ?? s.driver.jobs } };
+      }
       const props = a.properties || [];
-      return { ...s, userId: a.userId, role: "rider", profile: a.profile || s.profile,
+      return { ...s, ...real, userId: a.userId, role: "rider", profile: a.profile || s.profile,
         properties: props, activeProperty: props[0] || null, onboarded: props.length > 0 };
     }
+    case "SET_ORDER": return { ...s, order: a.order };
     case "SIGNED_OUT": return { ...initial, legal: loadLegal() };
     case "ACCEPT_LEGAL": {
       const legal = { ...s.legal, [a.rec.role]: a.rec };
@@ -460,8 +492,8 @@ function reducer(s, a) {
           week: s.earnings.week + q.driverPay,
           jobsToday: s.earnings.jobsToday + 1,
         },
-        history: [{ id: "h" + Date.now(), date: "Today", size: a.size.label, total: q.riderTotal,
-          driver: s.driver.name, rating: 0, photos: s.order?.photos || null }, ...s.history],
+        history: [{ id: "h" + Date.now(), date: "Today", size: a.size?.label || "", total: q.riderTotal,
+          driver: a.driverName || s.driver.name, rating: 0, photos: s.order?.photos || null }, ...s.history],
       };
     }
     case "CLEAR_ORDER": return { ...s, order: null };
@@ -1647,10 +1679,9 @@ function RiderHome({ go }) {
   const request = () => {
     const order = buildOrder();
     dispatch({ type: "REQUEST", order });
-    persistNewJob(dispatch, order, state.userId);
-    dispatch({ type: "TOAST", msg: `Request sent — finding a nearby ${q.tool.toLowerCase()}` });
-    notify(dispatch, { kind: "job", title: "Request sent", body: `Finding a nearby ${q.tool.toLowerCase()} for ${prop?.label || "your property"}.`, role: "rider" });
-    autoMatch(dispatch, state);
+    dispatch({ type: "TOAST", msg: `Offer sent — finding a nearby ${q.tool.toLowerCase()}` });
+    notify(dispatch, { kind: "job", title: "Offer sent", body: `Finding a nearby ${q.tool.toLowerCase()} for ${prop?.label || "your property"}.`, role: "rider" });
+    autoMatch(dispatch, state, order);
   };
 
   // With Stripe on, authorize the card first; otherwise straight to the demo request.
@@ -1662,24 +1693,24 @@ function RiderHome({ go }) {
     setPayOpen(false);
     const order = buildOrder({ paymentIntentId });
     dispatch({ type: "REQUEST", order });
-    persistNewJob(dispatch, order, state.userId);
     dispatch({ type: "TOAST", msg: `Card authorized — finding a nearby ${q.tool.toLowerCase()}` });
     notify(dispatch, { kind: "job", title: "Card authorized", body: `We'll only charge $${q.riderTotal} once ${prop?.label || "your property"} is plowed.`, role: "rider" });
-    autoMatch(dispatch, state);
+    autoMatch(dispatch, state, order);
   };
 
   // roadside / emergency dispatch — flat-rate, no property zones required
   const requestRoadside = (type) => {
     const rq = quickQuote(type);
     const rjt = JOB_TYPES[type];
-    dispatch({ type: "REQUEST", order: {
+    const order = {
       id: "o" + Date.now(), state: "requested", jobType: type, size: prop?.size || SIZES[1], property: prop,
       quote: rq, tool: rq.tool, emergency: true, createdAt: Date.now(),
       driverPos: { x: state.driver.x, y: state.driver.y }, eta: 7,
       timeline: [{ k: "requested", t: "now", label: `${rjt.label} requested` }], photos: { before: [], after: [] },
-    }});
+    };
+    dispatch({ type: "REQUEST", order });
     dispatch({ type: "TOAST", msg: `${rjt.label} requested — finding the nearest driver` });
-    autoMatch(dispatch, state);
+    autoMatch(dispatch, state, order);
   };
 
   const schedule = (when, label) => {
@@ -1692,24 +1723,26 @@ function RiderHome({ go }) {
   // one-tap emergency dig-out (street-parked car buried by the city plow berm)
   const emergencyDigout = () => {
     const eq = quickQuote("digout");
-    dispatch({ type: "REQUEST", order: {
+    const order = {
       id: "o" + Date.now(), state: "requested", jobType: "digout", size: prop?.size || SIZES[1], property: prop,
       quote: eq, tool: eq.tool, emergency: true, createdAt: Date.now(),
       driverPos: { x: state.driver.x, y: state.driver.y }, eta: 6,
       timeline: [{ k: "requested", t: "now", label: "Dig-out request sent" }], photos: { before: [], after: [] },
-    }});
+    };
+    dispatch({ type: "REQUEST", order });
     dispatch({ type: "TOAST", msg: "Dig-out requested — finding the nearest crew" });
-    autoMatch(dispatch, state);
+    autoMatch(dispatch, state, order);
   };
   const bookSidewalk = () => {
     const oq = quickQuote("sidewalk");
-    dispatch({ type: "REQUEST", order: {
+    const order = {
       id: "o" + Date.now(), state: "requested", jobType: "sidewalk", size: prop?.size || SIZES[1], property: prop,
       quote: oq, tool: oq.tool, createdAt: Date.now(), driverPos: { x: state.driver.x, y: state.driver.y },
       eta: 9, timeline: [{ k: "requested", t: "now", label: "Sidewalk clearing requested" }], photos: { before: [], after: [] },
-    }});
+    };
+    dispatch({ type: "REQUEST", order });
     dispatch({ type: "TOAST", msg: "Sidewalk clearing requested" });
-    autoMatch(dispatch, state);
+    autoMatch(dispatch, state, order);
   };
 
   const hour = new Date().getHours();
@@ -1971,7 +2004,9 @@ function ScheduleSheet({ onClose, onPick, price }) {
 
 // simulate driver accepting + driving if no live human driver is online.
 // if the driver IS online, leave the job in "requested" so they see the incoming card.
-function autoMatch(dispatch, state) {
+function autoMatch(dispatch, state, order) {
+  // Real accounts: save the offer to the database and let real drivers take it.
+  if (isLive(state)) { if (order) persistNewJob(dispatch, order, state.userId); return; }
   if (state.driverOnline) return;
   setTimeout(() => {
     dispatch({ type: "ORDER_STATE", patch: {
@@ -2058,16 +2093,20 @@ function PaymentSheet({ amount, jobId, customerId, onAuthorized, onClose }) {
 // Uses Supabase realtime when the job is persisted (real jobId + Supabase on);
 // otherwise falls back to a local, in-session thread so the demo still chats.
 function JobChat({ jobId, senderId, peerName, seed }) {
-  const [msgs, setMsgs] = useState(seed || []);
-  const [text, setText] = useState("");
   const live = supabaseEnabled && !!jobId && !!senderId;
+  const [msgs, setMsgs] = useState(live || (supabaseEnabled && senderId) ? [] : (seed || []));
+  const [text, setText] = useState("");
 
   useEffect(() => {
     if (!live) return;
-    const unsub = subscribeToMessages(jobId, (m) => {
-      setMsgs(cur => [...cur, { id: m.id, me: m.sender_id === senderId, t: m.body }]);
+    let on = true;
+    const add = (list) => setMsgs(cur => {
+      const seen = new Set(cur.map(m => m.id));
+      return [...cur, ...list.filter(m => !seen.has(m.id)).map(m => ({ id: m.id, me: m.sender_id === senderId, t: m.body }))];
     });
-    return unsub;
+    loadMessages(jobId).then(({ data }) => { if (on) add(data); });
+    const unsub = subscribeToMessages(jobId, (m) => add([m]));
+    return () => { on = false; unsub(); };
   }, [jobId, senderId]);
 
   const send = () => {
@@ -2186,7 +2225,9 @@ function NotificationSheet({ onClose }) {
 function RiderTracking() {
   const { state, dispatch } = useStore();
   const o = state.order;
-  const d = state.driver;
+  const LIVE = isLive(state);
+  // In live mode the driver is whoever actually accepted; the demo uses a sample driver.
+  const d = LIVE ? (o.driver || { name: "Your driver", rating: "5.0", jobs: 0, truck: "Plow truck" }) : state.driver;
   const [pos, setPos] = useState(o.driverPos || { x: d.x, y: d.y });
   const [eta, setEta] = useState(o.eta || 8);
   const arrived = o.state === "plowing" || o.state === "arrived" || eta <= 0;
@@ -2209,10 +2250,63 @@ function RiderTracking() {
     });
     return unsub;
   }, [o.driverId, o.driver?.id]);
-  const driverLL = liveLL || simLL;
+  const driverLL = LIVE ? liveLL : (liveLL || simLL);
+
+  // ---- LIVE: follow the real job in the database ----
+  const applyRow = async (row) => {
+    if (!row) return;
+    if (row.status === "cancelled" || row.status === "expired") {
+      dispatch({ type: "CLEAR_ORDER" });
+      dispatch({ type: "TOAST", msg: row.status === "expired" ? "No plow took this offer — you weren't charged. Try a higher offer."
+        : "This job was cancelled. You weren't charged." });
+      return;
+    }
+    const map = { requested: "requested", accepted: "enroute", enroute: "enroute", plowing: "plowing", completed: "arrived_done" };
+    const patch = { state: map[row.status] || o.state, driverId: row.driver_id || null, photos: row.photos || o.photos };
+    if (row.driver_id && (!o.driver || o.driver.id !== row.driver_id)) {
+      const { data: p } = await getProfile(row.driver_id);
+      patch.driver = profileToDriver(p) || { id: row.driver_id, name: "Your driver", rating: "5.0", jobs: 0, truck: "Plow truck" };
+      if (o.state === "requested") {
+        notify(dispatch, { kind: "job", title: `${patch.driver.name.split(" ")[0]} accepted your offer`,
+          body: "Your driver is heading to your property.", role: "rider" }, state.profile?.phone);
+      }
+    }
+    if (row.status === "completed" && o.state !== "arrived_done") {
+      patch.completed = true;
+      dispatch({ type: "COMPLETE", q: { ...o.quote, driverPay: Number(row.driver_pay) }, size: o.size, driverName: (patch.driver || o.driver)?.name });
+      notify(dispatch, { kind: "job", title: "Your property is plowed",
+        body: `${o.property?.label || "Your driveway"} is clear.`, role: "rider" }, state.profile?.phone);
+    }
+    dispatch({ type: "ORDER_STATE", patch });
+  };
+  useEffect(() => {
+    if (!LIVE || !o.jobId) return;
+    fetchJob(o.jobId).then(({ data }) => applyRow(data));
+    const unsub = subscribeToJob(o.jobId, applyRow);
+    const iv = setInterval(() => fetchJob(o.jobId).then(({ data }) => applyRow(data)), 10000); // safety net if realtime drops
+    return () => { unsub(); clearInterval(iv); };
+  }, [LIVE, o.jobId, o.state, o.driver?.id]);
+
+  // ---- LIVE: offers expire after 5 minutes if nobody takes them ----
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!LIVE || o.state !== "requested" || !o.expiresAt) return;
+    const iv = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, [LIVE, o.state, o.expiresAt]);
+  const leftMs = LIVE && o.expiresAt ? Math.max(0, o.expiresAt - now) : null;
+  useEffect(() => {
+    if (leftMs !== 0 || o.state !== "requested") return;
+    expireJob(o.jobId).then(() => fetchJob(o.jobId)).then((r) => {
+      if (r?.data?.status === "requested" || r?.data?.status === "expired") applyRow({ ...r.data, status: "expired" });
+      else applyRow(r?.data);
+    });
+  }, [leftMs === 0]);
+  const mmss = leftMs != null ? `${Math.floor(leftMs / 60000)}:${String(Math.floor(leftMs / 1000) % 60).padStart(2, "0")}` : null;
 
   // once accepted, advance to "en route" so the stepper shows the driving leg
   useEffect(() => {
+    if (LIVE) return;
     if (o.state === "accepted" && !state.driverOnline) {
       dispatch({ type: "ORDER_STATE", patch: { state: "enroute" } });
     }
@@ -2220,6 +2314,7 @@ function RiderTracking() {
 
   // drive toward pin while en route
   useEffect(() => {
+    if (LIVE) return;
     if (o.state !== "accepted" && o.state !== "enroute") return;
     if (state.driverOnline) return;
     const iv = setInterval(() => {
@@ -2232,6 +2327,7 @@ function RiderTracking() {
   // arrival: when the ETA runs out during the drive, start plowing (side effect
   // lives here, not inside a setState updater, so StrictMode can't double-fire it)
   useEffect(() => {
+    if (LIVE) return;
     if ((o.state === "enroute" || o.state === "accepted") && !state.driverOnline && eta <= 0) {
       dispatch({ type: "ORDER_STATE", patch: { state: "plowing" } });
     }
@@ -2239,6 +2335,7 @@ function RiderTracking() {
 
   // plowing -> done (auto-sim only; if a driver is online they drive the flow + photos)
   useEffect(() => {
+    if (LIVE) return;
     if (o.state !== "plowing" || state.driverOnline) return;
     const t = setTimeout(() => {
       // auto-generate before/after photos so the receipt still shows proof
@@ -2263,10 +2360,13 @@ function RiderTracking() {
 
   const first = d.name.split(" ")[0];
   const finding = o.state === "requested";
-  const stage = finding ? 0 : arrived ? 2 : 1;         // 0 sent · 1 on the way · 2 plowing · 3 done
-  const big = finding ? "Finding your plow" : arrived ? "Plowing now" : `${Math.max(1, Math.ceil(eta))} min`;
-  const line = finding ? "Sent to plows near you — usually under 2 minutes"
-    : arrived ? `${first} is clearing ${o.property?.label?.toLowerCase() === "home" ? "your driveway" : (o.property?.label || "your property")}`
+  const liveArrived = o.state === "plowing";
+  const shownArrived = LIVE ? liveArrived : arrived;
+  const stage = finding ? 0 : shownArrived ? 2 : 1;         // 0 sent · 1 on the way · 2 plowing · 3 done
+  const big = finding ? "Finding your plow" : shownArrived ? "Plowing now" : LIVE ? "On the way" : `${Math.max(1, Math.ceil(eta))} min`;
+  const line = finding ? (LIVE ? (o.jobId ? `Your $${o.quote?.offer} offer is live for drivers nearby${mmss ? ` · ${mmss} left` : ""}` : "Sending your offer…")
+      : "Sent to plows near you — usually under 2 minutes")
+    : shownArrived ? `${first} is clearing ${o.property?.label?.toLowerCase() === "home" ? "your driveway" : (o.property?.label || "your property")}`
     : `${first} is on the way`;
 
   return (
@@ -2275,14 +2375,14 @@ function RiderTracking() {
       <div style={{ borderRadius: 20, overflow: "hidden", border: `1px solid ${C.line}` }}>
         {MAP_ENABLED && trackCenter ? (
           <LiveMap center={trackCenter} height={300}
-            route={finding ? [] : [[driverLL.lng, driverLL.lat], [trackCenter.lng, trackCenter.lat]]}
-            markers={finding ? [{ lng: trackCenter.lng, lat: trackCenter.lat, size: 26 }] : [
+            route={finding || !driverLL ? [] : [[driverLL.lng, driverLL.lat], [trackCenter.lng, trackCenter.lat]]}
+            markers={finding || !driverLL ? [{ lng: trackCenter.lng, lat: trackCenter.lat, size: 26 }] : [
               { lng: trackCenter.lng, lat: trackCenter.lat, size: 26 },
               { lng: driverLL.lng, lat: driverLL.lat, size: 30, kind: "truck", pulse: true },
             ]} />
         ) : (
-          <StormMap pin blips={finding ? [] : [{ id: d.id || "d", x: pos.x, y: pos.y }]} selected={{ id: d.id || "d" }}
-            tracking driverPos={pos} showRoute={!finding} height={1.3} />
+          <StormMap pin blips={finding || LIVE ? [] : [{ id: d.id || "d", x: pos.x, y: pos.y }]} selected={{ id: d.id || "d" }}
+            tracking={!LIVE} driverPos={pos} showRoute={!finding && !LIVE} height={1.3} />
         )}
       </div>
 
@@ -2318,12 +2418,12 @@ function RiderTracking() {
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-            <button onClick={() => dispatch({ type: "TOAST", msg: `Calling ${first}…` })}
-              style={{ ...miniBtn, flex: 1, minHeight: 44, fontSize: 14, background: C.night2 }}><Icon e="phone" s={15} /> Call</button>
+            {!LIVE && <button onClick={() => dispatch({ type: "TOAST", msg: `Calling ${first}…` })}
+              style={{ ...miniBtn, flex: 1, minHeight: 44, fontSize: 14, background: C.night2 }}><Icon e="phone" s={15} /> Call</button>}
             <button onClick={() => document.getElementById("chatbox")?.scrollIntoView({ behavior: "smooth" })}
               style={{ ...miniBtn, flex: 1, minHeight: 44, fontSize: 14, background: C.night2 }}><Icon e="chat" s={15} /> Message</button>
-            <button onClick={() => dispatch({ type: "TOAST", msg: "Live location shared with your contact" })} aria-label="Share live location"
-              style={{ ...miniBtn, minHeight: 44, width: 44, padding: 0, background: C.night2 }}><Icon e="link" s={15} /></button>
+            {!LIVE && <button onClick={() => dispatch({ type: "TOAST", msg: "Live location shared with your contact" })} aria-label="Share live location"
+              style={{ ...miniBtn, minHeight: 44, width: 44, padding: 0, background: C.night2 }}><Icon e="link" s={15} /></button>}
           </div>
         </div>
       )}
@@ -2332,8 +2432,10 @@ function RiderTracking() {
       {!finding && <JobChat jobId={o.jobId} senderId={state.userId} peerName={first}
         seed={[{ me: false, t: "On my way — about 8 min." }]} />}
 
-      {!arrived && (
-        <button onClick={() => { dispatch({ type: "CLEAR_ORDER" }); dispatch({ type: "TOAST", msg: "Request cancelled" }); }}
+      {!shownArrived && (
+        <button onClick={() => {
+            if (LIVE) { if (o.jobId) cancelJob(o.jobId); else cancelledBeforeSaved.add(o.id); }
+            dispatch({ type: "CLEAR_ORDER" }); dispatch({ type: "TOAST", msg: "Request cancelled — you weren't charged" }); }}
           style={{ display: "block", margin: "18px auto 0", background: "none", border: "none", cursor: "pointer",
             font: `500 14px ${FB}`, color: C.danger, padding: 8 }}>Cancel request</button>
       )}
@@ -2343,7 +2445,7 @@ function RiderTracking() {
 
 function RiderReceipt() {
   const { state, dispatch } = useStore();
-  const o = state.order, q = o.quote, d = state.driver;
+  const o = state.order, q = o.quote, d = (isLive(state) && o.driver) || state.driver;
   const jtR = JOB_TYPES[o.jobType || "driveway"];
   const isRoadside = ROADSIDE.includes(o.jobType);
   const [rating, setRating] = useState(0);
@@ -2353,7 +2455,7 @@ function RiderReceipt() {
   const finish = () => {
     // save the rating (best-effort; persists when signed in + Supabase is on)
     if (rating > 0 && state.userId) {
-      rateJob({ jobId: o.id, raterId: state.userId, rateeId: d.id || "driver", stars: rating });
+      rateJob({ jobId: o.jobId || o.id, raterId: state.userId, rateeId: d.id || o.driverId, stars: rating });
     }
     // route the tip to the driver: earnings + notification now, real charge when Stripe's on
     if (tip > 0) {
@@ -2386,7 +2488,7 @@ function RiderReceipt() {
           <div style={{ height: 1, background: C.line, margin: "8px 0" }} />
         </>}
         <Row label={q.offer != null ? "Total" : jtR.label} value={`$${q.riderTotal}`} big />
-        <p style={{ font: `400 12px ${FB}`, color: C.mistDim, margin: "8px 0 0" }}>Charged to ···4242 when the job was marked done</p>
+        <p style={{ font: `400 12px ${FB}`, color: C.mistDim, margin: "8px 0 0" }}>Charged to ···{state.payment?.last4 || "4242"} when the job was marked done</p>
       </div>
 
       {/* proof of work: before / after */}
@@ -2675,7 +2777,7 @@ function RiderHistory() {
     };
     dispatch({ type: "ACTIVATE_SCHEDULED", id: job.id, order: o });
     dispatch({ type: "TOAST", msg: "Dispatching your scheduled plow now" });
-    autoMatch(dispatch, state);
+    autoMatch(dispatch, state, o);
   };
 
   const [tab, setTab] = useState("upcoming");
@@ -3110,7 +3212,14 @@ function DriverOnboarding() {
       dispatch({ type: "TOAST", msg: "Document received" }); }, 900);
   };
 
-  const finish = () => {
+  const [saving, setSaving] = useState(false);
+  const finish = async () => {
+    if (isLive(state)) {
+      setSaving(true);
+      const res = await becomeDriver(state.userId, { name, phone, truck, tools }, state.legal?.driver);
+      setSaving(false);
+      if (res?.error) { dispatch({ type: "TOAST", msg: `Couldn't finish setup — ${res.error.message}` }); return; }
+    }
     dispatch({ type: "DRIVER_ONBOARD_DONE", name, truck: truck || "F-350 · 9ft V-Plow", tools,
       docs: { license: uploads.license ? "received" : "pending", plate: uploads.plate ? "received" : "pending", w9: uploads.w9 ? "received" : "pending" } });
     dispatch({ type: "TOAST", msg: `You're set up, ${name.split(" ")[0] || "driver"}. Go online whenever you want to work.` });
@@ -3263,7 +3372,7 @@ function DriverOnboarding() {
             <span><Icon e="lock" s={14} /></span> Bank details handled by Stripe · we never see them
           </div>
           <div style={{ position: "sticky", bottom: 16 }}>
-            <Btn full kind="good" onClick={finish}>Finish — start earning</Btn>
+            <Btn full kind="good" onClick={finish} disabled={saving}>{saving ? "Saving…" : "Finish — start earning"}</Btn>
           </div>
         </Fade>
       )}
@@ -3298,19 +3407,60 @@ function DriverApp() {
 
 function DriverDrive() {
   const { state, dispatch } = useStore();
+  const LIVE = isLive(state);
   const online = state.driverOnline;
   const o = state.order;
+  // Contractor agreement must be signed (current version) before going online.
+  const [gate, setGate] = useState(false);
+
+  // ---- LIVE: the real pool of open offers from customers nearby ----
+  const [pool, setPool] = useState([]);
+  const [passed, setPassed] = useState(() => new Set());
+  const [claiming, setClaiming] = useState(false);
+  useEffect(() => {
+    if (!LIVE || !online) { setPool([]); return; }
+    let on = true;
+    const load = () => listOpenJobs().then(({ data }) => {
+      if (on) setPool((data || []).filter(r => r.customer_id !== state.userId).map(r => rowToOrder(r)));
+    });
+    load();
+    const unsub = subscribeOpenJobs(load);
+    return () => { on = false; unsub(); };
+  }, [LIVE, online, state.userId]);
+  const liveOffer = LIVE && online && !o
+    ? pool.find(j => !passed.has(j.jobId) && (!j.expiresAt || j.expiresAt > Date.now())) : null;
+
   // driver "has a job" if there's an order that they've accepted, OR an incoming request while online
-  const incoming = online && o && o.state === "requested";
+  const incoming = LIVE ? !!liveOffer : online && o && o.state === "requested";
   const working = o && ["accepted", "enroute", "plowing", "arrived_done"].includes(o.state);
 
   if (working) return <DriverActiveJob />;
 
-  // Contractor agreement must be signed (current version) before going online.
-  const [gate, setGate] = useState(false);
   const goOnline = (v) => {
     dispatch({ type: "ONLINE", v });
+    if (LIVE) setDriverStatus(state.userId, { is_online: v });
     dispatch({ type: "TOAST", msg: v ? "You're online — requests will pop up here" : "You're offline" });
+  };
+  // First tap wins — the database decides, so two drivers can never get the same job.
+  const acceptLive = async (job) => {
+    if (claiming || !job) return;
+    setClaiming(true);
+    const { data, error } = await claimJob(job.jobId);
+    if (error || !data) {
+      setClaiming(false);
+      setPassed(p => new Set(p).add(job.jobId));
+      dispatch({ type: "TOAST", msg: error ? `Couldn't accept — ${error.message}` : "Another driver already took this one" });
+      return;
+    }
+    const { data: row } = await fetchJob(job.jobId);
+    setClaiming(false);
+    dispatch({ type: "SET_ORDER", order: { ...(row ? rowToOrder(row, state.driver) : job), state: "accepted", driver: state.driver,
+      timeline: [{ k: "accepted", t: "now", label: "You accepted" }] } });
+    dispatch({ type: "TOAST", msg: "Job accepted — tap Navigate for directions" });
+  };
+  const passLive = (job, auto) => {
+    if (job) setPassed(p => new Set(p).add(job.jobId));
+    dispatch({ type: "TOAST", msg: auto ? "Request passed to the next driver" : "Request passed" });
   };
   const toggle = () => {
     if (!online && !hasCurrentAcceptance(state.legal?.driver)) { setGate(true); return; }
@@ -3327,7 +3477,8 @@ function DriverDrive() {
       <h1 style={{ font: `700 30px/1.1 ${FD}`, letterSpacing: "-.02em", color: C.ice, margin: "6px 0 4px" }}>
         {online ? "Watching for requests" : "Ready to plow?"}</h1>
       <p style={{ font: `400 15px ${FB}`, color: C.mist, margin: "0 0 16px" }}>
-        {online ? `${SNOW_DEPTH_IN}" down · 12 open requests nearby` : `${SNOW_DEPTH_IN}" down in Duluth — demand is high right now.`}</p>
+        {online ? (LIVE ? `${pool.length} open request${pool.length === 1 ? "" : "s"} nearby` : `${SNOW_DEPTH_IN}" down · 12 open requests nearby`)
+          : LIVE ? "Go online to see requests from customers near you." : `${SNOW_DEPTH_IN}" down in Duluth — demand is high right now.`}</p>
 
       <div style={{ borderRadius: 20, overflow: "hidden", border: `1px solid ${C.line}` }}>
         {MAP_ENABLED && state.driver.lng ? (
@@ -3390,14 +3541,26 @@ function DriverDrive() {
         </button>
       )}
 
-      {incoming && <IncomingJob order={o} />}
+      {incoming && (LIVE
+        ? <IncomingJob key={liveOffer.jobId} order={liveOffer} busy={claiming}
+            onAccept={() => acceptLive(liveOffer)} onPass={(auto) => passLive(liveOffer, auto)} />
+        : <IncomingJob order={o} />)}
       {gate && <ConsentGate role="driver" onClose={() => setGate(false)}
-        onAgree={(rec) => { acceptLegal(dispatch, rec, state.userId); setGate(false); goOnline(true); }} />}
+        onAgree={async (rec) => {
+          setGate(false);
+          if (LIVE) {
+            // Save the signed agreement FIRST — the database won't let anyone drive without it.
+            dispatch({ type: "ACCEPT_LEGAL", rec });
+            await recordLegalAcceptance(state.userId, rec);
+            const r = await becomeDriver(state.userId, {}, null);
+            if (r?.error) { dispatch({ type: "TOAST", msg: `Couldn't go online — ${r.error.message}` }); return; }
+          } else acceptLegal(dispatch, rec, state.userId);
+          goOnline(true); }} />}
     </section></Fade>
   );
 }
 
-function IncomingJob({ order }) {
+function IncomingJob({ order, onAccept, onPass, busy }) {
   const { state, dispatch } = useStore();
   const q = order.quote;
   const prop = order.property;
@@ -3421,11 +3584,12 @@ function IncomingJob({ order }) {
   }, [secs]);
 
   const accept = () => {
+    if (onAccept) { onAccept(); return; }
     dispatch({ type: "ORDER_STATE", patch: { state: "accepted", driver: state.driver, eta: 8,
       timeline: [...(order.timeline || []), { k: "accepted", t: "now", label: "You accepted" }] }});
     dispatch({ type: "TOAST", msg: "Job accepted — navigate to the property" });
   };
-  const decline = (auto) => { dispatch({ type: "CLEAR_ORDER" }); dispatch({ type: "TOAST", msg: auto ? "Request passed to the next driver" : "Request passed" }); };
+  const decline = (auto) => { if (onPass) { onPass(auto); return; } dispatch({ type: "CLEAR_ORDER" }); dispatch({ type: "TOAST", msg: auto ? "Request passed to the next driver" : "Request passed" }); };
 
   // Full-screen takeover: one decision, nothing else competing for attention.
   return (
@@ -3494,11 +3658,11 @@ function IncomingJob({ order }) {
         {/* one decision — theirs */}
         <p style={{ font: `400 12.5px/1.45 ${FB}`, color: C.mistDim, textAlign: "center", margin: "0 8px 10px" }}>
           Your call. Accepting means you're taking this job as an independent contractor under your Driver Agreement.</p>
-        <button onClick={accept} disabled={!toolMatch}
+        <button onClick={accept} disabled={!toolMatch || busy}
           style={{ width: "100%", minHeight: 64, borderRadius: 18, border: "none", cursor: toolMatch ? "pointer" : "not-allowed",
             background: toolMatch ? C.push : C.line, color: toolMatch ? C.onPush : C.mistDim,
             font: `700 19px ${FB}`, letterSpacing: "-.01em", WebkitTapHighlightColor: "transparent" }}>
-          Accept · ${dPay}</button>
+          {busy ? "Accepting…" : `Accept · $${dPay}`}</button>
         <button onClick={() => decline(false)}
           style={{ display: "block", margin: "10px auto 0", background: "none", border: "none", cursor: "pointer",
             font: `500 15px ${FB}`, color: C.mist, padding: 10 }}>Pass</button>
@@ -3556,7 +3720,9 @@ function ClusterRoute() {
 
 function DriverActiveJob() {
   const { state, dispatch } = useStore();
+  const LIVE = isLive(state);
   const o = state.order, q = o.quote;
+  const [here, setHere] = useState(o.state === "plowing");
   const dPay = driverNetPay(q, state.driver); // take-home
   const dHourly = driverHourlyFor(dPay, o.size?.mins || q.mins);
   const [pos, setPos] = useState({ x: state.driver.x, y: state.driver.y });
@@ -3570,7 +3736,21 @@ function DriverActiveJob() {
 
   const [gps, setGps] = useState(null); // real device location {lng, lat, heading}
 
+  // LIVE: tell the customer you're on the way, and bail out if they cancel.
   useEffect(() => {
+    if (!LIVE || !o.jobId) return;
+    if (o.state === "accepted") dispatch({ type: "ORDER_STATE", patch: { state: "enroute" } });
+    const unsub = subscribeToJob(o.jobId, (row) => {
+      if (row?.status === "cancelled") {
+        dispatch({ type: "CLEAR_ORDER" });
+        dispatch({ type: "TOAST", msg: "The customer cancelled this job" });
+      }
+    });
+    return unsub;
+  }, [LIVE, o.jobId]);
+
+  useEffect(() => {
+    if (LIVE) return;
     if (o.state !== "accepted" && o.state !== "enroute") return;
     if (eta <= 0) return; // truck has arrived — stop the drive sim
     const iv = setInterval(() => {
@@ -3599,12 +3779,13 @@ function DriverActiveJob() {
     return () => navigator.geolocation.clearWatch(id);
   }, [o.state, state.userId]);
 
-  const arrived = eta <= 0 || o.state === "plowing";
+  const arrived = LIVE ? (here || o.state === "plowing") : (eta <= 0 || o.state === "plowing");
   const allChecked = checkableZones.length === 0 || checkableZones.every((_, i) => checks[i]);
   const jobCenter = o.property?.center;
   const initEtaD = o.eta || 8;
   const progD = jobCenter ? Math.min(1, Math.max(0, 1 - eta / initEtaD)) : 0;
-  const driverLLD = jobCenter ? { lng: jobCenter.lng - 0.006 * (1 - progD), lat: jobCenter.lat + 0.004 * (1 - progD) } : null;
+  const driverLLD = LIVE ? null : jobCenter ? { lng: jobCenter.lng - 0.006 * (1 - progD), lat: jobCenter.lat + 0.004 * (1 - progD) } : null;
+  const meLL = gps || driverLLD;
 
   const startPlow = () => dispatch({ type: "ORDER_STATE", patch: { state: "plowing" } });
   const complete = () => {
@@ -3656,17 +3837,17 @@ function DriverActiveJob() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 12 }}>
         <div>
           <Eyebrow color={arrived ? C.push : C.amber}>{arrived ? "At the property" : "En route"}</Eyebrow>
-          <h2 style={{ font: `700 28px ${FD}`, margin: "6px 0 0" }}>{arrived ? "Plow the job" : `${Math.ceil(eta)} min to site`}</h2>
+          <h2 style={{ font: `700 28px ${FD}`, margin: "6px 0 0" }}>{arrived ? "Plow the job" : LIVE ? "Head to the property" : `${Math.ceil(eta)} min to site`}</h2>
         </div>
         <div style={{ font: `700 20px ${FD}`, color: C.push }}>${dPay}</div>
       </div>
 
       {MAP_ENABLED && jobCenter ? (
         <LiveMap center={jobCenter} height={220}
-          route={[[(gps || driverLLD).lng, (gps || driverLLD).lat], [jobCenter.lng, jobCenter.lat]]}
+          route={meLL ? [[meLL.lng, meLL.lat], [jobCenter.lng, jobCenter.lat]] : []}
           markers={[
             { lng: jobCenter.lng, lat: jobCenter.lat, size: 24 },
-            { lng: (gps || driverLLD).lng, lat: (gps || driverLLD).lat, size: 26, pulse: true },
+            ...(meLL ? [{ lng: meLL.lng, lat: meLL.lat, size: 26, pulse: true }] : []),
           ]} />
       ) : (
         <StormMap pin="Site" blips={[{ id: "me", x: pos.x, y: pos.y }]} selected={{ id: "me" }} tracking driverPos={pos} showRoute />
@@ -3682,8 +3863,15 @@ function DriverActiveJob() {
         }}>Navigate</Btn>
       </Card>
 
-      {/* density routing: cluster of nearby jobs to batch */}
-      {!arrived && <ClusterRoute />}
+      {/* LIVE: the driver says when they've arrived (no fake ETA) */}
+      {LIVE && !arrived && (
+        <div style={{ marginTop: 12 }}>
+          <Btn full kind="good" onClick={() => setHere(true)}>I'm at the property</Btn>
+        </div>
+      )}
+
+      {/* density routing: cluster of nearby jobs to batch (demo only for now) */}
+      {!arrived && !LIVE && <ClusterRoute />}
 
       {/* chat with the customer */}
       <JobChat jobId={o.jobId} senderId={state.userId} peerName="your customer" seed={[]} />
@@ -4362,17 +4550,15 @@ function Shell() {
   useEffect(() => {
     const o = state.order;
     if (!o?.jobId) return;
+    // Live: only the driver moves the job along; the customer's screen just follows.
+    if (supabaseEnabled && state.role !== "driver") return;
     const statusMap = { requested: "requested", accepted: "accepted", enroute: "enroute",
       plowing: "plowing", arrived_done: "completed" };
     const status = statusMap[o.state];
     if (!status) return;
+    if (status === "requested" || status === "accepted") return; // set by the database itself
     const patch = { status };
-    if (o.eta != null) patch.eta_minutes = Math.round(o.eta);
-    if (status === "completed") {
-      patch.completed_at = new Date().toISOString();
-      patch.photos = o.photos || undefined;
-      patch.driver_pay = o.quote?.driverPay ?? undefined;
-    }
+    if (status === "completed") patch.photos = o.photos || undefined; // money + timestamps are set by the database
     patchJob(o.jobId, patch);
   }, [state.order?.state, state.order?.jobId]);
 
@@ -4381,16 +4567,24 @@ function Shell() {
     if (!supabaseEnabled || !auth.session || !auth.profile) return;
     let cancelled = false;
     (async () => {
-      const role = auth.profile.role === "driver" ? "driver" : "rider";
+      const uid = auth.user.id;
+      const role = (auth.profile.role === "driver" || auth.profile.is_driver) ? "driver" : "rider";
       let props = [];
       if (role === "rider") {
-        const { data } = await loadProperties(auth.user.id);
+        const { data } = await loadProperties(uid);
         props = data || [];
       }
       if (cancelled) return;
-      dispatch({ type: "HYDRATE_USER", userId: auth.user.id, role,
+      const me = profileToDriver(auth.profile);
+      dispatch({ type: "HYDRATE_USER", userId: uid, role, isDriver: !!auth.profile.is_driver,
+        driver: me && { ...me, tools: auth.profile.tools || [] },
         profile: { name: auth.profile.name || "", phone: auth.profile.phone || "", email: auth.profile.email || "" },
         properties: props });
+      // Pick up a job that was in progress (page refresh, dead battery, new phone).
+      const { data: row } = await loadActiveJob(uid);
+      if (cancelled || !row) return;
+      if (role === "driver" && row.driver_id === uid) dispatch({ type: "SET_ORDER", order: rowToOrder(row, me) });
+      if (role === "rider" && row.customer_id === uid) dispatch({ type: "SET_ORDER", order: rowToOrder(row) });
     })();
     return () => { cancelled = true; };
   }, [auth.session, auth.profile]);
