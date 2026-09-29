@@ -1,262 +1,260 @@
-// DRIFT — marketing homepage. Colors, type and depth come from the shared theme
-// (./theme.js), which swaps values in place for light/dark — so every C / E read
-// below happens at render time, never in a module-level constant.
+// DRIFT — marketing homepage (driftplowing.com front door).
+//
+// Art direction: "storm night on the Twin Ports". A plow's amber beacon cutting
+// through lake-effect snow. Always dark on purpose (it's the brand moment; the
+// app itself still follows the phone's light/dark setting).
+//   Display: Big Shoulders Display — industrial Great-Lakes grotesque.
+//   Body:    Instrument Sans.     Readouts: IBM Plex Mono (dispatch-board feel).
+// Signature moment: the headline loads buried in snow and a plow blade clears it.
+// Everything here is honest — no invented reviews, counts or ETAs. The forecast
+// strip is real (National Weather Service via /api/weather).
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import "@fontsource/big-shoulders-display/800";
+import "@fontsource/big-shoulders-display/900";
+import "@fontsource/instrument-sans/400";
+import "@fontsource/instrument-sans/500";
+import "@fontsource/instrument-sans/600";
+import "@fontsource/ibm-plex-mono/500";
 import EmojiIcon from "./Icon.jsx";
-import { C, E, FD, FB } from "./theme.js";
+import { fetchSnowForecast } from "./lib/weather.js";
 
-// Fixed dark backdrop for art that only reads on a dark sky (final CTA band).
-// Deliberately NOT a theme token: it stays dark in light mode on purpose.
-const ART_BG = "#141418";
-const ART_TEXT = "#F5F5F7";
-const ART_TEXT_DIM = "#A1A1AA";
-const ART_LINE = "#2A2A30";
-
-// ---------- little building blocks ----------
-const Btn = ({ children, onClick, ghost, big, style }) => (
-  <button onClick={onClick} style={{
-    display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, cursor: "pointer",
-    font: `600 ${big ? 17 : 15}px ${FB}`, letterSpacing: "-.01em", borderRadius: 12,
-    padding: big ? "15px 26px" : "11px 18px",
-    background: ghost ? "transparent" : C.amber,
-    color: ghost ? C.ice : C.onAmber,
-    border: ghost ? `1px solid ${C.line}` : "1px solid transparent",
-    WebkitTapHighlightColor: "transparent",
-    whiteSpace: "nowrap", transition: "transform .15s ease, opacity .15s ease", ...style,
-  }}
-    onMouseDown={e => (e.currentTarget.style.transform = "scale(.97)")}
-    onMouseUp={e => (e.currentTarget.style.transform = "scale(1)")}
-    onMouseLeave={e => (e.currentTarget.style.transform = "scale(1)")}>
-    {children}
-  </button>
-);
-
-// line-style trust icons (stroke SVG, inherit currentColor)
-const Icon = ({ path, size = 22 }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
-    stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-    {path}
-  </svg>
-);
-const ICONS = {
-  noContract: <><path d="M4 4h10l4 4v12H4z" /><path d="M14 4v4h4" /><path d="m8 12 8 6M16 12l-8 6" /></>,
-  lock: <><rect x="4" y="10" width="16" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></>,
-  camera: <><path d="M3 8h4l1.5-2h7L17 8h4v11H3z" /><circle cx="12" cy="13" r="3.2" /></>,
-  pin: <><path d="M12 21s7-6.5 7-12a7 7 0 0 0-14 0c0 5.5 7 12 7 12z" /><circle cx="12" cy="9" r="2.4" /></>,
-  check: <><path d="m5 12.5 4.5 4.5L19 7.5" /></>,
+// ---------- tokens (fixed dark: lake-night) ----------
+const L = {
+  bg: "#06080C",
+  bg2: "#0B0F16",
+  panel: "#10151E",
+  panel2: "#151B26",
+  line: "rgba(170,195,230,.13)",
+  lineHard: "rgba(170,195,230,.22)",
+  ice: "#EEF3F8",
+  mist: "#9BA7B7",
+  dim: "#5F6C7E",
+  amber: "#FFB020",
+  amberHot: "#FFD166",
+  onAmber: "#1A1204",
+  steel: "#7FA7D6",
+  good: "#3DDC84",
+  snow: "#F7FAFD",
 };
+const DISPLAY = '"Big Shoulders Display", Impact, "Arial Narrow", sans-serif';
+const BODY = '"Instrument Sans", -apple-system, system-ui, "Segoe UI", sans-serif';
+const MONO = '"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace';
 
-// ---------- falling snow (CSS, lightweight) ----------
-// Flake positions are memoized so a re-render (theme switch, FAQ toggle) doesn't reshuffle them.
-function Snow({ color, count = 34, max = 0.5 }) {
-  const flakes = useMemo(() => Array.from({ length: count }, () => ({
-    size: 2 + Math.random() * 3.5,
-    left: Math.random() * 100,
-    dur: 8 + Math.random() * 10,
-    delay: -Math.random() * 16,
-    op: 0.12 + Math.random() * (max - 0.12),
-  })), [count, max]);
+// ---------- building blocks ----------
+function Btn({ children, onClick, ghost, big, style }) {
   return (
-    <div aria-hidden style={{ position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none", zIndex: 1 }}>
+    <button onClick={onClick} className={ghost ? "lp-btn lp-btn-ghost" : "lp-btn"} style={{
+      display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 10, cursor: "pointer",
+      font: `600 ${big ? 17 : 15}px ${BODY}`, letterSpacing: "-.005em", borderRadius: 999,
+      padding: big ? "17px 28px" : "11px 20px", whiteSpace: "nowrap",
+      background: ghost ? "transparent" : L.amber, color: ghost ? L.ice : L.onAmber,
+      border: ghost ? `1.5px solid ${L.lineHard}` : "1.5px solid transparent",
+      WebkitTapHighlightColor: "transparent", ...style,
+    }}>{children}</button>
+  );
+}
+
+const Mono = ({ children, style }) => (
+  <span style={{ font: `500 12px/1 ${MONO}`, letterSpacing: ".08em", textTransform: "uppercase", ...style }}>{children}</span>
+);
+
+// ---------- falling snow (two depths for parallax) ----------
+function Snow({ count = 40, near = false }) {
+  const flakes = useMemo(() => Array.from({ length: count }, () => ({
+    size: near ? 3 + Math.random() * 4 : 1.5 + Math.random() * 2.5,
+    left: Math.random() * 100,
+    dur: near ? 7 + Math.random() * 6 : 12 + Math.random() * 12,
+    delay: -Math.random() * 20,
+    drift: (Math.random() - .5) * (near ? 80 : 40),
+    op: near ? .35 + Math.random() * .4 : .15 + Math.random() * .3,
+    blur: near ? (Math.random() < .3 ? 1.5 : 0) : 0,
+  })), [count, near]);
+  return (
+    <div aria-hidden className="lp-snow" style={{ position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none" }}>
       {flakes.map((f, i) => (
         <span key={i} style={{
-          position: "absolute", top: "-20px", left: `${f.left}%`, width: f.size, height: f.size, borderRadius: "50%",
-          background: color || C.mistDim, opacity: f.op,
-          animation: `snowfall ${f.dur}s linear ${f.delay}s infinite`,
+          position: "absolute", top: -12, left: `${f.left}%`, width: f.size, height: f.size, borderRadius: "50%",
+          background: L.snow, opacity: f.op, filter: f.blur ? `blur(${f.blur}px)` : undefined,
+          "--drift": `${f.drift}px`, animation: `lp-fall ${f.dur}s linear ${f.delay}s infinite`,
         }} />
       ))}
     </div>
   );
 }
 
-// ---------- Duluth Aerial Lift Bridge (hairline line drawing, theme-aware) ----------
-function LiftBridge() {
-  const braces = (x, w, y0, y1, n) => {
-    const step = (y1 - y0) / n, out = [];
-    for (let k = 0; k < n; k++) {
-      const a = y0 + k * step, b = a + step;
-      out.push(<path key={`${x}-${k}`} d={`M${x} ${a} L${x + w} ${b} M${x + w} ${a} L${x} ${b}`} />);
-    }
-    return out;
-  };
+// ---------- the headline that gets plowed ----------
+// A snow bank sits over the words; an amber blade sweeps left→right and clears it.
+function PlowedHeadline() {
   return (
-    <div aria-hidden className="hero-bridge" style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: "78%", zIndex: 1, pointerEvents: "none" }}>
-      <svg viewBox="0 0 1200 520" preserveAspectRatio="xMidYMax slice" style={{ width: "100%", height: "100%" }}>
-        {/* lake water */}
-        <rect x="0" y="470" width="1200" height="60" fill={C.night2} />
-        <g stroke={C.mistDim} strokeWidth="2" fill="none" opacity=".26">
-          {/* roadway / approaches */}
-          <path d="M0 470 L1200 470" strokeWidth="2.6" />
-          {/* towers */}
-          <rect x="300" y="120" width="86" height="350" />
-          {braces(300, 86, 130, 460, 7)}
-          <rect x="814" y="120" width="86" height="350" />
-          {braces(814, 86, 130, 460, 7)}
-          {/* top fixed truss */}
-          <path d="M300 120 L900 120" strokeWidth="2.6" />
-          <path d="M300 150 L900 150" />
-          {braces(300, 600, 120, 150, 20)}
-          {/* raised lift span */}
-          <path d="M386 250 L814 250" strokeWidth="3" />
-          <path d="M386 276 L814 276" />
-          {braces(386, 428, 250, 276, 16)}
-          {[430, 520, 600, 680, 770].map(x => <path key={x} d={`M${x} 150 L${x} 250`} strokeWidth="1.4" />)}
-          <rect x="296" y="104" width="94" height="18" fill={C.mistDim} stroke="none" />
-          <rect x="810" y="104" width="94" height="18" fill={C.mistDim} stroke="none" />
-        </g>
-        {/* structure lights */}
-        {[[343, 118], [857, 118], [343, 250], [857, 250], [600, 122]].map(([x, y], k) => (
-          <circle key={k} cx={x} cy={y} r="3" fill={C.amber} opacity=".7" />
-        ))}
-      </svg>
+    <h1 style={{ margin: "26px 0 22px", position: "relative", lineHeight: .86, letterSpacing: "-.01em", textTransform: "uppercase" }}>
+      <span style={{ display: "block", font: `800 clamp(46px,7.4vw,92px)/.9 ${DISPLAY}`, color: L.ice }}>Your driveway,</span>
+      <span className="lp-plowed" style={{ position: "relative", display: "inline-block", font: `900 clamp(92px,15vw,196px)/.84 ${DISPLAY}`,
+        color: L.amber, paddingRight: ".04em" }}>
+        Plowed.
+        {/* snow bank covering the word */}
+        <span aria-hidden className="lp-bank" style={{ position: "absolute", left: "-3%", right: "-4%", top: "2%", bottom: "-10%", filter: "drop-shadow(0 10px 18px rgba(0,0,0,.35))" }}>
+          <svg viewBox="0 0 400 120" preserveAspectRatio="none" style={{ width: "100%", height: "100%", display: "block" }}>
+            <defs>
+              <linearGradient id="lpBank" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stopColor="#FFFFFF" /><stop offset="1" stopColor="#D9E4EF" />
+              </linearGradient>
+            </defs>
+            <path d="M0 26 C 20 10, 40 22, 62 14 S 104 4, 126 16 S 170 30, 196 12 S 240 2, 262 18 S 300 26, 326 10 S 372 6, 400 20 L400 120 L0 120 Z" fill="url(#lpBank)" />
+            <path d="M0 26 C 20 10, 40 22, 62 14 S 104 4, 126 16 S 170 30, 196 12 S 240 2, 262 18 S 300 26, 326 10 S 372 6, 400 20" fill="none" stroke="#FFFFFF" strokeWidth="3" />
+            {[[30,40],[88,58],[140,36],[205,70],[250,44],[318,62],[362,40],[60,88],[180,96],[300,92]].map(([cx, cy], k) => (
+              <circle key={k} cx={cx} cy={cy} r={k % 3 ? 1.4 : 2.2} fill="#BFD3E6" opacity=".7" />))}
+          </svg>
+        </span>
+        {/* the blade */}
+        <span aria-hidden className="lp-blade" style={{ position: "absolute", top: "-14%", bottom: "-14%", width: "clamp(14px,1.8vw,22px)",
+          borderRadius: 4, background: `linear-gradient(180deg, ${L.amberHot}, ${L.amber} 40%, #B8760A)`,
+          boxShadow: `0 0 40px 8px ${L.amber}55, -26px 0 40px 6px rgba(255,255,255,.55)` }}>
+          <span style={{ position: "absolute", top: -14, left: "50%", width: 12, height: 12, marginLeft: -6, borderRadius: "50%",
+            background: L.amberHot, boxShadow: `0 0 24px 8px ${L.amber}` }} className="lp-strobe" />
+        </span>
+      </span>
+    </h1>
+  );
+}
+
+// ---------- live forecast strip (real NWS data, or nothing) ----------
+function ForecastStrip() {
+  const [f, setF] = useState(null);
+  useEffect(() => { fetchSnowForecast().then(setF); }, []);
+  if (!f) return null;
+  const snowy = f.next24 >= 1;
+  return (
+    <div className="lp-rise" style={{ animationDelay: "1.5s", display: "inline-flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+      marginTop: 30, padding: "11px 16px", borderRadius: 12, background: "rgba(16,21,30,.8)", border: `1px solid ${L.line}`,
+      backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+        <span className="lp-live" style={{ width: 8, height: 8, borderRadius: "50%", background: snowy ? L.amber : L.good }} />
+        <Mono style={{ color: L.dim }}>NWS · Duluth</Mono>
+      </span>
+      <Mono style={{ color: snowy ? L.amberHot : L.ice }}>
+        {snowy ? `Next 24 hrs: ${f.range24 || `${f.next24}"`} of snow` : "Next 24 hrs: no snow expected"}
+      </Mono>
+      <span style={{ font: `400 13px ${BODY}`, color: L.mist }}>{snowy ? "Book early — drivers fill up fast." : "Set up now, before the next one."}</span>
     </div>
   );
 }
 
-// ---------- interactive phone demo ----------
+// ---------- phone demo (three real app screens) ----------
 const DEMO = [
-  { key: "map", tag: "Step 1 · Map it", title: "Outline your driveway" },
-  { key: "price", tag: "Step 2 · Price", title: "Name your price" },
-  { key: "track", tag: "Step 3 · Track", title: "Watch your plow arrive" },
+  { key: "map", tag: "01 · Map it", title: "Outline your driveway" },
+  { key: "price", tag: "02 · Price it", title: "Name your price" },
+  { key: "track", tag: "03 · Track it", title: "Watch your plow arrive" },
 ];
-
 function PhoneDemo() {
   const [i, setI] = useState(0);
   const [paused, setPaused] = useState(false);
-  const timer = useRef(null);
+  const t = useRef(null);
   useEffect(() => {
     if (paused) return;
-    timer.current = setTimeout(() => setI(v => (v + 1) % DEMO.length), 4200);
-    return () => clearTimeout(timer.current);
+    t.current = setTimeout(() => setI((v) => (v + 1) % DEMO.length), 4200);
+    return () => clearTimeout(t.current);
   }, [i, paused]);
-
   const key = DEMO[i].key;
-
   return (
-    <div style={{ position: "relative", width: 300, maxWidth: "84vw", margin: "0 auto" }}
+    <div style={{ position: "relative", width: 300, maxWidth: "82vw", margin: "0 auto" }}
       onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}>
-      {/* device */}
-      <div style={{ position: "relative", borderRadius: 44, padding: 11,
-        background: C.slate, border: `1px solid ${C.line}`, boxShadow: E.high }}>
-        <div style={{ borderRadius: 34, overflow: "hidden", background: C.night, aspectRatio: "9/18.5", position: "relative",
-          border: `1px solid ${C.lineSoft}` }}>
-          {/* dynamic island — black on real hardware in both modes */}
-          <div style={{ position: "absolute", top: 8, left: "50%", transform: "translateX(-50%)", width: 88, height: 22,
-            background: "#000", borderRadius: 12, zIndex: 5 }} />
-          {/* status bar */}
-          <div style={{ display: "flex", justifyContent: "space-between", padding: "11px 20px 0", font: `600 10px ${FB}`, color: C.ice }}>
-            <span>9:41</span><span style={{ color: C.mist }}><EmojiIcon e="snowflake" s={10} /> 7"</span>
+      {/* beacon glow behind the phone */}
+      <div aria-hidden className="lp-beacon" style={{ position: "absolute", inset: "-18% -30%", borderRadius: "50%",
+        background: `radial-gradient(closest-side, ${L.amber}38, transparent 70%)`, zIndex: 0 }} />
+      <div style={{ position: "relative", zIndex: 1, borderRadius: 46, padding: 10, background: "linear-gradient(160deg,#2A313D,#12161E 40%,#0B0E14)",
+        border: `1px solid ${L.lineHard}`, boxShadow: "0 40px 80px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.08)", transform: "rotate(-2.5deg)" }}>
+        <div style={{ borderRadius: 37, overflow: "hidden", background: "#0A0A0B", aspectRatio: "9/18.5", position: "relative" }}>
+          <div style={{ position: "absolute", top: 9, left: "50%", transform: "translateX(-50%)", width: 86, height: 22, background: "#000", borderRadius: 12, zIndex: 5 }} />
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "12px 22px 0", font: `600 10px ${BODY}`, color: L.ice }}>
+            <span>9:41</span><span style={{ color: L.mist }}>DRIFT</span>
           </div>
-          {/* screen content */}
-          <div key={i} style={{ padding: "18px 14px 16px", animation: "fadeUp .5s ease" }}>
-            <div style={{ font: `600 11px ${FB}`, color: C.amber }}>{DEMO[i].tag}</div>
-            <div style={{ font: `700 19px/1.15 ${FD}`, letterSpacing: "-0.02em", color: C.ice, margin: "4px 0 14px" }}>{DEMO[i].title}</div>
+          <div key={i} style={{ padding: "20px 15px 16px", animation: "lp-fadeUp .5s ease" }}>
+            <Mono style={{ color: L.amber, fontSize: 10 }}>{DEMO[i].tag}</Mono>
+            <div style={{ font: `800 25px/1 ${DISPLAY}`, textTransform: "uppercase", color: L.ice, margin: "8px 0 14px" }}>{DEMO[i].title}</div>
             {key === "map" ? <DemoMap /> : key === "price" ? <DemoPrice /> : <DemoTrack />}
           </div>
-          {/* progress dots */}
           <div style={{ position: "absolute", bottom: 14, left: 0, right: 0, display: "flex", gap: 6, justifyContent: "center" }}>
             {DEMO.map((d, k) => (
-              <button key={d.key} onClick={() => setI(k)} aria-label={d.title} style={{
-                width: k === i ? 20 : 7, height: 7, borderRadius: 6, border: "none", cursor: "pointer", padding: 0,
-                background: k === i ? C.amber : C.line, transition: "all .3s" }} />
+              <button key={d.key} onClick={() => setI(k)} aria-label={d.title} style={{ width: k === i ? 22 : 7, height: 7, borderRadius: 6,
+                border: "none", cursor: "pointer", padding: 0, background: k === i ? L.amber : "#2A2F38", transition: "all .3s" }} />
             ))}
           </div>
         </div>
       </div>
-      <div style={{ textAlign: "center", font: `500 12px ${FB}`, color: C.mistDim, marginTop: 14 }}>
-        {paused ? "Paused" : "Tap the dots to switch screens"}
-      </div>
     </div>
   );
 }
-
-// mini satellite map with an animated driveway outline
 function DemoMap() {
   return (
     <div>
-      <div style={{ position: "relative", borderRadius: 12, overflow: "hidden", aspectRatio: "1.3", border: `1px solid ${C.line}` }}>
-        {/* satellite imagery reads the same in either mode */}
+      <div style={{ position: "relative", borderRadius: 12, overflow: "hidden", aspectRatio: "1.3", border: `1px solid ${L.line}` }}>
         <div style={{ position: "absolute", inset: 0, background: "linear-gradient(135deg,#2b3a2c,#38472f 45%,#28331f)" }} />
         <svg viewBox="0 0 130 100" preserveAspectRatio="xMidYMid slice" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}>
           <rect x="52" y="24" width="34" height="20" rx="1" fill="#5a4634" />
           <rect x="30" y="46" width="70" height="40" fill="#3a3f34" opacity=".6" />
-          <polygon points="40,52 62,52 62,84 40,84" fill={`${C.amber}22`} stroke={C.amber} strokeWidth="2"
-            strokeDasharray="200" strokeDashoffset="200" style={{ animation: "draw 2.2s ease forwards" }} />
-          <circle cx="40" cy="52" r="3" fill={C.amber} /><circle cx="62" cy="52" r="3" fill={C.amber} />
-          <circle cx="62" cy="84" r="3" fill={C.amber} /><circle cx="40" cy="84" r="3" fill={C.amber} />
+          <polygon points="40,52 62,52 62,84 40,84" fill={`${L.amber}26`} stroke={L.amber} strokeWidth="2"
+            strokeDasharray="200" strokeDashoffset="200" style={{ animation: "lp-draw 2.2s ease forwards" }} />
+          {[[40, 52], [62, 52], [62, 84], [40, 84]].map(([x, y]) => <circle key={`${x}${y}`} cx={x} cy={y} r="3" fill={L.amber} />)}
         </svg>
-        <div style={{ position: "absolute", bottom: 8, left: 8, background: C.glassStrong, borderRadius: 8,
-          padding: "5px 9px", font: `600 10px ${FB}`, color: C.ice }}>620 sq ft outlined</div>
+        <div style={{ position: "absolute", bottom: 8, left: 8, background: "rgba(10,12,16,.85)", borderRadius: 8, padding: "5px 9px" }}>
+          <Mono style={{ color: L.ice, fontSize: 9 }}>620 sq ft</Mono></div>
       </div>
-      <div style={{ font: `400 11px/1.45 ${FB}`, color: C.mist, marginTop: 10 }}>Tap the corners of your drive. No measuring, no phone calls.</div>
+      <div style={{ font: `400 11px/1.45 ${BODY}`, color: L.mist, marginTop: 10 }}>Tap the corners of your drive. No measuring, no phone calls.</div>
     </div>
   );
 }
-
 function Row({ l, v, strong }) {
   return <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "3px 0" }}>
-    <span style={{ font: `${strong ? 600 : 400} ${strong ? 13 : 12}px ${FB}`, color: strong ? C.ice : C.mist }}>{l}</span>
-    <span style={{ font: `${strong ? 700 : 500} ${strong ? 16 : 12}px ${strong ? FD : FB}`, color: C.ice }}>{v}</span>
+    <span style={{ font: `${strong ? 600 : 400} ${strong ? 13 : 12}px ${BODY}`, color: strong ? L.ice : L.mist }}>{l}</span>
+    <span style={{ font: `${strong ? 800 : 500} ${strong ? 20 : 12}px ${strong ? DISPLAY : MONO}`, color: L.ice }}>{v}</span>
   </div>;
 }
 function DemoPrice() {
-  // Mirrors the app: the customer names the offer; DRIFT only suggests (620 sq ft driveway).
-  const tiers = [["Standard", 42], ["Recommended", 48], ["Priority", 57]];
+  const tiers = [["Standard", 38], ["Recommended", 44], ["Priority", 51]];
   return (
     <div>
-      <div style={{ font: `600 12px ${FB}`, color: C.ice, marginBottom: 7 }}>What will you offer?</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 5 }}>
-        {tiers.map(([l, v], i) => (
-          <div key={l} style={{ borderRadius: 9, padding: "7px 6px", background: i === 1 ? C.amber + "18" : C.slate,
-            border: `1.5px solid ${i === 1 ? C.amber : C.line}` }}>
-            <div style={{ font: `600 8.5px ${FB}`, color: i === 1 ? C.amber : C.mist }}>{l}</div>
-            <div style={{ font: `700 15px ${FD}`, color: C.ice, marginTop: 1 }}>${v}</div>
+        {tiers.map(([l, v], k) => (
+          <div key={l} style={{ borderRadius: 9, padding: "7px 6px", background: k === 1 ? `${L.amber}1C` : "#15181E",
+            border: `1.5px solid ${k === 1 ? L.amber : "#262A33"}` }}>
+            <div style={{ font: `600 8.5px ${BODY}`, color: k === 1 ? L.amber : L.mist }}>{l}</div>
+            <div style={{ font: `800 18px ${DISPLAY}`, color: L.ice, marginTop: 1 }}>${v}</div>
           </div>
         ))}
       </div>
-      <div style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, marginTop: 8 }}>
-        <Row l="Your offer" v="$48" />
-        <Row l="Driver call-out" v="$10" />
-        <Row l="DRIFT fee" v="$5" />
-        <div style={{ height: 1, background: C.line, margin: "7px 0" }} />
-        <Row l="Total" v="$63" strong />
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8, font: `500 10px ${FB}`, color: C.push }}>
-          <EmojiIcon e="check" s={10} /> You set the price · charged when done
-        </div>
+      <div style={{ background: "#15181E", border: "1px solid #262A33", borderRadius: 12, padding: 12, marginTop: 8 }}>
+        <Row l="Your offer" v="$44" /><Row l="Driver call-out" v="$10" /><Row l="DRIFT fee" v="$5" />
+        <div style={{ height: 1, background: "#262A33", margin: "7px 0" }} />
+        <Row l="Total" v="$59" strong />
       </div>
-      <div style={{ marginTop: 8, background: C.amber, color: C.onAmber,
-        borderRadius: 11, padding: "10px 0", textAlign: "center", font: `600 13px ${FB}` }}>Send offer · $63</div>
+      <div style={{ marginTop: 8, background: L.amber, color: L.onAmber, borderRadius: 999, padding: "10px 0", textAlign: "center", font: `600 13px ${BODY}` }}>Send offer · $59</div>
     </div>
   );
 }
 function DemoTrack() {
   return (
     <div>
-      <div style={{ position: "relative", borderRadius: 12, overflow: "hidden", aspectRatio: "1.4", border: `1px solid ${C.line}`, background: C.mapBg }}>
+      <div style={{ position: "relative", borderRadius: 12, overflow: "hidden", aspectRatio: "1.4", border: "1px solid #262A33", background: "#11151C" }}>
         <svg viewBox="0 0 130 90" preserveAspectRatio="xMidYMid slice" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}>
-          {[18, 40, 62, 84, 106].map(x => <path key={`v${x}`} d={`M${x} 0 V90`} stroke={C.mapGrid} strokeWidth="1" />)}
-          {[15, 38, 61, 84].map(y => <path key={`h${y}`} d={`M0 ${y} H130`} stroke={C.mapGrid} strokeWidth="1" />)}
-          <path d="M12 74 Q 50 60 66 40 T 112 20" fill="none" stroke={C.plow} strokeWidth="2.4" strokeDasharray="4 4" opacity=".8" />
-          <circle cx="112" cy="20" r="5" fill={C.amber} />
-          <g style={{ animation: "truck 4s ease-in-out infinite" }}>
-            <g transform="translate(4,64)"><EmojiIcon e="pickup" s={18} color={C.ice} /></g>
-          </g>
+          {[18, 40, 62, 84, 106].map((x) => <path key={`v${x}`} d={`M${x} 0 V90`} stroke="#1D232D" strokeWidth="1" />)}
+          {[15, 38, 61, 84].map((y) => <path key={`h${y}`} d={`M0 ${y} H130`} stroke="#1D232D" strokeWidth="1" />)}
+          <path d="M12 74 Q 50 60 66 40 T 112 20" fill="none" stroke={L.steel} strokeWidth="2.4" strokeDasharray="4 4" opacity=".85" />
+          <circle cx="112" cy="20" r="5" fill={L.amber} />
+          <g style={{ animation: "lp-truck 4s ease-in-out infinite" }}><g transform="translate(4,64)"><EmojiIcon e="pickup" s={18} color={L.ice} /></g></g>
         </svg>
-        <div style={{ position: "absolute", top: 8, right: 8, display: "flex", alignItems: "center", gap: 5,
-          background: C.glassStrong, borderRadius: 8, padding: "5px 9px", font: `600 10px ${FB}`, color: C.ice }}>
-          <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.push }} /> On the way
+        <div style={{ position: "absolute", top: 8, right: 8, display: "flex", alignItems: "center", gap: 5, background: "rgba(10,12,16,.85)", borderRadius: 8, padding: "5px 9px" }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: L.good }} /><Mono style={{ color: L.ice, fontSize: 9 }}>On the way</Mono>
         </div>
       </div>
-      {/* stepper */}
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 14, position: "relative" }}>
-        <div style={{ position: "absolute", top: 9, left: 10, right: 10, height: 2, background: C.line }} />
-        <div style={{ position: "absolute", top: 9, left: 10, width: "55%", height: 2, background: C.amber }} />
+        <div style={{ position: "absolute", top: 9, left: 10, right: 10, height: 2, background: "#262A33" }} />
+        <div style={{ position: "absolute", top: 9, left: 10, width: "55%", height: 2, background: L.amber }} />
         {["Sent", "Accepted", "En route", "Done"].map((s, k) => (
           <div key={s} style={{ position: "relative", zIndex: 1, textAlign: "center", width: 48 }}>
-            <div style={{ width: 18, height: 18, borderRadius: "50%", margin: "0 auto",
-              background: k <= 2 ? C.amber : C.night2, border: `2px solid ${k <= 2 ? C.amber : C.line}`,
-              color: C.onAmber, display: "grid", placeItems: "center" }}>{k <= 2 ? <EmojiIcon e="check" s={9} strokeWidth={2.4} /> : null}</div>
-            <div style={{ font: `500 8px ${FB}`, color: k <= 2 ? C.ice : C.mistDim, marginTop: 4 }}>{s}</div>
+            <div style={{ width: 18, height: 18, borderRadius: "50%", margin: "0 auto", background: k <= 2 ? L.amber : "#15181E",
+              border: `2px solid ${k <= 2 ? L.amber : "#262A33"}`, color: L.onAmber, display: "grid", placeItems: "center" }}>
+              {k <= 2 ? <EmojiIcon e="check" s={9} strokeWidth={2.4} /> : null}</div>
+            <div style={{ font: `500 8px ${BODY}`, color: k <= 2 ? L.ice : L.dim, marginTop: 4 }}>{s}</div>
           </div>
         ))}
       </div>
@@ -264,7 +262,117 @@ function DemoTrack() {
   );
 }
 
-// ---------- sections ----------
+// ---------- scrolling hazard band ----------
+function Marquee() {
+  const words = ["No contracts", "Pay per storm", "Name your price", "Track it live", "Photo proof", "Local drivers"];
+  const run = [...words, ...words];
+  return (
+    <div aria-hidden style={{ position: "relative", background: L.amber, color: L.onAmber, overflow: "hidden", transform: "rotate(-1.2deg)",
+      margin: "0 -2%", boxShadow: `0 0 60px ${L.amber}33`, borderTop: "3px solid #111", borderBottom: "3px solid #111" }}>
+      <div className="lp-marquee" style={{ display: "flex", width: "max-content", padding: "14px 0" }}>
+        {[0, 1].map((dup) => (
+          <div key={dup} style={{ display: "flex", flexShrink: 0 }}>
+            {run.map((w, k) => (
+              <span key={`${dup}-${k}`} style={{ display: "inline-flex", alignItems: "center", gap: 26, paddingRight: 26,
+                font: `900 clamp(22px,3vw,34px)/1 ${DISPLAY}`, textTransform: "uppercase", letterSpacing: ".01em" }}>
+                {w}<EmojiIcon e="snowflake" s={20} color={L.onAmber} strokeWidth={2.4} />
+              </span>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------- section shell ----------
+function Section({ id, kicker, title, lead, children, style }) {
+  return (
+    <section id={id} className="lp-section" style={{ padding: "112px 22px", position: "relative", ...style }}>
+      <div style={{ maxWidth: 1120, margin: "0 auto" }}>
+        {kicker && <Mono style={{ color: L.amber }}>{kicker}</Mono>}
+        {title && <h2 style={{ font: `900 clamp(44px,6.4vw,80px)/.9 ${DISPLAY}`, textTransform: "uppercase", letterSpacing: "-.005em",
+          margin: "14px 0 18px", color: L.ice, maxWidth: 820 }}>{title}</h2>}
+        {lead && <p style={{ color: L.mist, maxWidth: 560, margin: "0 0 52px", font: `400 18px/1.55 ${BODY}` }}>{lead}</p>}
+        {children}
+      </div>
+    </section>
+  );
+}
+
+// ---------- Twin Ports service map (real relative positions) ----------
+const TOWNS = [
+  ["Duluth", 46.787, -92.100, "MN", true], ["Superior", 46.721, -92.104, "WI"], ["Hermantown", 46.807, -92.238, "MN"],
+  ["Proctor", 46.747, -92.225, "MN"], ["Esko", 46.707, -92.363, "MN"], ["Cloquet", 46.722, -92.459, "MN"],
+];
+function ServiceMap() {
+  const W = 640, H = 330;
+  const x = (lng) => ((lng + 92.53) / 0.56) * W;
+  const y = (lat) => ((46.875 - lat) / 0.21) * H;
+  // simplified western tip of Lake Superior (the "head of the lakes")
+  const shore = [[-92.115, 46.875], [-92.07, 46.83], [-92.085, 46.80], [-92.098, 46.772], [-92.08, 46.745],
+    [-92.04, 46.72], [-92.0, 46.705], [-91.97, 46.70]];
+  const lake = `M${shore.map(([a, b]) => `${x(a).toFixed(1)} ${y(b).toFixed(1)}`).join(" L")} L${W} ${y(46.70)} L${W} 0 Z`;
+  return (
+    <div style={{ position: "relative", borderRadius: 24, overflow: "hidden", border: `1px solid ${L.line}`,
+      background: `radial-gradient(120% 90% at 20% 30%, ${L.panel2}, ${L.bg2})` }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }} role="img"
+        aria-label="Service area: Duluth, Superior, Hermantown, Proctor, Esko and Cloquet">
+        <defs>
+          <pattern id="lpGrid" width="32" height="32" patternUnits="userSpaceOnUse">
+            <path d="M32 0H0V32" fill="none" stroke="rgba(170,195,230,.06)" strokeWidth="1" />
+          </pattern>
+          <linearGradient id="lpLake" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stopColor="#12243A" /><stop offset="1" stopColor="#0B1728" />
+          </linearGradient>
+        </defs>
+        <rect width={W} height={H} fill="url(#lpGrid)" />
+        <path d={lake} fill="url(#lpLake)" stroke={L.steel} strokeOpacity=".5" strokeWidth="1.5" />
+        <text className="lp-lake" x={W - 20} y={34} textAnchor="end" fill={L.steel} opacity=".75" style={{ font: `500 11px ${MONO}`, letterSpacing: ".18em" }}>LAKE SUPERIOR</text>
+        {/* coverage halo */}
+        <ellipse cx={x(-92.25)} cy={y(46.755)} rx={W * 0.36} ry={H * 0.33} fill={L.amber} opacity=".06" />
+        <ellipse cx={x(-92.25)} cy={y(46.755)} rx={W * 0.36} ry={H * 0.33} fill="none" stroke={L.amber} strokeOpacity=".35" strokeDasharray="3 7" />
+        {TOWNS.map(([n, lat, lng, st, hq]) => (
+          <g key={n} transform={`translate(${x(lng)},${y(lat)})`}>
+            <g className="lp-town">
+              <circle r={hq ? 14 : 10} fill={L.amber} opacity=".16" className={hq ? "lp-ping" : undefined} />
+              <circle r={hq ? 5.5 : 4} fill={L.amber} />
+              <text x={["Superior", "Hermantown"].includes(n) ? -10 : 10} y={n === "Superior" ? 20 : -10} textAnchor={["Superior", "Hermantown"].includes(n) ? "end" : "start"}
+                fill={L.ice} style={{ font: `800 ${hq ? 22 : 17}px ${DISPLAY}`, textTransform: "uppercase" }}>{n}
+                <tspan className="lp-st" fill={L.dim} dx="6" style={{ font: `500 10px ${MONO}` }}>{st}</tspan></text>
+            </g>
+          </g>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+// ---------- Aerial Lift Bridge (final band art) ----------
+function LiftBridge() {
+  const braces = (bx, w, y0, y1, n) => Array.from({ length: n }, (_, k) => {
+    const a = y0 + k * ((y1 - y0) / n), b = a + (y1 - y0) / n;
+    return <path key={`${bx}-${k}`} d={`M${bx} ${a} L${bx + w} ${b} M${bx + w} ${a} L${bx} ${b}`} />;
+  });
+  return (
+    <svg aria-hidden viewBox="120 96 960 390" preserveAspectRatio="xMidYMax meet"
+      style={{ display: "block", width: "100%", maxWidth: 760, height: "auto", margin: "0 auto", pointerEvents: "none" }}>
+      <g stroke={L.steel} strokeWidth="2" fill="none" opacity=".42">
+        <path d="M120 470 L1080 470" strokeWidth="2.6" />
+        <rect x="300" y="120" width="86" height="350" />{braces(300, 86, 130, 460, 7)}
+        <rect x="814" y="120" width="86" height="350" />{braces(814, 86, 130, 460, 7)}
+        <path d="M300 120 L900 120" strokeWidth="2.6" /><path d="M300 150 L900 150" />{braces(300, 600, 120, 150, 12)}
+        <path d="M386 250 L814 250" strokeWidth="3" /><path d="M386 276 L814 276" />{braces(386, 428, 250, 276, 10)}
+        {[430, 520, 600, 680, 770].map((bx) => <path key={bx} d={`M${bx} 150 L${bx} 250`} strokeWidth="1.4" />)}
+      </g>
+      {[[343, 118], [857, 118], [343, 250], [857, 250], [600, 122]].map(([cx, cy], k) => (
+        <circle key={k} cx={cx} cy={cy} r="4" fill={L.amber} className="lp-strobe" style={{ animationDelay: `${k * .4}s` }} />
+      ))}
+    </svg>
+  );
+}
+
+// ============================================================
 export default function Landing({ onStart, onLegal }) {
   const goDrive = () => { if (typeof window !== "undefined") window.location.href = "/drive.html"; };
   const [faqOpen, setFaqOpen] = useState(0);
@@ -278,231 +386,309 @@ export default function Landing({ onStart, onLegal }) {
     ["Who does the plowing?", "Independent local plow operators who use DRIFT to find jobs. They're not DRIFT employees — DRIFT is the app that connects you, handles booking and payment, and gives you live tracking and photos."],
   ];
 
+  const STEPS = [
+    ["pin", "Map your driveway", "Outline it on a satellite map once. No measuring, no quotes, no phone tag."],
+    ["cash", "Name your price", "When it snows, tap once and offer what the job's worth. We suggest a fair number from your driveway's size."],
+    ["pickup", "A local plow rolls out", "A driver nearby accepts and heads over. Watch the truck on the map and message them in the app."],
+    ["camera", "Pay when it's done", "Your card is only charged once it's cleared — with before and after photos on your receipt."],
+  ];
+
   return (
-    <div style={{ minHeight: "100vh", background: C.night, color: C.ice, fontFamily: FB, overflowX: "hidden",
-      WebkitFontSmoothing: "antialiased" }}>
+    <div style={{ minHeight: "100vh", background: L.bg, color: L.ice, fontFamily: BODY, overflowX: "hidden", WebkitFontSmoothing: "antialiased" }}>
       <style>{`
         html{scroll-behavior:smooth}
-        @keyframes snowfall{to{transform:translateY(105vh)}}
-        @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
-        @keyframes draw{to{stroke-dashoffset:0}}
-        @keyframes truck{0%{transform:translate(0,0)}100%{transform:translate(92px,-52px)}}
-        @keyframes rise{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
-        .rise{animation:rise .8s cubic-bezier(.22,1,.36,1) both}
-        @media(prefers-reduced-motion:reduce){*{animation:none!important}}
+        .lp-btn{transition:transform .18s cubic-bezier(.2,.8,.2,1),box-shadow .25s ease,background .2s ease}
+        .lp-btn:not(.lp-btn-ghost):hover{transform:translateY(-2px);box-shadow:0 12px 34px ${L.amber}55}
+        .lp-btn-ghost:hover{background:rgba(255,255,255,.06)!important;transform:translateY(-2px)}
+        .lp-btn:active{transform:scale(.97)!important}
+        .lp-btn:focus-visible,.lp-link:focus-visible{outline:2px solid ${L.amberHot};outline-offset:3px}
+        .lp-link{background:none;border:none;padding:0;cursor:pointer;color:${L.mist};font:500 14px ${BODY};transition:color .15s}
+        .lp-link:hover{color:${L.ice}}
+        @keyframes lp-fall{to{transform:translate3d(var(--drift),108vh,0)}}
+        @keyframes lp-fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+        @keyframes lp-draw{to{stroke-dashoffset:0}}
+        @keyframes lp-truck{0%{transform:translate(0,0)}100%{transform:translate(92px,-52px)}}
+        @keyframes lp-rise{from{opacity:0;transform:translateY(22px)}to{opacity:1;transform:none}}
+        @keyframes lp-clear{from{clip-path:inset(-20% -2% -20% 0)}to{clip-path:inset(-20% -2% -20% 104%)}}
+        @keyframes lp-sweep{0%{left:-6%;opacity:1}88%{opacity:1}100%{left:104%;opacity:0}}
+        @keyframes lp-strobe{0%,100%{opacity:1}50%{opacity:.25}}
+        @keyframes lp-beacon{0%,100%{opacity:.55;transform:scale(1)}50%{opacity:1;transform:scale(1.06)}}
+        @keyframes lp-marquee{to{transform:translateX(-50%)}}
+        @keyframes lp-ping{0%{transform:scale(1);opacity:.35}100%{transform:scale(2.8);opacity:0}}
+        @keyframes lp-live{0%,100%{box-shadow:0 0 0 0 rgba(255,176,32,.6)}50%{box-shadow:0 0 0 6px rgba(255,176,32,0)}}
+        .lp-rise{animation:lp-rise .9s cubic-bezier(.16,1,.3,1) both}
+        .lp-bank{animation:lp-clear 1.25s cubic-bezier(.65,0,.35,1) .55s both}
+        .lp-blade{left:-6%;animation:lp-sweep 1.25s cubic-bezier(.65,0,.35,1) .55s both}
+        .lp-strobe{animation:lp-strobe 1.1s ease-in-out infinite}
+        .lp-beacon{animation:lp-beacon 2.6s ease-in-out infinite}
+        .lp-marquee{animation:lp-marquee 38s linear infinite}
+        .lp-ping{transform-box:fill-box;transform-origin:center;animation:lp-ping 2.4s ease-out infinite}
+        .lp-live{animation:lp-live 2s ease-in-out infinite}
+        .lp-step{transition:transform .3s cubic-bezier(.2,.8,.2,1),border-color .3s}
+        .lp-step:hover{transform:translateY(-6px);border-color:${L.amber}66!important}
+        .lp-svc{transition:transform .3s cubic-bezier(.2,.8,.2,1),background .3s}
+        .lp-svc:hover{transform:translateY(-4px);background:${L.panel2}!important}
+        @media(prefers-reduced-motion:reduce){
+          *{animation:none!important;transition:none!important}
+          .lp-bank,.lp-blade,.lp-snow{display:none!important}
+        }
+        @media(max-width:900px){
+          .lp-hero{grid-template-columns:1fr!important;padding-top:44px!important;gap:56px!important}
+          .lp-driver{grid-template-columns:1fr!important}
+          .lp-money{grid-template-columns:1fr!important}
+        }
+        @media(max-width:640px){
+          .lp-section{padding:76px 20px!important}
+          .lp-steps{grid-template-columns:1fr!important}
+          .lp-svcs{grid-template-columns:1fr 1fr!important}
+          .lp-svc-hero{grid-column:1 / -1!important}
+          .lp-nav-links{display:none!important}
+          .lp-ctas>button{width:100%}
+          .lp-svcs{grid-template-columns:1fr!important}
+          .lp-svc{min-height:170px!important}
+          .lp-step-h{margin-top:44px!important}
+          .lp-pill{font-size:10px;letter-spacing:.03em}
+          .lp-town{transform:scale(1.8)}
+          .lp-st{display:none}
+          .lp-lake{font-size:20px!important}
+        }
       `}</style>
 
-      {/* NAV */}
-      <nav style={{ position: "sticky", top: 0, zIndex: 30, background: C.glass, backdropFilter: "saturate(180%) blur(20px)",
-        WebkitBackdropFilter: "saturate(180%) blur(20px)", borderBottom: `1px solid ${C.line}` }}>
-        <div style={{ maxWidth: 1080, margin: "0 auto", padding: "12px 22px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ width: 30, height: 30, borderRadius: 8, background: C.amber, color: C.onAmber, display: "grid", placeItems: "center" }}>
-              <EmojiIcon e="snowflake" s={17} strokeWidth={2} />
-            </div>
-            <div style={{ font: `700 19px ${FD}`, letterSpacing: ".04em", color: C.ice }}>DRIFT</div>
+      {/* ============ NAV ============ */}
+      <nav style={{ position: "sticky", top: 0, zIndex: 40, background: "rgba(6,8,12,.72)", backdropFilter: "saturate(160%) blur(18px)",
+        WebkitBackdropFilter: "saturate(160%) blur(18px)", borderBottom: `1px solid ${L.line}` }}>
+        <div style={{ maxWidth: 1120, margin: "0 auto", padding: "12px 22px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+          <a href="#top" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}>
+            <span style={{ position: "relative", width: 30, height: 30, borderRadius: 8, background: L.amber, color: L.onAmber, display: "grid", placeItems: "center" }}>
+              <EmojiIcon e="snowflake" s={17} strokeWidth={2.2} />
+            </span>
+            <span style={{ font: `900 26px/1 ${DISPLAY}`, letterSpacing: ".06em", color: L.ice }}>DRIFT</span>
+          </a>
+          <div className="lp-nav-links" style={{ display: "flex", gap: 26 }}>
+            <a className="lp-link" href="#how" style={{ textDecoration: "none" }}>How it works</a>
+            <a className="lp-link" href="#pricing" style={{ textDecoration: "none" }}>Pricing</a>
+            <a className="lp-link" href="#area" style={{ textDecoration: "none" }}>Service area</a>
+            <button className="lp-link" onClick={goDrive}>Drive with us</button>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <button onClick={goDrive} className="nav-drive" style={{ background: "transparent", border: "none", color: C.mist,
-              font: `500 14px ${FB}`, padding: "9px 10px", cursor: "pointer", whiteSpace: "nowrap" }}>Drive with us</button>
-            <Btn onClick={onStart} style={{ padding: "9px 16px", fontSize: 14 }}>Get started</Btn>
-          </div>
+          <Btn onClick={onStart} style={{ padding: "10px 18px", fontSize: 14 }}>Get started</Btn>
         </div>
       </nav>
 
-      {/* HERO */}
-      <header style={{ position: "relative", overflow: "hidden" }}>
-        <LiftBridge />
-        <Snow />
-        <div style={{ position: "relative", zIndex: 3, maxWidth: 1080, margin: "0 auto", padding: "72px 22px 64px",
-          display: "grid", gridTemplateColumns: "1.05fr .95fr", gap: 56, alignItems: "center" }} className="hero-grid">
-          <div className="rise">
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: C.slate, border: `1px solid ${C.line}`,
-              borderRadius: 999, padding: "6px 13px", font: `500 13px ${FB}`, color: C.mist }}>
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: C.push }} /> Duluth · Superior · Cloquet · Hermantown
+      {/* ============ HERO ============ */}
+      <header id="top" style={{ position: "relative", overflow: "hidden",
+        background: `radial-gradient(70% 60% at 85% 20%, ${L.amber}14, transparent 60%), radial-gradient(90% 80% at 0% 100%, #0E1A2B, transparent 70%), ${L.bg}` }}>
+        <Snow count={46} />
+        <Snow count={16} near />
+        {/* ground: fresh snow line */}
+        <div aria-hidden style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 90,
+          background: `linear-gradient(180deg, transparent, ${L.bg} 85%)`, zIndex: 1 }} />
+        <div className="lp-hero" style={{ position: "relative", zIndex: 2, maxWidth: 1120, margin: "0 auto", padding: "72px 22px 96px",
+          display: "grid", gridTemplateColumns: "1.25fr .75fr", gap: 40, alignItems: "center" }}>
+          <div>
+            <div className="lp-rise" style={{ display: "inline-flex", alignItems: "center", gap: 10, padding: "7px 14px", borderRadius: 999,
+              border: `1px solid ${L.line}`, background: "rgba(16,21,30,.6)" }}>
+              <span className="lp-strobe" style={{ width: 7, height: 7, borderRadius: "50%", background: L.amber }} />
+              <Mono style={{ color: L.mist }}><span className="lp-pill">Duluth · Superior · Hermantown · Cloquet</span></Mono>
             </div>
-            <h1 style={{ font: `700 clamp(42px,6.2vw,68px)/1.04 ${FD}`, letterSpacing: "-0.02em", margin: "22px 0 18px", color: C.ice }}>
-              Your driveway,<br /><span style={{ color: C.amber }}>plowed on demand.</span>
-            </h1>
-            <p style={{ font: `400 clamp(17px,2vw,20px)/1.5 ${FB}`, color: C.mist, maxWidth: 480, margin: "0 0 32px" }}>
-              No contracts. Map your property, name your price, and track your plow live. Pay only when it actually snows.
+            <PlowedHeadline />
+            <p className="lp-rise" style={{ animationDelay: "1.2s", font: `400 clamp(17px,1.8vw,20px)/1.55 ${BODY}`, color: L.mist, maxWidth: 520, margin: "0 0 34px" }}>
+              On-demand snow removal from local plow operators. Map your property once, name your price every storm,
+              track the truck live — and pay only when it's done. <span style={{ color: L.ice }}>No contracts. Ever.</span>
             </p>
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }} className="hero-ctas">
-              <Btn big onClick={onStart}>Get my driveway plowed →</Btn>
-              <Btn big ghost onClick={goDrive}>I have a plow — earn</Btn>
+            <div className="lp-rise lp-ctas" style={{ animationDelay: "1.35s", display: "flex", gap: 12, flexWrap: "wrap" }}>
+              <Btn big onClick={onStart}>Get my driveway plowed <span aria-hidden>→</span></Btn>
+              <Btn big ghost onClick={goDrive}><EmojiIcon e="plowtruck" s={18} color={L.amber} /> I have a plow</Btn>
             </div>
-            <div className="hero-strip" style={{ display: "flex", gap: 22, flexWrap: "wrap", marginTop: 32, font: `500 14px ${FB}`, color: C.mist }}>
-              {[["snowflake", "Pay per storm"], ["pin", "Local drivers"], ["camera", "Photo proof"]].map(([ic, t]) => (
-                <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-                  <EmojiIcon e={ic} s={15} color={C.mistDim} /> {t}
-                </span>
-              ))}
-            </div>
+            <ForecastStrip />
           </div>
-          <div className="rise" style={{ animationDelay: ".15s" }}><PhoneDemo /></div>
+          <div className="lp-rise" style={{ animationDelay: ".3s" }}><PhoneDemo /></div>
         </div>
       </header>
 
-      {/* TRUST BAR */}
-      <section style={{ borderTop: `1px solid ${C.line}`, borderBottom: `1px solid ${C.line}`, background: C.slate }}>
-        <div style={{ maxWidth: 1080, margin: "0 auto", padding: "24px 22px", display: "flex", gap: "16px 36px", flexWrap: "wrap", justifyContent: "center" }}>
-          {[
-            [ICONS.noContract, "No contracts"],
-            [ICONS.lock, "Secure card payments"],
-            [ICONS.camera, "Before & after photos"],
-            [ICONS.pin, "Local plow operators"],
-          ].map(([p, label], k) => (
-            <div key={k} style={{ display: "flex", alignItems: "center", gap: 9 }}>
-              <span style={{ color: C.mistDim, display: "grid", placeItems: "center" }}><Icon path={p} size={20} /></span>
-              <span style={{ font: `500 14px ${FB}`, color: C.ice }}>{label}</span>
-            </div>
-          ))}
-        </div>
-      </section>
+      {/* ============ MARQUEE ============ */}
+      <div style={{ position: "relative", zIndex: 3, padding: "10px 0 0" }}><Marquee /></div>
 
-      {/* HOW IT WORKS */}
-      <Section title="From flurry to cleared in four taps" lead="Set it up once. After that it's one tap away.">
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 16 }}>
-          {[
-            ["pin", "Map your driveway", "Outline it on a satellite map. No measuring."],
-            ["snowflake", "Name your price", "Tap when it snows and offer what the job is worth to you."],
-            ["pickup", "A local plow rolls out", "A driver accepts, heads over, and you track them live."],
-            ["camera", "Pay only when plowed", "Charged only when it's done, with before and after photos."],
-          ].map(([ic, t, d], k) => (
-            <div key={t} style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 16, padding: "24px 22px" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <EmojiIcon e={ic} s={26} color={C.amber} />
-                <span style={{ font: `500 13px ${FB}`, color: C.mistDim }}>{k + 1}</span>
-              </div>
-              <h3 style={{ font: `600 17px ${FB}`, letterSpacing: "-0.01em", margin: "18px 0 6px", color: C.ice }}>{t}</h3>
-              <p style={{ margin: 0, color: C.mist, font: `400 14px/1.5 ${FB}` }}>{d}</p>
+      {/* ============ HOW IT WORKS ============ */}
+      <Section id="how" kicker="How it works" title={<>Flurry to <span style={{ color: L.amber }}>cleared</span> in four taps.</>}
+        lead="Set your place up once. After that, every storm is one tap away.">
+        <div className="lp-steps" style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, position: "relative" }}>
+          {STEPS.map(([ic, t, d], k) => (
+            <div key={t} className="lp-step" style={{ position: "relative", background: L.panel, border: `1px solid ${L.line}`, borderRadius: 22,
+              padding: "26px 22px 28px", overflow: "hidden" }}>
+              <div aria-hidden style={{ position: "absolute", right: -6, top: -18, font: `900 128px/1 ${DISPLAY}`, color: "transparent",
+                WebkitTextStroke: `1.5px ${k === 0 ? L.amber : L.lineHard}`, opacity: k === 0 ? .55 : 1 }}>{String(k + 1).padStart(2, "0")}</div>
+              <div style={{ position: "relative", width: 46, height: 46, borderRadius: 14, background: `${L.amber}16`, border: `1px solid ${L.amber}40`,
+                display: "grid", placeItems: "center" }}><EmojiIcon e={ic} s={23} color={L.amber} /></div>
+              <h3 className="lp-step-h" style={{ position: "relative", font: `800 28px/1 ${DISPLAY}`, textTransform: "uppercase", margin: "74px 0 10px", color: L.ice }}>{t}</h3>
+              <p style={{ position: "relative", margin: 0, color: L.mist, font: `400 15px/1.55 ${BODY}` }}>{d}</p>
             </div>
           ))}
         </div>
       </Section>
 
-      {/* SERVICES */}
-      <Section title="Built for the whole storm" lead="Plowing comes first, with backup for everything else winter drops on you.">
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 16 }}>
+      {/* ============ PRICING / WHERE THE MONEY GOES ============ */}
+      <Section id="pricing" kicker="Pricing" title={<>You set the price.<br /><span style={{ color: L.amber }}>Your driver keeps most of it.</span></>}
+        style={{ background: `linear-gradient(180deg, ${L.bg}, ${L.bg2} 30%, ${L.bg2} 70%, ${L.bg})` }}>
+        <div className="lp-money" style={{ display: "grid", gridTemplateColumns: "1fr 1.1fr", gap: 22, alignItems: "stretch" }}>
+          {/* receipt */}
+          <div style={{ background: L.snow, color: "#10141B", borderRadius: 22, padding: "30px 28px 26px", position: "relative",
+            boxShadow: "0 30px 70px rgba(0,0,0,.45)", transform: "rotate(-1deg)" }}>
+            <Mono style={{ color: "#6B7686" }}>Example · 2-car driveway</Mono>
+            <div style={{ font: `900 44px/1 ${DISPLAY}`, textTransform: "uppercase", margin: "10px 0 18px" }}>Your receipt</div>
+            {[["Your offer", "$38"], ["Driver call-out fee", "$10"], ["DRIFT booking fee", "$5"]].map(([l, v]) => (
+              <div key={l} style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px dashed #C9D2DD",
+                font: `500 16px ${BODY}` }}><span>{l}</span><span style={{ font: `500 16px ${MONO}` }}>{v}</span></div>
+            ))}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "16px 0 4px" }}>
+              <span style={{ font: `600 17px ${BODY}` }}>Total</span><span style={{ font: `900 46px/1 ${DISPLAY}` }}>$53</span>
+            </div>
+            <div style={{ font: `500 13px/1.5 ${BODY}`, color: "#4B5563", marginTop: 8 }}>
+              Charged only after the job is done. No surge fees, no subscriptions, nothing hidden.</div>
+            {/* torn edge */}
+            <svg aria-hidden viewBox="0 0 200 10" preserveAspectRatio="none" style={{ position: "absolute", left: 0, right: 0, bottom: -9, width: "100%", height: 10 }}>
+              <path d={`M0 0 ${Array.from({ length: 20 }, (_, i) => `L${i * 10 + 5} 9 L${i * 10 + 10} 0`).join(" ")} Z`} fill={L.snow} />
+            </svg>
+          </div>
+          {/* split */}
+          <div style={{ background: L.panel, border: `1px solid ${L.line}`, borderRadius: 22, padding: "30px 28px", display: "flex", flexDirection: "column" }}>
+            <Mono style={{ color: L.dim }}>Where your $53 goes</Mono>
+            <div style={{ display: "flex", height: 64, borderRadius: 14, overflow: "hidden", margin: "18px 0 22px", border: `1px solid ${L.line}` }}>
+              <div style={{ flex: 40, background: `linear-gradient(90deg, ${L.amber}, ${L.amberHot})`, display: "flex", alignItems: "center", padding: "0 16px" }}>
+                <span style={{ font: `900 30px ${DISPLAY}`, color: L.onAmber }}>$40</span></div>
+              <div style={{ flex: 13, background: "#2A3446", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <span style={{ font: `800 20px ${DISPLAY}`, color: L.mist }}>$13</span></div>
+            </div>
+            <div style={{ display: "grid", gap: 16, flex: 1 }}>
+              <div style={{ display: "flex", gap: 14 }}>
+                <span style={{ width: 12, height: 12, borderRadius: 3, background: L.amber, marginTop: 5, flexShrink: 0 }} />
+                <div><div style={{ font: `600 16px ${BODY}`, color: L.ice }}>Your driver · $40</div>
+                  <div style={{ font: `400 14px/1.5 ${BODY}`, color: L.mist, marginTop: 2 }}>80% of your offer plus the full $10 call-out fee. And every dollar you tip.</div></div>
+              </div>
+              <div style={{ display: "flex", gap: 14 }}>
+                <span style={{ width: 12, height: 12, borderRadius: 3, background: "#4A5A74", marginTop: 5, flexShrink: 0 }} />
+                <div><div style={{ font: `600 16px ${BODY}`, color: L.ice }}>DRIFT · $13</div>
+                  <div style={{ font: `400 14px/1.5 ${BODY}`, color: L.mist, marginTop: 2 }}>The $5 booking fee plus 20% of the offer. Covers card processing, the app, and support.</div></div>
+              </div>
+            </div>
+            <div style={{ marginTop: 22, paddingTop: 18, borderTop: `1px solid ${L.line}`, font: `400 14px/1.5 ${BODY}`, color: L.mist }}>
+              Big storm and in a hurry? <span style={{ color: L.ice }}>Offer more</span> — higher offers get picked up first.</div>
+          </div>
+        </div>
+      </Section>
+
+      {/* ============ SERVICES ============ */}
+      <Section kicker="Services" title="Built for the whole storm." lead="Plowing comes first — with backup for everything else a Duluth winter throws at you.">
+        <div className="lp-svcs" style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", gap: 14 }}>
           {[
-            ["plowtruck", "Driveway plowing", "Cleared to the apron", true],
-            ["broom", "Sidewalk clearing", "Sidewalks and walkways"],
-            ["car", "Car dig-outs", "Freed from the berm"],
-            ["battery", "Roadside jump-start", "Dead battery help"],
+            ["plowtruck", "Driveway plowing", "Cleared edge to edge, exactly how you mapped it.", true],
+            ["broom", "Sidewalks", "Walks and steps, before the city's 24-hour deadline."],
+            ["car", "Car dig-outs", "Freed from the berm the city plow left behind."],
+            ["battery", "Jump-starts", "Dead battery at -20°? Someone nearby can help."],
           ].map(([ic, t, d, hero]) => (
-            <div key={t} style={{ background: C.slate, border: `1px solid ${hero ? C.amber : C.line}`, borderRadius: 16, padding: "22px 20px" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                <EmojiIcon e={ic} s={24} color={hero ? C.amber : C.ice} />
-                
+            <div key={t} className={`lp-svc${hero ? " lp-svc-hero" : ""}`} style={{ position: "relative", overflow: "hidden", borderRadius: 22, padding: hero ? "30px 28px" : "26px 22px",
+              background: hero ? `linear-gradient(150deg, ${L.amber}22, ${L.panel} 55%)` : L.panel, border: `1px solid ${hero ? L.amber + "55" : L.line}`,
+              minHeight: 230, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+              <EmojiIcon e={ic} s={hero ? 40 : 30} color={hero ? L.amber : L.ice} />
+              <div>
+                <div style={{ font: `800 ${hero ? 36 : 26}px/1 ${DISPLAY}`, textTransform: "uppercase", color: L.ice }}>{t}</div>
+                <div style={{ font: `400 14px/1.5 ${BODY}`, color: L.mist, marginTop: 8 }}>{d}</div>
               </div>
-              <div style={{ font: `600 15px ${FB}`, marginTop: 14, color: C.ice }}>{t}</div>
-              <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 4 }}>{d}</div>
             </div>
           ))}
         </div>
       </Section>
 
-      {/* WHY */}
-      <Section>
-        <div style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 20, padding: "44px 32px" }} className="why-card">
-          <h2 style={{ font: `700 clamp(26px,4vw,34px)/1.1 ${FD}`, letterSpacing: "-0.02em", textAlign: "center", margin: "0 0 10px", color: C.ice }}>Why DRIFT</h2>
-          <p style={{ textAlign: "center", color: C.mist, margin: "0 auto 36px", maxWidth: 520, font: `400 16px/1.5 ${FB}` }}>Honest, local, and built so you never think about snow again.</p>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))", gap: "28px 32px" }}>
-            {[
-              ["No contracts, ever", "Pay per storm. No snow, no charge, nothing to cancel."],
-              ["You set the price", "Offer what the job is worth to you — we suggest a fair number from your driveway's size. No hidden fees."],
-              ["Watch your driver", "Live map tracking and in-app messaging, start to finish."],
-              ["Proof it's done", "Before and after photos on every job."],
-              ["Real local drivers", "People from around Duluth, not a faceless call center."],
-              ["Plowing, sidewalks and more", "Driveways, walks, dig-outs and jump-starts from the same app."],
-            ].map(([t, d]) => (
-              <div key={t} style={{ display: "flex", gap: 12 }}>
-                <span style={{ color: C.push, flexShrink: 0, marginTop: 1 }}><Icon path={ICONS.check} size={18} /></span>
-                <div><div style={{ font: `600 15px ${FB}`, color: C.ice }}>{t}</div>
-                  <div style={{ font: `400 14px/1.5 ${FB}`, color: C.mist, marginTop: 3 }}>{d}</div></div>
+      {/* ============ DRIVERS ============ */}
+      <section className="lp-section" style={{ padding: "40px 22px 112px" }}>
+        <div className="lp-driver" style={{ maxWidth: 1120, margin: "0 auto", display: "grid", gridTemplateColumns: "1.1fr .9fr", gap: 0,
+          borderRadius: 28, overflow: "hidden", border: `1px solid ${L.amber}44`, background: L.panel }}>
+          <div style={{ padding: "54px 44px", position: "relative" }}>
+            {/* hazard stripe */}
+            <div aria-hidden style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 8,
+              background: `repeating-linear-gradient(-45deg, ${L.amber} 0 10px, #111 10px 20px)` }} />
+            <Mono style={{ color: L.amber }}>For drivers</Mono>
+            <h2 style={{ font: `900 clamp(44px,6vw,76px)/.88 ${DISPLAY}`, textTransform: "uppercase", margin: "14px 0 18px" }}>
+              Got a plow?<br /><span style={{ color: L.amber }}>Get paid for it.</span></h2>
+            <p style={{ font: `400 17px/1.55 ${BODY}`, color: L.mist, maxWidth: 440, margin: "0 0 30px" }}>
+              Already clearing your own drive? Take jobs from your neighbors when it snows. Go online when you want, pick the offers you like, get paid through Stripe.</p>
+            <Btn big onClick={goDrive}>Start driving <span aria-hidden>→</span></Btn>
+          </div>
+          <div style={{ background: L.bg2, borderLeft: `1px solid ${L.line}`, padding: "44px 36px", display: "grid", gap: 14, alignContent: "center" }}>
+            {[["80%", "of every offer you accept"], ["+$10", "call-out fee on every job"], ["100%", "of your tips"], ["$0", "to sign up · you're your own boss"]].map(([big, small]) => (
+              <div key={small} style={{ display: "flex", alignItems: "baseline", gap: 16, paddingBottom: 14, borderBottom: `1px solid ${L.line}` }}>
+                <span style={{ font: `900 52px/1 ${DISPLAY}`, color: L.amber, minWidth: 118 }}>{big}</span>
+                <span style={{ font: `500 16px/1.35 ${BODY}`, color: L.ice }}>{small}</span>
               </div>
             ))}
           </div>
         </div>
+      </section>
+
+      {/* ============ SERVICE AREA ============ */}
+      <Section id="area" kicker="Service area" title="Head of the Lakes." lead="On-demand snow removal across the Twin Ports and the towns around them."
+        style={{ paddingTop: 40 }}>
+        <ServiceMap />
       </Section>
 
-      {/* SERVICE AREA */}
-      <Section title="Serving the Twin Ports" lead="On-demand snow removal across Duluth, Superior, and the towns around them.">
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "center" }}>
-          {["Duluth, MN", "Hermantown, MN", "Cloquet, MN", "Esko, MN", "Proctor, MN", "Superior, WI"].map(t => (
-            <div key={t} style={{ display: "flex", alignItems: "center", gap: 7, background: C.slate, border: `1px solid ${C.line}`,
-              borderRadius: 999, padding: "10px 16px", font: `500 14px ${FB}`, color: C.ice }}>
-              <span style={{ color: C.mistDim, display: "grid" }}><Icon path={ICONS.pin} size={16} /></span>{t}
-            </div>
-          ))}
-        </div>
-      </Section>
-
-      {/* FAQ (matches JSON-LD in index.html for rich results) — one grouped list, hairline rows */}
-      <Section title="Questions, answered" lead="The things people ask before their first plow.">
-        <div style={{ maxWidth: 720, margin: "0 auto", background: C.slate, border: `1px solid ${C.line}`, borderRadius: 16, overflow: "hidden" }}>
+      {/* ============ FAQ ============ */}
+      <Section kicker="FAQ" title="Questions, answered." style={{ paddingTop: 40 }}>
+        <div style={{ maxWidth: 820, borderTop: `1px solid ${L.lineHard}` }}>
           {FAQ.map(([q, a], k) => {
             const open = faqOpen === k;
             return (
-              <div key={k} style={{ borderTop: k ? `1px solid ${C.line}` : "none" }}>
-                <button onClick={() => setFaqOpen(open ? -1 : k)} aria-expanded={open} style={{ width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16,
-                  background: "none", border: "none", cursor: "pointer", padding: "18px 22px", textAlign: "left", color: C.ice, font: `600 15px ${FB}` }}>
-                  <span>{q}</span>
-                  <span aria-hidden style={{ color: C.mistDim, fontSize: 22, fontWeight: 300, lineHeight: 1, transform: open ? "rotate(45deg)" : "none", transition: "transform .2s", flexShrink: 0 }}>+</span>
+              <div key={k} style={{ borderBottom: `1px solid ${L.lineHard}` }}>
+                <button onClick={() => setFaqOpen(open ? -1 : k)} aria-expanded={open} style={{ width: "100%", display: "flex", alignItems: "center", gap: 18,
+                  background: "none", border: "none", cursor: "pointer", padding: "24px 0", textAlign: "left", color: L.ice }}>
+                  <Mono style={{ color: open ? L.amber : L.dim, flexShrink: 0 }}>{String(k + 1).padStart(2, "0")}</Mono>
+                  <span style={{ flex: 1, font: `600 clamp(17px,2vw,20px)/1.3 ${BODY}` }}>{q}</span>
+                  <span aria-hidden style={{ width: 34, height: 34, borderRadius: "50%", border: `1px solid ${open ? L.amber : L.lineHard}`, flexShrink: 0,
+                    display: "grid", placeItems: "center", color: open ? L.amber : L.mist, fontSize: 20, fontWeight: 300,
+                    transform: open ? "rotate(45deg)" : "none", transition: "transform .25s, border-color .25s" }}>+</span>
                 </button>
-                {open && <div style={{ padding: "0 22px 20px", font: `400 15px/1.55 ${FB}`, color: C.mist, animation: "fadeUp .25s ease" }}>{a}</div>}
+                {open && <div style={{ padding: "0 52px 26px 50px", font: `400 16px/1.6 ${BODY}`, color: L.mist, animation: "lp-fadeUp .3s ease" }}>{a}</div>}
               </div>
             );
           })}
         </div>
       </Section>
 
-      {/* FINAL CTA — snow art on its own fixed dark band so it reads the same in light mode */}
-      <section style={{ padding: "24px 22px 88px" }}>
-        <div style={{ position: "relative", overflow: "hidden", maxWidth: 1080, margin: "0 auto", textAlign: "center",
-          background: ART_BG, border: `1px solid ${ART_LINE}`, borderRadius: 24, padding: "72px 24px" }}>
-          <Snow color={ART_TEXT} max={0.55} />
-          <div style={{ position: "relative", zIndex: 2, maxWidth: 600, margin: "0 auto" }}>
-            <h2 style={{ font: `700 clamp(30px,5vw,46px)/1.08 ${FD}`, letterSpacing: "-0.02em", margin: "0 0 14px", color: ART_TEXT }}>Snow's coming. Beat the rush.</h2>
-            <p style={{ color: ART_TEXT_DIM, font: `400 17px/1.5 ${FB}`, margin: "0 0 32px" }}>Set up your property in two minutes. Free until you book your first plow.</p>
-            <Btn big onClick={onStart}>Get started →</Btn>
+      {/* ============ FINAL CTA ============ */}
+      <section style={{ padding: "20px 22px 96px" }}>
+        <div style={{ position: "relative", overflow: "hidden", maxWidth: 1120, margin: "0 auto", borderRadius: 30, minHeight: 460,
+          background: `radial-gradient(60% 70% at 50% 0%, ${L.amber}1F, transparent 70%), linear-gradient(180deg, #0B1220, #06080C)`,
+          border: `1px solid ${L.line}`, textAlign: "center", padding: "80px 24px 0" }}>
+          <Snow count={36} />
+          <div style={{ position: "relative", zIndex: 2, maxWidth: 720, margin: "0 auto" }}>
+            <Mono style={{ color: L.amber }}>Duluth, MN</Mono>
+            <h2 style={{ font: `900 clamp(52px,9vw,112px)/.86 ${DISPLAY}`, textTransform: "uppercase", margin: "14px 0 18px" }}>
+              Snow's coming.<br /><span style={{ color: L.amber }}>Beat the rush.</span></h2>
+            <p style={{ color: L.mist, font: `400 18px/1.55 ${BODY}`, margin: "0 auto 32px", maxWidth: 480 }}>
+              Set up your property in two minutes. It's free until you book your first plow.</p>
+            <Btn big onClick={onStart}>Get started <span aria-hidden>→</span></Btn>
           </div>
+          <div style={{ position: "relative", zIndex: 1, marginTop: 56 }}><LiftBridge /></div>
+          <div aria-hidden style={{ height: 34, background: "#0B1728", borderTop: `1px solid ${L.steel}55`, margin: "0 -24px" }} />
         </div>
       </section>
 
-      {/* FOOTER */}
-      <footer style={{ borderTop: `1px solid ${C.line}`, padding: "32px 22px 40px", textAlign: "center", color: C.mistDim, font: `400 13px ${FB}` }}>
-        <div style={{ marginBottom: 12, display: "flex", gap: 24, justifyContent: "center", flexWrap: "wrap" }}>
-          <button onClick={onStart} style={{ background: "none", border: "none", padding: 0, color: C.mist, cursor: "pointer", font: `500 14px ${FB}` }}>Get a plow</button>
-          <button onClick={goDrive} style={{ background: "none", border: "none", padding: 0, color: C.mist, cursor: "pointer", font: `500 14px ${FB}` }}>Drive with DRIFT</button>
+      {/* ============ FOOTER ============ */}
+      <footer style={{ borderTop: `1px solid ${L.line}`, padding: "40px 22px 48px" }}>
+        <div style={{ maxWidth: 1120, margin: "0 auto", display: "flex", flexWrap: "wrap", gap: 28, justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div style={{ maxWidth: 360 }}>
+            <div style={{ font: `900 30px/1 ${DISPLAY}`, letterSpacing: ".06em" }}>DRIFT</div>
+            <p style={{ font: `400 13px/1.55 ${BODY}`, color: L.dim, margin: "10px 0 0" }}>
+              The app that connects you with independent local plow operators. Duluth, MN ·{" "}
+              <a href="mailto:support@driftplowing.com" style={{ color: L.mist }}>support@driftplowing.com</a></p>
+          </div>
+          <div style={{ display: "flex", gap: "12px 26px", flexWrap: "wrap" }}>
+            <button className="lp-link" onClick={onStart}>Get a plow</button>
+            <button className="lp-link" onClick={goDrive}>Drive with DRIFT</button>
+            {[["customerTerms", "Terms"], ["customerRelease", "Release & Waiver"], ["driverAgreement", "Driver Agreement"]].map(([id, label]) => (
+              <button key={id} className="lp-link" onClick={() => onLegal && onLegal(id)}>{label}</button>
+            ))}
+          </div>
         </div>
-        <div style={{ marginBottom: 12, display: "flex", gap: 24, justifyContent: "center", flexWrap: "wrap" }}>
-          {[["customerTerms", "Terms"], ["customerRelease", "Release & Waiver"], ["driverAgreement", "Driver Agreement"]].map(([id, label]) => (
-            <button key={id} onClick={() => onLegal && onLegal(id)} style={{ background: "none", border: "none", padding: 0, color: C.mist, cursor: "pointer", font: `500 14px ${FB}` }}>{label}</button>
-          ))}
-        </div>
-        DRIFT · The app that connects you with independent local plow operators · Duluth, MN
       </footer>
-
-      <style>{`
-        @media(max-width:820px){.hero-bridge{display:none}}
-        @media(max-width:820px){.hero-grid{grid-template-columns:1fr!important;text-align:center;padding-top:52px!important}.hero-grid p{margin-left:auto;margin-right:auto}.hero-ctas,.hero-strip{justify-content:center}}
-        @media(max-width:600px){.lp-section{padding:56px 20px!important}}
-        @media(max-width:520px){.why-card{padding:36px 20px!important}}
-        @media(max-width:430px){.nav-drive{display:none}}
-      `}</style>
     </div>
-  );
-}
-
-function Section({ title, lead, children }) {
-  return (
-    <section style={{ padding: "80px 22px" }} className="lp-section">
-      <div style={{ maxWidth: 1080, margin: "0 auto" }}>
-        {title && <h2 style={{ font: `700 clamp(26px,4vw,36px)/1.1 ${FD}`, letterSpacing: "-0.02em", textAlign: "center", margin: "0 0 12px", color: C.ice }}>{title}</h2>}
-        {lead && <p style={{ textAlign: "center", color: C.mist, maxWidth: 560, margin: "0 auto 40px", font: `400 17px/1.5 ${FB}` }}>{lead}</p>}
-        {children}
-      </div>
-    </section>
   );
 }
