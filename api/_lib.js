@@ -8,6 +8,7 @@
 //   CRON_SECRET                any long random string       (protects the nightly cleanup)
 //   VITE_SUPABASE_URL          already set for sign-in
 import Stripe from "stripe";
+import webpush from "web-push";
 import { createClient } from "@supabase/supabase-js";
 
 // STRIPE_API_BASE is only for local testing against a fake Stripe server.
@@ -119,6 +120,52 @@ export async function markAuthorized(job, pi) {
     payment_method_id: typeof pi.payment_method === "string" ? pi.payment_method : pi.payment_method?.id,
     expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
   });
+  await announceJob(updated); // the offer is now visible — ring the drivers
   return { authorized: true, job: updated };
+}
+
+// ---------- job alerts (push notifications to online drivers) ----------
+// VITE_VAPID_PUBLIC_KEY + VAPID_PRIVATE_KEY in Vercel (see DRIFT-ALERT-KEYS.txt).
+const VAPID_PUBLIC = process.env.VITE_VAPID_PUBLIC_KEY || process.env.VAPID_PUBLIC_KEY;
+const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY;
+const VAPID_SUBJECT = `mailto:${(process.env.OWNER_EMAILS || "support@driftplow.com").split(",")[0].trim()}`;
+if (VAPID_PUBLIC && VAPID_PRIVATE) webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC, VAPID_PRIVATE);
+
+// Send "New plow request" to every online driver, once per job. Never throws.
+export async function announceJob(job) {
+  try {
+    if (!admin || !VAPID_PUBLIC || !VAPID_PRIVATE || !job || job.announced_at) return 0;
+    const { data: claimed } = await admin.from("jobs").update({ announced_at: new Date().toISOString() })
+      .eq("id", job.id).is("announced_at", null).select("id");
+    if (!claimed?.length) return 0; // someone else already announced it
+    const { data: drivers } = await admin.from("profiles").select("id")
+      .eq("is_driver", true).eq("is_online", true).neq("id", job.customer_id);
+    const ids = (drivers || []).map((d) => d.id);
+    if (!ids.length) return 0;
+    const { data: subs } = await admin.from("push_subscriptions").select("*").in("user_id", ids);
+    const pay = Math.round(Number(job.driver_pay || 0));
+    const kind = { driveway: "Driveway plow", sidewalk: "Sidewalk", digout: "Car dig-out", jumpstart: "Jump-start" }[job.job_type] || "Snow job";
+    const payload = JSON.stringify({
+      title: `New plow request · $${pay}`,
+      body: `${kind}${job.address ? ` · ${job.address}` : ""} — open DRIFT to accept`,
+      tag: `job-${job.id}`, url: "/",
+    });
+    let sent = 0;
+    await Promise.all((subs || []).map(async (s) => {
+      try {
+        await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
+          payload, { TTL: 300, urgency: "high" });
+        sent += 1;
+      } catch (e) {
+        if (e.statusCode === 404 || e.statusCode === 410) {
+          await admin.from("push_subscriptions").delete().eq("endpoint", s.endpoint); // phone unsubscribed
+        } else console.error("[alerts] push failed", e.statusCode, e.body || e.message);
+      }
+    }));
+    return sent;
+  } catch (e) {
+    console.error("[alerts]", e.message);
+    return 0;
+  }
 }
 

@@ -4,7 +4,9 @@ import { useAuth } from "./lib/auth.jsx";
 import { supabaseEnabled } from "./lib/supabase.js";
 import { recordLegalAcceptance, loadProperties, replaceProperties, rateJob, pushDriverLocation, subscribeToDriverLocation, createJobFromOrder, patchJob, sendMessage, subscribeToMessages, loadMessages,
   updateMyProfile, rowToOrder, fetchJob, listOpenJobs, subscribeOpenJobs, claimJob, getProfile, profileToDriver, setDriverStatus, becomeDriver, cancelJob, expireJob, subscribeToJob, loadActiveJob } from "./lib/db.js";
-import { STRIPE_ENABLED, STRIPE_PK, getStripe, startHold, confirmHold, cancelJobPaid, completeJobPaid, tipJob, connectSession, connectStatus, connectDashboard, authedFetch } from "./lib/payments.js";
+import { STRIPE_ENABLED, STRIPE_PK, getStripe, startHold, confirmHold, cancelJobPaid, completeJobPaid, tipJob, connectSession, connectStatus, connectDashboard, authedFetch, announceJob } from "./lib/payments.js";
+import { unlockRinger, startRing, stopRing, keepAwake, isStandalone, isIOS, canPromptInstall, promptInstall,
+  onInstallChange, pushSupported, enablePush, pushEnabled, localAlert } from "./lib/alerts.js";
 import { loadConnectAndInitialize } from "@stripe/connect-js";
 import { ConnectComponentsProvider, ConnectAccountOnboarding, ConnectNotificationBanner } from "@stripe/react-connect-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
@@ -349,6 +351,7 @@ function persistNewJob(dispatch, order, userId) {
         if (row.payment_status === "not_required") cancelJob(row.id); else cancelJobPaid(row.id).catch(() => {});
         return;
       }
+      if (row.payment_status === "not_required") announceJob(row.id); // ring online drivers
       dispatch({ type: "ORDER_STATE", patch: { jobId: row.id, live: true, paymentStatus: row.payment_status,
         expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : null,
         quote: { ...order.quote, riderTotal: Number(row.price), driverPay: Number(row.driver_pay) } } });
@@ -3110,6 +3113,7 @@ function RiderAccount({ onReferral }) {
   const ref = state.riderReferral;
   const [legalOpen, setLegalOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [installOpen, setInstallOpen] = useState(false);
   // Real accounts: Stripe keeps the card and shows it (with Remove) in the card box
   // when booking, so there's no separate card screen here.
   const realCards = isLive(state) && STRIPE_ENABLED;
@@ -3128,6 +3132,8 @@ function RiderAccount({ onReferral }) {
       <ListGroup>
         {!realCards && <ListRow icon="card" tint={C.plow} title={pay ? `${pay.brand} ···${pay.last4}` : "Add a card"}
           sub="Charged only after a job is done" />}
+        {!isStandalone() && <ListRow icon="download" tint={C.plow} title="Add DRIFT to your Home Screen" sub="Opens like an app, one tap away"
+          onClick={async () => { if (canPromptInstall()) await promptInstall(); else setInstallOpen(true); }} />}
         <ListRow icon="gift" tint={C.amber} title={`Invite neighbors · $${ref.reward} each`}
           sub={ref.credit > 0 ? `$${ref.credit} earned · ${ref.invited} invited` : `You both get $${ref.reward}`} onClick={onReferral} />
         <ListRow icon="lifebuoy" tint={C.push} title="Help" sub="Report an issue or get support" last
@@ -3147,6 +3153,7 @@ function RiderAccount({ onReferral }) {
       {legalOpen && <LegalHub onClose={() => setLegalOpen(false)}
         acceptance={[state.legal?.customer, state.legal?.driver].filter(Boolean)} />}
       {editOpen && <ProfileSheet onClose={() => setEditOpen(false)} />}
+      {installOpen && <InstallSheet onClose={() => setInstallOpen(false)} />}
 
       {auth?.isConfigured && auth?.session && (
         <button onClick={async () => { await auth.signOut(); dispatch({ type: "SIGNED_OUT" }); }}
@@ -3499,6 +3506,90 @@ function DriverApp() {
   );
 }
 
+// ---- Job alerts + "Add to Home Screen" --------------------------------------
+function InstallSheet({ onClose }) {
+  const ios = isIOS();
+  const step = (n, text) => (
+    <div style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "10px 0" }}>
+      <div style={{ width: 26, height: 26, borderRadius: 8, background: C.slate, border: `1px solid ${C.line}`, flexShrink: 0,
+        display: "grid", placeItems: "center", font: `700 13px ${FB}`, color: C.ice }}>{n}</div>
+      <div style={{ font: `400 15px/1.45 ${FB}`, color: C.ice, paddingTop: 2 }}>{text}</div>
+    </div>
+  );
+  return (
+    <Sheet onClose={onClose}>
+      <h3 style={{ font: `700 22px ${FD}`, margin: "0 0 4px" }}>Add DRIFT to your Home Screen</h3>
+      <p style={{ ...sub, marginBottom: 8 }}>It opens full screen like a normal app{ios ? ", and it's required on iPhone for job alerts when DRIFT is closed" : ""}.</p>
+      {ios ? <>
+        {step(1, <>Open this page in <b>Safari</b>.</>)}
+        {step(2, <>Tap the <b>Share</b> button <span style={{ display: "inline-flex", verticalAlign: "-3px", color: C.plow }}><Icon e="share" s={17} /></span> at the bottom of the screen.</>)}
+        {step(3, <>Scroll down and tap <b>Add to Home Screen</b>, then <b>Add</b>.</>)}
+        {step(4, <>Open DRIFT from the new icon on your Home Screen.</>)}
+      </> : <>
+        {step(1, <>Tap the <b>⋮</b> menu at the top right of Chrome.</>)}
+        {step(2, <>Tap <b>Install app</b> or <b>Add to Home screen</b>.</>)}
+        {step(3, <>Open DRIFT from the new icon.</>)}
+      </>}
+      <div style={{ marginTop: 12 }}><Btn full kind="dark" onClick={onClose}>Got it</Btn></div>
+    </Sheet>
+  );
+}
+
+function DriverAlertsCard() {
+  const { state, dispatch } = useStore();
+  const [, bump] = useState(0);
+  const [pushOn, setPushOn] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [howTo, setHowTo] = useState(false);
+  const [testing, setTesting] = useState(false);
+  useEffect(() => onInstallChange(() => bump((x) => x + 1)), []);
+  useEffect(() => { pushEnabled().then(setPushOn); }, []);
+  const installed = isStandalone();
+  const install = async () => { if (canPromptInstall()) await promptInstall(); else setHowTo(true); };
+  const turnOnPush = async () => {
+    setBusy(true);
+    try { await enablePush(state.userId); setPushOn(true); dispatch({ type: "TOAST", msg: "Job alerts are on for this phone" }); }
+    catch (e) { dispatch({ type: "TOAST", msg: e.message }); }
+    setBusy(false);
+  };
+  const testRing = () => {
+    unlockRinger();
+    if (testing) { stopRing(); setTesting(false); return; }
+    startRing(); setTesting(true);
+    setTimeout(() => { stopRing(); setTesting(false); }, 4000);
+  };
+  const row = { display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderTop: `1px solid ${C.lineSoft}` };
+  const small = { ...miniBtn, minHeight: 36, padding: "0 12px", fontSize: 13, flexShrink: 0 };
+  const canPush = pushSupported() && !(isIOS() && !installed);
+  return (
+    <div style={{ marginTop: 14, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 16, padding: "14px 16px 4px" }}>
+      <div style={{ font: `600 15px ${FB}`, color: C.ice }}>Job alerts</div>
+      <div style={{ ...row, borderTop: "none", paddingTop: 8 }}>
+        <span style={{ color: C.amber, display: "flex" }}><Icon e="bell" s={18} /></span>
+        <div style={{ flex: 1, font: `400 13.5px/1.4 ${FB}`, color: C.mist }}>Rings and vibrates for new jobs while DRIFT is open. Your screen stays on while you're online.</div>
+        <button onClick={testRing} style={small}>{testing ? "Stop" : "Test ring"}</button>
+      </div>
+      {!installed && (
+        <div style={row}>
+          <span style={{ color: C.plow, display: "flex" }}><Icon e="download" s={18} /></span>
+          <div style={{ flex: 1, font: `400 13.5px/1.4 ${FB}`, color: C.mist }}>Add DRIFT to your Home Screen so it opens like an app.</div>
+          <button onClick={install} style={small}>{canPromptInstall() ? "Install" : "How"}</button>
+        </div>
+      )}
+      <div style={row}>
+        <span style={{ color: pushOn ? C.push : C.mist, display: "flex" }}><Icon e={pushOn ? "checkfill" : "mobile"} s={18} /></span>
+        <div style={{ flex: 1, font: `400 13.5px/1.4 ${FB}`, color: C.mist }}>
+          {pushOn ? "Alerts when DRIFT is closed are on for this phone."
+            : canPush ? "Get a notification for new jobs even when DRIFT is closed."
+            : isIOS() && !installed ? "On iPhone, add DRIFT to your Home Screen first to get alerts when it's closed."
+            : "This browser can't show alerts when DRIFT is closed."}</div>
+        {!pushOn && canPush && isLive(state) && <button onClick={turnOnPush} disabled={busy} style={small}>{busy ? "…" : "Turn on"}</button>}
+      </div>
+      {howTo && <InstallSheet onClose={() => setHowTo(false)} />}
+    </div>
+  );
+}
+
 function DriverDrive() {
   const { state, dispatch } = useStore();
   const LIVE = isLive(state);
@@ -3532,6 +3623,8 @@ function DriverDrive() {
 
   const goOnline = (v) => {
     dispatch({ type: "ONLINE", v });
+    if (v) unlockRinger();   // this tap lets the phone ring later on its own
+    keepAwake(v);            // keep the screen on while online
     if (LIVE) setDriverStatus(state.userId, { is_online: v });
     dispatch({ type: "TOAST", msg: v ? "You're online — requests will pop up here" : "You're offline" });
   };
@@ -3557,6 +3650,7 @@ function DriverDrive() {
     dispatch({ type: "TOAST", msg: auto ? "Request passed to the next driver" : "Request passed" });
   };
   const toggle = () => {
+    unlockRinger();
     if (!online && !hasCurrentAcceptance(state.legal?.driver)) { setGate(true); return; }
     goOnline(!online);
   };
@@ -3605,6 +3699,8 @@ function DriverDrive() {
           </div>
         ))}
       </div>
+
+      <DriverAlertsCard />
 
       {/* waiting state — calm, not empty */}
       {online && !incoming && (
@@ -3668,6 +3764,13 @@ function IncomingJob({ order, onAccept, onPass, busy }) {
   const headsUp = [...(steep ? ["Steep hillside"] : []), ...hazards, ...markedHazards];
   const plowN = prop?.zones?.filter(z => z.mode === "plow").length || (prop?.features || []).filter(f => f.geometry?.type === "Polygon" && f.properties?.mode !== "push").length;
   const pushN = prop?.zones?.filter(z => z.mode === "push").length || (prop?.features || []).filter(f => f.properties?.mode === "push").length;
+
+  // Ring loudly (and buzz) until the driver accepts or passes.
+  useEffect(() => {
+    startRing();
+    localAlert(`New plow request · $${dPay}`, `${jt.label}${prop?.addr ? ` · ${prop.addr}` : ""}`);
+    return () => stopRing();
+  }, []);
 
   // 15s auto-pass countdown (jobs are time-sensitive in a storm)
   const [secs, setSecs] = useState(15);

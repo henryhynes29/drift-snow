@@ -16,7 +16,7 @@
 //   6. sweep     nightly cleanup of abandoned holds (Vercel cron).
 import {
   stripe, admin, HttpError, cents, requireUser, getJob, updateJob, getProfile,
-  updateProfile, readJson, send, driverPayoutsReady, payDriverForJob, markAuthorized,
+  updateProfile, readJson, send, driverPayoutsReady, payDriverForJob, markAuthorized, announceJob,
 } from "./_lib.js";
 
 const OPEN = ["requested"];
@@ -25,7 +25,7 @@ const ACTIVE = ["accepted", "enroute", "plowing"];
 export default async function handler(req, res) {
   const action = (req.query?.action || new URL(req.url, "http://x").searchParams.get("action") || "").toString();
   try {
-    if (!stripe) throw new HttpError(503, "Payments aren't set up on the server yet");
+    if (!stripe && action !== "announce") throw new HttpError(503, "Payments aren't set up on the server yet");
     if (!admin) throw new HttpError(503, "Server isn't connected to the database yet");
     // Vercel's nightly cron calls GET /api/pay (no action) with the CRON_SECRET.
     if (action === "sweep" || (req.method === "GET" && !action)) return send(res, 200, await sweep(req));
@@ -87,6 +87,16 @@ const ACTIONS = {
     const pi = await stripe.paymentIntents.retrieve(job.payment_intent_id);
     if (pi.status !== "requires_capture") throw new HttpError(402, "Your card wasn't authorized. Try another card.");
     return await markAuthorized(job, pi);
+  },
+
+  // Payments off: the app calls this right after posting an offer so online
+  // drivers get a "New plow request" alert. (With payments on, the card hold
+  // triggers the alert instead.)
+  async announce(user, { jobId }) {
+    const job = await getJob(jobId);
+    if (job.customer_id !== user.id) throw new HttpError(403, "Not your job");
+    if (job.status !== "requested" || job.payment_status !== "not_required") return { sent: 0 };
+    return { sent: await announceJob(job) };
   },
 
   // ---------- 2. cancel / expire: release the hold ----------

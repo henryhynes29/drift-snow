@@ -44,6 +44,7 @@ alter table public.jobs add column if not exists payout_status         text not 
 alter table public.jobs add column if not exists transfer_id           text;
 alter table public.jobs add column if not exists tip_payment_intent_id text;
 alter table public.jobs add column if not exists tip_transfer_id       text;
+alter table public.jobs add column if not exists announced_at          timestamptz;
 
 alter table public.jobs drop constraint if exists jobs_payment_status_check;
 alter table public.jobs add constraint jobs_payment_status_check check (payment_status in
@@ -79,6 +80,7 @@ begin
   new.transfer_id           := null;
   new.tip_payment_intent_id := null;
   new.tip_transfer_id       := null;
+  new.announced_at          := null;
   new.tip                   := 0;
   return new;
 end $$;
@@ -105,7 +107,8 @@ begin
     or new.payout_status         is distinct from old.payout_status
     or new.transfer_id           is distinct from old.transfer_id
     or new.tip_payment_intent_id is distinct from old.tip_payment_intent_id
-    or new.tip_transfer_id       is distinct from old.tip_transfer_id then
+    or new.tip_transfer_id       is distinct from old.tip_transfer_id
+    or new.announced_at          is distinct from old.announced_at then
       raise exception 'Payment details can only be changed by DRIFT''s payment server';
     end if;
     if new.driver_id is distinct from old.driver_id

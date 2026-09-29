@@ -1,7 +1,7 @@
 -- ============================================================
 -- DRIFT — ALL-IN-ONE database setup. Paste this whole file into
 -- Supabase → SQL Editor → New query → Run. Safe to run again.
--- (schema.sql + legal_acceptances.sql + dispatch.sql + payments.sql, in order.)
+-- (schema + legal_acceptances + dispatch + payments + alerts, in order.)
 -- ============================================================
 
 -- ============================================================
@@ -569,6 +569,7 @@ alter table public.jobs add column if not exists payout_status         text not 
 alter table public.jobs add column if not exists transfer_id           text;
 alter table public.jobs add column if not exists tip_payment_intent_id text;
 alter table public.jobs add column if not exists tip_transfer_id       text;
+alter table public.jobs add column if not exists announced_at          timestamptz;
 
 alter table public.jobs drop constraint if exists jobs_payment_status_check;
 alter table public.jobs add constraint jobs_payment_status_check check (payment_status in
@@ -604,6 +605,7 @@ begin
   new.transfer_id           := null;
   new.tip_payment_intent_id := null;
   new.tip_transfer_id       := null;
+  new.announced_at          := null;
   new.tip                   := 0;
   return new;
 end $$;
@@ -630,7 +632,8 @@ begin
     or new.payout_status         is distinct from old.payout_status
     or new.transfer_id           is distinct from old.transfer_id
     or new.tip_payment_intent_id is distinct from old.tip_payment_intent_id
-    or new.tip_transfer_id       is distinct from old.tip_transfer_id then
+    or new.tip_transfer_id       is distinct from old.tip_transfer_id
+    or new.announced_at          is distinct from old.announced_at then
       raise exception 'Payment details can only be changed by DRIFT''s payment server';
     end if;
     if new.driver_id is distinct from old.driver_id
@@ -712,3 +715,34 @@ grant execute on function public.claim_job(uuid) to authenticated;
 -- Done. You should see "Success. No rows returned."
 -- LATER, once Stripe keys are in Vercel and you've tested, turn payments on with:
 --   update public.app_settings set require_payment = true where id = 1;
+
+-- ============================================================
+-- DRIFT — job alerts for drivers (run AFTER payments.sql). Safe to re-run.
+-- Stores each driver phone's push "address" so DRIFT's server can send a
+-- "New plow request" alert when the app is closed.
+-- ============================================================
+create table if not exists public.push_subscriptions (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  endpoint    text not null unique,
+  p256dh      text not null,
+  auth        text not null,
+  user_agent  text,
+  created_at  timestamptz not null default now()
+);
+create index if not exists push_subscriptions_user_idx on public.push_subscriptions(user_id);
+alter table public.push_subscriptions enable row level security;
+
+drop policy if exists push_own_select on public.push_subscriptions;
+create policy push_own_select on public.push_subscriptions for select using (auth.uid() = user_id);
+drop policy if exists push_own_insert on public.push_subscriptions;
+create policy push_own_insert on public.push_subscriptions for insert with check (auth.uid() = user_id);
+drop policy if exists push_own_update on public.push_subscriptions;
+create policy push_own_update on public.push_subscriptions for update using (auth.uid() = user_id);
+drop policy if exists push_own_delete on public.push_subscriptions;
+create policy push_own_delete on public.push_subscriptions for delete using (auth.uid() = user_id);
+
+-- When a job's alert went out (so drivers are only pinged once per offer).
+alter table public.jobs add column if not exists announced_at timestamptz;
+
+-- Done. You should see "Success. No rows returned."

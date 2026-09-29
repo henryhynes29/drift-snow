@@ -59,6 +59,8 @@ const P = {
   phone: <><path d="M5 4h3l1.5 4-2 1.5a11 11 0 0 0 5 5l1.5-2 4 1.5V19a2 2 0 0 1-2.2 2A16 16 0 0 1 4 6.2 2 2 0 0 1 5 4z"/></>,
   mobile: <><rect x="6.5" y="2.5" width="11" height="19" rx="2.6"/><path d="M10.5 5.5h3"/></>,
   mail: <><rect x="3" y="5" width="18" height="14" rx="2.4"/><path d="M4 7l8 6 8-6"/></>,
+  share: <><path d="M12 3v12M8 7l4-4 4 4"/><path d="M5 11v8a2 2 0 002 2h10a2 2 0 002-2v-8"/></>,
+  download: <><path d="M12 3v12M8 11l4 4 4-4"/><path d="M5 19h14"/></>,
   send: <><path d="M21 3L3 10.5l7 2.5 2.5 7z"/><path d="M21 3l-9 9"/></>,
   lock: <><rect x="5" y="10.5" width="14" height="10" rx="2.2"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/></>,
   map: <><path d="M9 4L3 6.5v13L9 17l6 2.5 6-2.5v-13L15 6.5 9 4z"/><path d="M9 4v13M15 6.5v13"/></>,

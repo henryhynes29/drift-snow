@@ -58,3 +58,5 @@ export const listCards = () => pay("cards");
 export const startCardSetup = () => pay("card-setup");
 export const setDefaultCard = (pm) => pay("card-default", { pm });
 export const removeCard = (pm) => pay("card-remove", { pm });
+// Customer (payments off): tell online drivers about a new offer.
+export const announceJob = (jobId) => pay("announce", { jobId }).catch(() => null);
