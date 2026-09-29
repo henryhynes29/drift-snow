@@ -4,7 +4,7 @@
 // a phone dies mid-checkout.
 //
 // In Stripe: Developers → Webhooks → Add endpoint →
-//   URL:    https://drift-snow.vercel.app/api/stripe-webhook
+//   URL:    https://driftplowing.com/api/stripe-webhook
 //   Events: payment_intent.amount_capturable_updated, payment_intent.canceled,
 //           payment_intent.payment_failed, charge.refunded, charge.dispute.created
 // Then copy its signing secret (whsec_...) into Vercel as STRIPE_WEBHOOK_SECRET.
