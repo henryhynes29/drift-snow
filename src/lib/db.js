@@ -190,13 +190,13 @@ export async function claimJob(jobId) {
 
 export async function getProfile(userId) {
   if (!supabaseEnabled || !isUuid(userId)) return { data: null };
-  return supabase.from("profiles").select("id, name, truck, tools, rating, jobs_count, tier").eq("id", userId).maybeSingle();
+  return supabase.from("profiles").select("id, name, truck, tools, rating, ratings_count, jobs_count, tier").eq("id", userId).maybeSingle();
 }
 // Profile row -> the driver card the customer sees.
 export function profileToDriver(p) {
   if (!p) return null;
   return { id: p.id, name: p.name || "Your driver", truck: p.truck || "Plow truck",
-    tools: p.tools || [], rating: Number(p.rating || 5).toFixed(1), jobs: p.jobs_count || 0, tier: p.tier || "" };
+    tools: p.tools || [], rating: p.rating == null ? null : Number(p.rating).toFixed(1), reviews: p.ratings_count || 0, jobs: p.jobs_count || 0, tier: p.tier || "" };
 }
 
 // Switch a driver online/offline (and mark them as a driver after they sign the
@@ -229,6 +229,57 @@ export async function loadActiveJob(userId) {
   const now = Date.now();
   const live = (data || []).find(r => r.status !== "requested" || (r.customer_id === userId && new Date(r.expires_at).getTime() > now));
   return { data: live || null };
+}
+
+// Real history for a signed-in account: finished jobs (as customer and as driver),
+// plus the driver's earnings for today / this week / the last 7 days.
+export async function loadAccountStats(userId) {
+  if (!supabaseEnabled || !isUuid(userId)) return null;
+  const { data } = await supabase.from("jobs")
+    .select("id, job_type, price, driver_pay, tip, completed_at, created_at, photos, site, address, customer_id, driver_id")
+    .or(`customer_id.eq.${userId},driver_id.eq.${userId}`)
+    .eq("status", "completed")
+    .order("completed_at", { ascending: false }).limit(60);
+  const rows = data || [];
+  // names of the other person on each job (allowed: you share a job with them)
+  const others = [...new Set(rows.map(r => (r.customer_id === userId ? r.driver_id : r.customer_id)).filter(Boolean))];
+  let names = {};
+  if (others.length) {
+    const { data: ps } = await supabase.from("profiles").select("id, name").in("id", others);
+    (ps || []).forEach(p => { names[p.id] = p.name; });
+  }
+  const when = (r) => new Date(r.completed_at || r.created_at);
+  const fmt = (d) => {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const day = new Date(d); day.setHours(0, 0, 0, 0);
+    const diff = Math.round((today - day) / 864e5);
+    return diff === 0 ? "Today" : diff === 1 ? "Yesterday" : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  };
+  const history = rows.filter(r => r.customer_id === userId).map(r => ({
+    id: r.id, date: fmt(when(r)), size: r.site?.size?.label || "", jobType: r.job_type,
+    total: Number(r.price || 0) + Number(r.tip || 0), driver: (names[r.driver_id] || "Your driver").split(" ")[0],
+    rating: 0, photos: r.photos || null, address: r.address,
+  }));
+  const mine = rows.filter(r => r.driver_id === userId);
+  const pay = (r) => Number(r.driver_pay || 0) + Number(r.tip || 0);
+  const start = new Date(); start.setHours(0, 0, 0, 0);
+  const weekStart = new Date(start); weekStart.setDate(start.getDate() - ((start.getDay() + 6) % 7)); // Monday
+  const round = (v) => Math.round(v * 100) / 100;
+  const payouts = [];
+  for (let i = 6; i >= 0; i--) {
+    const d0 = new Date(start); d0.setDate(start.getDate() - i);
+    const d1 = new Date(d0); d1.setDate(d0.getDate() + 1);
+    payouts.push({ d: d0.toLocaleDateString(undefined, { weekday: "short" }),
+      amt: round(mine.filter(r => when(r) >= d0 && when(r) < d1).reduce((s, r) => s + pay(r), 0)) });
+  }
+  const earnings = {
+    today: round(mine.filter(r => when(r) >= start).reduce((s, r) => s + pay(r), 0)),
+    week: round(mine.filter(r => when(r) >= weekStart).reduce((s, r) => s + pay(r), 0)),
+    jobsToday: mine.filter(r => when(r) >= start).length,
+    jobsWeek: mine.filter(r => when(r) >= weekStart).length,
+    payouts,
+  };
+  return { history, earnings };
 }
 
 export async function cancelJob(jobId) { return patchJob(jobId, { status: "cancelled" }); }
@@ -300,8 +351,17 @@ export function subscribeToDriverLocation(driverId, onMove) {
 
 // ---------- Ratings ----------
 export async function rateJob({ jobId, raterId, rateeId, stars, comment }) {
-  if (!supabaseEnabled) return off();
-  return supabase.from("ratings").insert({ job_id: jobId, rater_id: raterId, ratee_id: rateeId, stars, comment });
+  if (!supabaseEnabled || !isUuid(jobId) || !isUuid(rateeId)) return off();
+  const text = (comment || "").trim().slice(0, 500) || null;
+  return supabase.from("ratings").insert({ job_id: jobId, rater_id: raterId, ratee_id: rateeId, stars, comment: text });
+}
+
+// Recent reviews about someone (a driver's reviews). Reviewers stay anonymous.
+export async function loadReviews(userId, limit = 20) {
+  if (!supabaseEnabled || !isUuid(userId)) return [];
+  const { data } = await supabase.from("ratings").select("id, stars, comment, created_at")
+    .eq("ratee_id", userId).order("created_at", { ascending: false }).limit(limit);
+  return data || [];
 }
 
 // ---------- Legal: signed agreements (your proof of consent) ----------

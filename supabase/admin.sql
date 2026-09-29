@@ -157,4 +157,14 @@ create policy profiles_read on public.profiles for select using (
   auth.uid() = id or public.shares_job(auth.uid(), id)
 );
 
+
+-- ---------- safety: every account has a profile row ----------
+-- (Accounts made before the sign-up trigger existed would otherwise load as blank.)
+insert into public.profiles (id, email, name, role, phone)
+select u.id, u.email, coalesce(u.raw_user_meta_data->>'name', ''),
+       coalesce(u.raw_user_meta_data->>'role', 'customer'), u.raw_user_meta_data->>'phone'
+from auth.users u
+where not exists (select 1 from public.profiles p where p.id = u.id)
+on conflict (id) do nothing;
+
 -- Done. You should see "Success. No rows returned."

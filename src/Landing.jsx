@@ -244,7 +244,7 @@ function DemoTrack() {
         </svg>
         <div style={{ position: "absolute", top: 8, right: 8, display: "flex", alignItems: "center", gap: 5,
           background: C.glassStrong, borderRadius: 8, padding: "5px 9px", font: `600 10px ${FB}`, color: C.ice }}>
-          <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.push }} /> 6 min away
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.push }} /> On the way
         </div>
       </div>
       {/* stepper */}
@@ -273,7 +273,7 @@ export default function Landing({ onStart, onLegal }) {
   const FAQ = [
     ["Do I need a contract or subscription?", "No. DRIFT is pay-per-storm — you're only charged when a plow actually clears your driveway. No contracts, no monthly fees, no commitment."],
     ["How much does it cost to plow a driveway in Duluth?", "You name your price. For a typical Duluth driveway we suggest an offer of about $30–$50 based on its size, plus a $10 call-out fee that goes to your driver and a $5 DRIFT booking fee. Offer more for a faster pickup mid-storm. You're only charged when it's done."],
-    ["How fast can someone come plow?", "During a storm you can book on demand and watch your driver head over live, usually within the hour. You can also set an auto-plow trigger so it happens automatically once snow hits a depth you choose."],
+    ["How fast can someone come plow?", "Book whenever you need it. Your offer goes out to local drivers right away, and once one accepts you can watch them head over live. Arrival depends on who's out and how busy the storm is — raising your offer helps during big storms."],
     ["What areas do you serve?", "Duluth, Hermantown, Cloquet, Esko, Proctor, and Superior, Wisconsin — the greater Twin Ports and Northland."],
     ["Who does the plowing?", "Independent local plow operators who use DRIFT to find jobs. They're not DRIFT employees — DRIFT is the app that connects you, handles booking and payment, and gives you live tracking and photos."],
   ];
@@ -361,11 +361,11 @@ export default function Landing({ onStart, onLegal }) {
       </section>
 
       {/* HOW IT WORKS */}
-      <Section title="From flurry to cleared in four taps" lead="Set it up once. Then it's automatic, or one tap away.">
+      <Section title="From flurry to cleared in four taps" lead="Set it up once. After that it's one tap away.">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 16 }}>
           {[
             ["pin", "Map your driveway", "Outline it on a satellite map. No measuring."],
-            ["snowflake", "Set your snow trigger", "Auto-book at the depth you choose, or tap on demand."],
+            ["snowflake", "Name your price", "Tap when it snows and offer what the job is worth to you."],
             ["pickup", "A local plow rolls out", "A driver accepts, heads over, and you track them live."],
             ["camera", "Pay only when plowed", "Charged only when it's done, with before and after photos."],
           ].map(([ic, t, d], k) => (
@@ -393,7 +393,7 @@ export default function Landing({ onStart, onLegal }) {
             <div key={t} style={{ background: C.slate, border: `1px solid ${hero ? C.amber : C.line}`, borderRadius: 16, padding: "22px 20px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                 <EmojiIcon e={ic} s={24} color={hero ? C.amber : C.ice} />
-                {hero && <span style={{ font: `500 12px ${FB}`, color: C.amber }}>Most booked</span>}
+                
               </div>
               <div style={{ font: `600 15px ${FB}`, marginTop: 14, color: C.ice }}>{t}</div>
               <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 4 }}>{d}</div>
@@ -405,7 +405,7 @@ export default function Landing({ onStart, onLegal }) {
       {/* WHY */}
       <Section>
         <div style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 20, padding: "44px 32px" }} className="why-card">
-          <h2 style={{ font: `700 clamp(26px,4vw,34px)/1.1 ${FD}`, letterSpacing: "-0.02em", textAlign: "center", margin: "0 0 10px", color: C.ice }}>Why neighbors pick DRIFT</h2>
+          <h2 style={{ font: `700 clamp(26px,4vw,34px)/1.1 ${FD}`, letterSpacing: "-0.02em", textAlign: "center", margin: "0 0 10px", color: C.ice }}>Why DRIFT</h2>
           <p style={{ textAlign: "center", color: C.mist, margin: "0 auto 36px", maxWidth: 520, font: `400 16px/1.5 ${FB}` }}>Honest, local, and built so you never think about snow again.</p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))", gap: "28px 32px" }}>
             {[
@@ -414,7 +414,7 @@ export default function Landing({ onStart, onLegal }) {
               ["Watch your driver", "Live map tracking and in-app messaging, start to finish."],
               ["Proof it's done", "Before and after photos on every job."],
               ["Real local drivers", "People from around Duluth, not a faceless call center."],
-              ["Set it and forget it", "Auto-book at your snow depth and wake up to a clear drive."],
+              ["Plowing, sidewalks and more", "Driveways, walks, dig-outs and jump-starts from the same app."],
             ].map(([t, d]) => (
               <div key={t} style={{ display: "flex", gap: 12 }}>
                 <span style={{ color: C.push, flexShrink: 0, marginTop: 1 }}><Icon path={ICONS.check} size={18} /></span>
@@ -439,7 +439,7 @@ export default function Landing({ onStart, onLegal }) {
       </Section>
 
       {/* FAQ (matches JSON-LD in index.html for rich results) — one grouped list, hairline rows */}
-      <Section title="Questions, answered" lead="What Duluth homeowners ask us most.">
+      <Section title="Questions, answered" lead="The things people ask before their first plow.">
         <div style={{ maxWidth: 720, margin: "0 auto", background: C.slate, border: `1px solid ${C.line}`, borderRadius: 16, overflow: "hidden" }}>
           {FAQ.map(([q, a], k) => {
             const open = faqOpen === k;

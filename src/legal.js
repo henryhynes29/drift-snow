@@ -17,7 +17,7 @@
 export const LEGAL_VERSION = "2026-09-28.2";
 export const LEGAL_UPDATED = "September 28, 2026";
 export const ENTITY = "DRIFT";                 // e.g. "DRIFT Technologies LLC, a Minnesota limited liability company"
-export const EMAIL = "legal@driftplow.com";    // TODO: real, monitored address
+export const EMAIL = "legal@driftplowing.com";    // TODO: real, monitored address
 export const VENUE = "St. Louis County, Minnesota";
 
 // Each section: { h: heading, p: [paragraphs], loud: true → rendered bold (conspicuous) }

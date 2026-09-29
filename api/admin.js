@@ -106,7 +106,7 @@ const ACTIONS = {
   // ---------- drivers ----------
   async drivers() {
     const [drivers, jobs, docs] = await Promise.all([
-      all("profiles", "id, name, email, phone, truck, tools, rating, is_online, suspended, payouts_ready, stripe_account_id, created_at", (q) => q.eq("is_driver", true).order("created_at", { ascending: false })),
+      all("profiles", "id, name, email, phone, truck, tools, rating, ratings_count, jobs_count, is_online, suspended, payouts_ready, stripe_account_id, created_at", (q) => q.eq("is_driver", true).order("created_at", { ascending: false })),
       all("jobs", "driver_id, status, driver_pay, tip, payment_status", (q) => q.not("driver_id", "is", null)),
       all("driver_documents", "user_id, kind, status, uploaded_at", (q) => q.order("uploaded_at", { ascending: false })),
     ]);
@@ -130,17 +130,20 @@ const ACTIONS = {
   async driver({ id }) {
     const p = await getProfile(id);
     if (!p) throw new HttpError(404, "Driver not found");
-    const [docs, legal, jobs] = await Promise.all([
+    const [docs, legal, jobs, ratings] = await Promise.all([
       all("driver_documents", "*", (q) => q.eq("user_id", id).order("uploaded_at", { ascending: false })),
       all("legal_acceptances", "role, documents, version, accepted_at, recorded_at, user_agent", (q) => q.eq("user_id", id).order("recorded_at", { ascending: false })),
       all("jobs", "id, status, address, price, driver_pay, tip, payment_status, payout_status, created_at, completed_at, photos", (q) => q.eq("driver_id", id).order("created_at", { ascending: false }).limit(50)),
+      all("ratings", "id, stars, comment, created_at, rater_id", (q) => q.eq("ratee_id", id).order("created_at", { ascending: false }).limit(50)),
     ]);
+    const raters = ratings.length ? await all("profiles", "id, name, email", (q) => q.in("id", [...new Set(ratings.map((r) => r.rater_id))])) : [];
+    const reviews = ratings.map((r) => { const who = raters.find((x) => x.id === r.rater_id); return { ...r, rater: who ? (who.name || who.email) : null }; });
     const docsWithLinks = await Promise.all(docs.map(async (d) => ({ ...d, url: await signed("driver-docs", d.path) })));
     let stripeStatus = null;
     if (stripe && p.stripe_account_id) {
       try { stripeStatus = await driverPayoutsReady(p.stripe_account_id); } catch (e) { stripeStatus = { error: e.message }; }
     }
-    return { profile: p, documents: docsWithLinks, agreements: legal, jobs, stripeStatus };
+    return { profile: p, documents: docsWithLinks, agreements: legal, jobs, reviews, stripeStatus };
   },
 
   async "review-document"({ id, status, note }) {

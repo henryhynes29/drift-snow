@@ -1,7 +1,7 @@
 -- ============================================================
 -- DRIFT — ALL-IN-ONE database setup. Paste this whole file into
 -- Supabase → SQL Editor → New query → Run. Safe to run again.
--- (schema + legal_acceptances + dispatch + payments + alerts + admin, in order.)
+-- (schema + legal_acceptances + dispatch + payments + alerts + admin + stats, in order.)
 -- ============================================================
 
 -- ============================================================
@@ -910,6 +910,87 @@ drop policy if exists profiles_read on public.profiles;
 create policy profiles_read on public.profiles for select using (
   auth.uid() = id or public.shares_job(auth.uid(), id)
 );
+
+
+-- ---------- safety: every account has a profile row ----------
+-- (Accounts made before the sign-up trigger existed would otherwise load as blank.)
+insert into public.profiles (id, email, name, role, phone)
+select u.id, u.email, coalesce(u.raw_user_meta_data->>'name', ''),
+       coalesce(u.raw_user_meta_data->>'role', 'customer'), u.raw_user_meta_data->>'phone'
+from auth.users u
+where not exists (select 1 from public.profiles p where p.id = u.id)
+on conflict (id) do nothing;
+
+-- Done. You should see "Success. No rows returned."
+
+
+-- ============================================================
+-- DRIFT — real driver stats (run AFTER admin.sql). Safe to re-run.
+--
+--   * A driver's "jobs done" count goes up by one each time a job they're on
+--     is completed (it used to stay at 0).
+--   * A driver's star rating is the real average of the ratings customers gave
+--     them. New drivers show "New driver" instead of a made-up 5.0.
+--   * Ratings can only be left by the customer or driver ON that job, once per
+--     job each, after it's completed.
+-- ============================================================
+
+-- New drivers have no rating until someone rates them.
+alter table public.profiles alter column rating drop default;
+
+-- ---------- jobs done ----------
+create or replace function public.count_completed_job()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.status = 'completed' and old.status is distinct from 'completed' and new.driver_id is not null then
+    update profiles set jobs_count = coalesce(jobs_count, 0) + 1 where id = new.driver_id;
+  end if;
+  return new;
+end $$;
+drop trigger if exists t_jobs_count_completed on public.jobs;
+create trigger t_jobs_count_completed after update of status on public.jobs
+  for each row execute function public.count_completed_job();
+
+-- ---------- ratings ----------
+-- keep only the first rating per person per job (older test data may have repeats)
+delete from public.ratings a using public.ratings b
+ where a.job_id = b.job_id and a.rater_id = b.rater_id and (a.created_at, a.id) > (b.created_at, b.id);
+create unique index if not exists ratings_one_per_job on public.ratings(job_id, rater_id);
+
+drop policy if exists ratings_rw on public.ratings;
+drop policy if exists ratings_read on public.ratings;
+drop policy if exists ratings_insert on public.ratings;
+create policy ratings_read on public.ratings for select
+  using (auth.uid() = rater_id or auth.uid() = ratee_id);
+create policy ratings_insert on public.ratings for insert with check (
+  auth.uid() = rater_id and exists (
+    select 1 from public.jobs j
+    where j.id = job_id and j.status = 'completed'
+      and ((j.customer_id = auth.uid() and j.driver_id = ratee_id)
+        or (j.driver_id = auth.uid() and j.customer_id = ratee_id))
+  )
+);
+-- (no update/delete: a rating, once left, stays)
+
+create or replace function public.refresh_rating()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  update profiles
+     set rating = (select round(avg(stars)::numeric, 2) from ratings where ratee_id = new.ratee_id)
+   where id = new.ratee_id;
+  return new;
+end $$;
+drop trigger if exists t_ratings_refresh on public.ratings;
+create trigger t_ratings_refresh after insert on public.ratings
+  for each row execute function public.refresh_rating();
+
+-- ---------- fix up existing accounts ----------
+-- Real averages where ratings exist; no rating (blank) where nobody has rated yet.
+update public.profiles p
+   set rating = (select round(avg(r.stars)::numeric, 2) from public.ratings r where r.ratee_id = p.id);
+-- Real completed-job counts.
+update public.profiles p
+   set jobs_count = (select count(*) from public.jobs j where j.driver_id = p.id and j.status = 'completed');
 
 -- Done. You should see "Success. No rows returned."
 

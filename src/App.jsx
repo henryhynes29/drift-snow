@@ -3,7 +3,7 @@ import MapPropertyDesigner, { staticMapUrl, LiveMap, MAP_ENABLED } from "./Prope
 import { useAuth } from "./lib/auth.jsx";
 import { supabaseEnabled } from "./lib/supabase.js";
 import { recordLegalAcceptance, loadProperties, replaceProperties, rateJob, pushDriverLocation, subscribeToDriverLocation, createJobFromOrder, patchJob, sendMessage, subscribeToMessages, loadMessages,
-  updateMyProfile, rowToOrder, fetchJob, listOpenJobs, subscribeOpenJobs, claimJob, getProfile, profileToDriver, setDriverStatus, becomeDriver, cancelJob, expireJob, subscribeToJob, loadActiveJob } from "./lib/db.js";
+  updateMyProfile, rowToOrder, fetchJob, listOpenJobs, subscribeOpenJobs, claimJob, getProfile, profileToDriver, setDriverStatus, becomeDriver, cancelJob, expireJob, subscribeToJob, loadActiveJob, loadAccountStats, loadReviews } from "./lib/db.js";
 import { STRIPE_ENABLED, STRIPE_PK, getStripe, startHold, confirmHold, cancelJobPaid, completeJobPaid, tipJob, connectSession, connectStatus, connectDashboard, authedFetch, announceJob } from "./lib/payments.js";
 import { uploadJobPhoto, uploadDriverDoc, myDriverDocs, signedUrl } from "./lib/photos.js";
 import { unlockRinger, startRing, stopRing, keepAwake, isStandalone, isIOS, canPromptInstall, promptInstall,
@@ -276,6 +276,10 @@ const ADMIN_ROUTE = typeof window !== "undefined" && ["admin", "ops"].some((k) =
 // Came from the "Drive with DRIFT" page (/?drive=1): open straight into driver sign-up.
 const DRIVE_INTENT = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("drive") === "1";
 let driveIntentPending = DRIVE_INTENT; // applied once, on the first account load
+// The demo (fake driver "Marcus", fake card, Skip buttons) only exists when there's
+// no real backend, or when someone opens the site with ?demo=1 on purpose.
+const DEMO_OK = typeof window !== "undefined" && (!supabaseEnabled || (new URLSearchParams(window.location.search).get("demo") === "1"
+  && /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname)));
 
 const initial = {
   legal: loadLegal(),
@@ -422,15 +426,16 @@ function reducer(s, a) {
         const d = a.driver || {};
         return { ...s, ...real, userId: a.userId, role: "driver", profile: a.profile || s.profile,
           driverOnboarded: !!a.isDriver,
-          driver: { ...s.driver, id: a.userId, name: d.name || a.profile?.name || s.driver.name,
-            truck: d.truck || s.driver.truck, tools: d.tools?.length ? d.tools : s.driver.tools,
-            rating: d.rating ?? s.driver.rating, jobs: d.jobs ?? s.driver.jobs } };
+          driver: { ...s.driver, id: a.userId, name: d.name || a.profile?.name || "",
+            truck: d.truck || "", tools: d.tools || [], rating: d.rating ?? null, reviews: d.reviews || 0, jobs: d.jobs ?? 0, lng: null, lat: null } };
       }
       const props = a.properties || [];
       return { ...s, ...real, userId: a.userId, role: "rider", profile: a.profile || s.profile,
+        driver: { ...s.driver, id: a.userId, name: a.profile?.name || "", rating: null, jobs: 0, truck: "", tools: [], lng: null, lat: null },
         properties: props, activeProperty: props[0] || null, onboarded: props.length > 0 };
     }
     case "SET_ORDER": return { ...s, order: a.order };
+    case "ACCOUNT_STATS": return { ...s, history: a.history, earnings: { ...s.earnings, ...a.earnings } };
     case "SIGNED_OUT": return { ...initial, legal: loadLegal() };
     case "ACCEPT_LEGAL": {
       const legal = { ...s.legal, [a.rec.role]: a.rec };
@@ -495,6 +500,7 @@ function reducer(s, a) {
           today: s.earnings.today + q.driverPay,
           week: s.earnings.week + q.driverPay,
           jobsToday: s.earnings.jobsToday + 1,
+          jobsWeek: (s.earnings.jobsWeek || 0) + 1,
         },
         history: [{ id: "h" + Date.now(), date: "Today", size: a.size?.label || "", total: q.riderTotal,
           driver: a.driverName || s.driver.name, rating: 0, photos: s.order?.photos || null }, ...s.history],
@@ -518,6 +524,38 @@ function reducer(s, a) {
 function Eyebrow({ children, color }) {
   return <div style={{ font: `600 13px/1.2 ${FB}`, letterSpacing: "-.005em", color: color || C.mist }}>{children}</div>;
 }
+// A driver's written reviews. Reviewers are anonymous ("Customer").
+function ReviewsSheet({ userId, name, rating, count, onClose }) {
+  const [list, setList] = useState(null);
+  useEffect(() => { loadReviews(userId).then(setList); }, [userId]);
+  // Prefer the freshest numbers (from the reviews themselves) when they're loaded.
+  if (list && list.length && (!count || list.length > count)) {
+    count = list.length; rating = (list.reduce((a, r) => a + r.stars, 0) / list.length).toFixed(1);
+  }
+  return (
+    <Sheet onClose={onClose}>
+      <h3 style={{ font: `700 20px ${FD}`, color: C.ice, margin: "0 0 4px" }}>{name ? `${name}'s reviews` : "Reviews"}</h3>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, font: `600 13px ${FB}`, color: C.mist, marginBottom: 14 }}>
+        {rating ? <><Stars v={Number(rating)} size={14} /> {rating} · {count} review{count === 1 ? "" : "s"}</> : "No ratings yet"}
+      </div>
+      {list === null ? <div style={{ font: `500 13px ${FB}`, color: C.mist, padding: "12px 0" }}>Loading…</div>
+        : list.length === 0 ? <div style={{ font: `500 13px ${FB}`, color: C.mist, padding: "12px 0" }}>No reviews yet.</div>
+        : <div style={{ display: "grid", gap: 10 }}>
+          {list.map(r => (
+            <div key={r.id} style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: "12px 14px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <Stars v={r.stars} size={13} />
+                <span style={{ font: `500 12px ${FB}`, color: C.mistDim }}>
+                  {new Date(r.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</span>
+              </div>
+              {r.comment && <p style={{ font: `400 14px/1.45 ${FB}`, color: C.ice, margin: "8px 0 0" }}>{r.comment}</p>}
+            </div>
+          ))}
+        </div>}
+    </Sheet>
+  );
+}
+
 function Stars({ v, size = 13, onSet }) {
   return (
     <span style={{ fontSize: size, letterSpacing: 1 }}>
@@ -1400,18 +1438,10 @@ function Onboarding() {
             Map your property once. Tap once each storm. A local plow operator clears it exactly how you drew it.
           </p>
 
-          {/* social proof */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: S.xl }}>
-            <div style={{ display: "flex" }}>
-              {["JM", "SP", "RK"].map((n, i) => (
-                <div key={n} style={{ marginLeft: i ? -9 : 0, width: 26, height: 26, borderRadius: "50%",
-                  background: [C.amber, C.plow, C.push][i], border: `2px solid ${C.night}`, display: "grid",
-                  placeItems: "center", font: `800 9px ${FB}`, color: C.onAmber }}>{n}</div>
-              ))}
-            </div>
-            <div style={{ font: `600 12px ${FB}`, color: C.mist }}>
-              <Stars v={5} size={11} /> <span style={{ color: C.ice }}>4.9</span> · 2,400+ Duluth driveways
-            </div>
+          {/* what you get (no made-up reviews or customer counts) */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, flexWrap: "wrap", marginBottom: S.xl,
+            font: `600 12px ${FB}`, color: C.mist }}>
+            <span>Pay per storm</span><span>·</span><span>Local drivers</span><span>·</span><span>Photo proof</span>
           </div>
 
           <Btn full onClick={() => go(1)}>Get started</Btn>
@@ -1606,6 +1636,7 @@ function ServiceTile({ icon, title, sub, onClick, disabled, tone }) {
 
 function RiderHome({ go }) {
   const { state, dispatch } = useStore();
+  const LIVE = isLive(state);
   const prop = state.activeProperty;
   const [jobType, setJobType] = useState("driveway");
   const [showSched, setShowSched] = useState(false);
@@ -1726,8 +1757,9 @@ function RiderHome({ go }) {
       <h1 style={{ font: `700 30px/1.1 ${FD}`, letterSpacing: "-.02em", color: C.ice, margin: "4px 0 18px" }}>
         {greet}{first ? `, ${first}` : ""}</h1>
 
-      <StormBanner />
-      {SNOW_DEPTH_IN >= 2 && prop && <OrdinanceCountdown price={quickQuote("sidewalk").riderTotal} onBook={guard(bookSidewalk)} />}
+      {/* storm banner + sidewalk countdown run on sample weather — demo only until a real weather feed is connected */}
+      {!LIVE && <StormBanner />}
+      {!LIVE && SNOW_DEPTH_IN >= 2 && prop && <OrdinanceCountdown price={quickQuote("sidewalk").riderTotal} onBook={guard(bookSidewalk)} />}
 
       {/* ---- THE primary action: your saved place + one button (Uber "Home" / DoorDash reorder) ---- */}
       {prop ? (
@@ -1740,11 +1772,12 @@ function RiderHome({ go }) {
             ) : MAP_ENABLED && prop.center ? (
               <LiveMap center={prop.center} height={150} interactive={false} markers={[
                 { lng: prop.center.lng, lat: prop.center.lat, size: 26 },
-                { lng: prop.center.lng + 0.0034, lat: prop.center.lat + 0.0016, size: 22, kind: "truck" },
-                { lng: prop.center.lng - 0.0041, lat: prop.center.lat - 0.0025, size: 22, kind: "truck" },
+                ...(LIVE ? [] : [
+                  { lng: prop.center.lng + 0.0034, lat: prop.center.lat + 0.0016, size: 22, kind: "truck" },
+                  { lng: prop.center.lng - 0.0041, lat: prop.center.lat - 0.0025, size: 22, kind: "truck" }]),
               ]} />
             ) : (
-              <StormMap pin blips={[{ id: 1, x: 62, y: 38 }, { id: 2, x: 30, y: 64 }]} height={2.5} />
+              <StormMap pin blips={LIVE ? [] : [{ id: 1, x: 62, y: 38 }, { id: 2, x: 30, y: 64 }]} height={2.5} />
             )}
           </div>
 
@@ -1858,8 +1891,8 @@ function RiderHome({ go }) {
                 {/* the one button */}
                 <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
                   <Btn full onClick={guard(startRequest)}>Send offer · ${animPrice}</Btn>
-                  <button onClick={guard(() => setShowSched(true))} aria-label="Schedule for later"
-                    style={{ ...miniBtn, minHeight: TAP, width: TAP, padding: 0, borderRadius: 14 }}><Icon e="calendar" s={19} /></button>
+                  {!LIVE && <button onClick={guard(() => setShowSched(true))} aria-label="Schedule for later"
+                    style={{ ...miniBtn, minHeight: TAP, width: TAP, padding: 0, borderRadius: 14 }}><Icon e="calendar" s={19} /></button>}
                 </div>
                 <p style={{ font: `400 12.5px/1.5 ${FB}`, color: C.mistDim, textAlign: "center", margin: "10px 6px 4px" }}>
                   You're only charged once it's done. Booking connects you with an independent operator under our{" "}
@@ -2202,7 +2235,8 @@ function RiderTracking() {
   const o = state.order;
   const LIVE = isLive(state);
   // In live mode the driver is whoever actually accepted; the demo uses a sample driver.
-  const d = LIVE ? (o.driver || { name: "Your driver", rating: "5.0", jobs: 0, truck: "Plow truck" }) : state.driver;
+  const d = LIVE ? (o.driver || { name: "Your driver", rating: null, jobs: 0, truck: "Plow truck" }) : state.driver;
+  const [reviewsOpen, setReviewsOpen] = useState(false);
   const [pos, setPos] = useState(o.driverPos || { x: d.x, y: d.y });
   const [eta, setEta] = useState(o.eta || 8);
   const arrived = o.state === "plowing" || o.state === "arrived" || eta <= 0;
@@ -2241,7 +2275,7 @@ function RiderTracking() {
       paymentStatus: row.payment_status, expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : o.expiresAt };
     if (row.driver_id && (!o.driver || o.driver.id !== row.driver_id)) {
       const { data: p } = await getProfile(row.driver_id);
-      patch.driver = profileToDriver(p) || { id: row.driver_id, name: "Your driver", rating: "5.0", jobs: 0, truck: "Plow truck" };
+      patch.driver = profileToDriver(p) || { id: row.driver_id, name: "Your driver", rating: null, jobs: 0, truck: "Plow truck" };
       if (o.state === "requested") {
         notify(dispatch, { kind: "job", title: `${patch.driver.name.split(" ")[0]} accepted your offer`,
           body: "Your driver is heading to your property.", role: "rider" }, state.profile?.phone);
@@ -2402,8 +2436,10 @@ function RiderTracking() {
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ font: `600 16px ${FB}`, color: C.ice }}>{d.name}</div>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3, font: `400 13px ${FB}`, color: C.mist }}>
-                <span style={{ color: C.amber, display: "flex" }}><Icon e="star" s={12} /></span>
-                {d.rating} · {d.jobs} plows · {d.truck}</div>
+                {d.rating && <span style={{ color: C.amber, display: "flex" }}><Icon e="star" s={12} /></span>}
+                {d.rating ? `${d.rating}${d.reviews ? ` (${d.reviews})` : ""} · ${d.jobs} plows` : d.jobs ? `${d.jobs} plows` : "New driver"}{d.truck ? ` · ${d.truck}` : ""}</div>
+              {LIVE && d.id && d.reviews > 0 && <button onClick={() => setReviewsOpen(true)} style={{ background: "none", border: "none", padding: 0,
+                marginTop: 4, cursor: "pointer", font: `600 13px ${FB}`, color: C.amber }}>Read reviews ›</button>}
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
@@ -2438,23 +2474,27 @@ function RiderTracking() {
           style={{ display: "block", margin: "18px auto 0", background: "none", border: "none", cursor: "pointer",
             font: `500 14px ${FB}`, color: C.danger, padding: 8 }}>Cancel request</button>
       )}
+      {reviewsOpen && <ReviewsSheet userId={d.id} name={d.name?.split(" ")[0]} rating={d.rating} count={d.reviews}
+        onClose={() => setReviewsOpen(false)} />}
     </section>
   );
 }
 
 function RiderReceipt() {
   const { state, dispatch } = useStore();
-  const o = state.order, q = o.quote, d = (isLive(state) && o.driver) || state.driver;
+  const o = state.order, q = o.quote, d = isLive(state) ? (o.driver || { name: "Your driver", rating: null, jobs: 0, truck: "" }) : state.driver;
   const jtR = JOB_TYPES[o.jobType || "driveway"];
   const isRoadside = ROADSIDE.includes(o.jobType);
   const [rating, setRating] = useState(0);
+  const [comment, setComment] = useState("");
   const [tip, setTip] = useState(0);
   const [done, setDone] = useState(false);
 
   const finish = () => {
-    // save the rating (best-effort; persists when signed in + Supabase is on)
+    // save the rating + written review (shows on the driver's profile)
     if (rating > 0 && state.userId) {
-      rateJob({ jobId: o.jobId || o.id, raterId: state.userId, rateeId: d.id || o.driverId, stars: rating });
+      rateJob({ jobId: o.jobId || o.id, raterId: state.userId, rateeId: d.id || o.driverId, stars: rating, comment })
+        .then((r) => { if (r?.error && isLive(state)) console.warn("rating not saved:", r.error.message); });
     }
     // route the tip to the driver: earnings + notification now, real charge when Stripe's on
     if (tip > 0) {
@@ -2516,6 +2556,11 @@ function RiderReceipt() {
       <div style={{ marginTop: 16, textAlign: "center" }}>
         <Eyebrow>Rate {d.name.split(" ")[0]}</Eyebrow>
         <div style={{ margin: "10px 0" }}><Stars v={rating} size={30} onSet={setRating} /></div>
+        {rating > 0 && (
+          <textarea value={comment} onChange={(e) => setComment(e.target.value.slice(0, 500))} rows={3}
+            placeholder={rating >= 4 ? "What did they do well? (optional)" : "What could have gone better? (optional)"}
+            style={{ ...inp, resize: "none", margin: "4px 0 12px", font: `400 15px/1.4 ${FB}` }} />
+        )}
         <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
           {[5, 10, 15].map(t => (
             <button key={t} onClick={() => setTip(tip === t ? 0 : t)} style={{ ...miniBtn, background: tip === t ? C.amber : C.night2,
@@ -2689,8 +2734,8 @@ function RiderProperties() {
 
       {state.properties.length > 0 && <Btn full kind="dark" onClick={startNew}>+ Add a property</Btn>}
 
-      {/* auto-plow — no contract: set a snow trigger, only pay when it snows */}
-      <div style={{ marginTop: S.xl }}>
+      {/* auto-plow — no contract: set a snow trigger, only pay when it snows (demo only until weather-based dispatch exists) */}
+      {!isLive(state) && <div style={{ marginTop: S.xl }}>
         <Eyebrow>Auto-plow</Eyebrow>
         <Card active={state.autoPlow} onClick={() => { const turningOn = !state.autoPlow; dispatch({ type: "AUTOPLOW", v: turningOn });
           dispatch({ type: "TOAST", msg: turningOn ? `Auto-plow on — we'll dispatch at ${state.autoPlowThreshold}"+ snow` : "Auto-plow off" }); }}
@@ -2747,7 +2792,7 @@ function RiderProperties() {
             </div>
           </div>
         )}
-      </div>
+      </div>}
     </section></Fade>
   );
 }
@@ -2780,8 +2825,9 @@ function RiderHistory() {
     autoMatch(dispatch, state, o);
   };
 
-  const [tab, setTab] = useState("upcoming");
-  const totalSpent = state.history.reduce((s, h) => s + h.total, 0);
+  const LIVE = isLive(state);
+  const [tab, setTab] = useState(LIVE ? "past" : "upcoming");
+  const totalSpent = Math.round(state.history.reduce((s, h) => s + h.total, 0) * 100) / 100;
   const list = tab === "upcoming" ? sched : state.history;
 
   return (
@@ -2792,7 +2838,7 @@ function RiderHistory() {
       {/* summary strip */}
       <div style={{ display: "flex", gap: 10, marginBottom: S.lg }}>
         {[
-          { v: sched.length, l: "Upcoming", c: C.plow },
+          ...(LIVE ? [] : [{ v: sched.length, l: "Upcoming", c: C.plow }]),
           { v: state.history.length, l: "Completed", c: C.push },
           { v: `$${totalSpent}`, l: "Total spent", c: C.amber },
         ].map((s, i) => (
@@ -2803,10 +2849,10 @@ function RiderHistory() {
         ))}
       </div>
 
-      <Segmented value={tab} onChange={setTab}
+      {!LIVE && <><Segmented value={tab} onChange={setTab}
         options={[{ id: "upcoming", label: `Upcoming${sched.length ? ` (${sched.length})` : ""}` }, { id: "past", label: "Past" }]} />
 
-      <div style={{ height: S.lg }} />
+      <div style={{ height: S.lg }} /></>}
 
       {/* UPCOMING */}
       {tab === "upcoming" && (
@@ -2863,7 +2909,7 @@ function RiderHistory() {
                       : <div style={{ width: 46, height: 46, borderRadius: 12, background: C.night2,
                           border: `1px solid ${C.line}`, display: "grid", placeItems: "center", fontSize: 19, flexShrink: 0 }}><Icon e="snowflake" s={19} /></div>}
                     <div style={{ minWidth: 0 }}>
-                      <div style={{ font: `700 15px ${FB}` }}>{h.size} plow</div>
+                      <div style={{ font: `700 15px ${FB}` }}>{h.jobType && JOB_TYPES[h.jobType] ? JOB_TYPES[h.jobType].label : `${h.size} plow`}</div>
                       <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 3 }}>{h.date} · {h.driver}</div>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5 }}>
                         {h.rating > 0 && <Stars v={h.rating} size={11} />}
@@ -3112,10 +3158,10 @@ function RiderAccount({ onReferral }) {
           sub="Charged only after a job is done" />}
         {!isStandalone() && <ListRow icon="download" tint={C.plow} title="Add DRIFT to your Home Screen" sub="Opens like an app, one tap away"
           onClick={async () => { if (canPromptInstall()) await promptInstall(); else setInstallOpen(true); }} />}
-        <ListRow icon="gift" tint={C.amber} title={`Invite neighbors · $${ref.reward} each`}
-          sub={ref.credit > 0 ? `$${ref.credit} earned · ${ref.invited} invited` : `You both get $${ref.reward}`} onClick={onReferral} />
-        <ListRow icon="lifebuoy" tint={C.push} title="Help" sub="Report an issue or get support" last
-          onClick={() => dispatch({ type: "TOAST", msg: "Support: text (218) 555-0199 — we answer fast during storms" })} />
+        {!isLive(state) && <ListRow icon="gift" tint={C.amber} title={`Invite neighbors · $${ref.reward} each`}
+          sub={ref.credit > 0 ? `$${ref.credit} earned · ${ref.invited} invited` : `You both get $${ref.reward}`} onClick={onReferral} />}
+        <ListRow icon="lifebuoy" tint={C.push} title="Help" sub="Email support@driftplowing.com" last
+          onClick={() => { window.location.href = "mailto:support@driftplowing.com?subject=DRIFT%20help"; }} />
       </ListGroup>
 
       <div style={{ height: 14 }} />
@@ -3357,7 +3403,7 @@ function DriverOnboarding() {
       setSaving(false);
       if (res?.error) { dispatch({ type: "TOAST", msg: `Couldn't finish setup — ${res.error.message}` }); return; }
     }
-    dispatch({ type: "DRIVER_ONBOARD_DONE", name, truck: truck || "F-350 · 9ft V-Plow", tools,
+    dispatch({ type: "DRIVER_ONBOARD_DONE", name, truck: truck || (LIVE_ONB ? "" : "F-350 · 9ft V-Plow"), tools,
       docs: { license: uploads.license ? "received" : "pending", plate: uploads.plate ? "received" : "pending", w9: uploads.w9 ? "received" : "pending" } });
     dispatch({ type: "TOAST", msg: `You're set up, ${name.split(" ")[0] || "driver"}. Go online whenever you want to work.` });
   };
@@ -3653,6 +3699,15 @@ function DriverDrive() {
     const unsub = subscribeOpenJobs(load);
     return () => { on = false; unsub(); };
   }, [LIVE, online, state.userId]);
+  // Live: show where the driver actually is (asks for location once they go online).
+  const [here, setHere] = useState(null);
+  useEffect(() => {
+    if (!LIVE || !online || typeof navigator === "undefined" || !navigator.geolocation) return;
+    const id = navigator.geolocation.watchPosition(
+      (p) => setHere({ lng: p.coords.longitude, lat: p.coords.latitude }),
+      () => {}, { enableHighAccuracy: false, maximumAge: 60000, timeout: 20000 });
+    return () => navigator.geolocation.clearWatch(id);
+  }, [LIVE, online]);
   const liveOffer = LIVE && online && !o
     ? pool.find(j => !passed.has(j.jobId) && (!j.expiresAt || j.expiresAt > Date.now())) : null;
 
@@ -3710,7 +3765,11 @@ function DriverDrive() {
           : LIVE ? "Go online to see requests from customers near you." : `${SNOW_DEPTH_IN}" down in Duluth — demand is high right now.`}</p>
 
       <div style={{ borderRadius: 20, overflow: "hidden", border: `1px solid ${C.line}` }}>
-        {MAP_ENABLED && state.driver.lng ? (
+        {LIVE ? (MAP_ENABLED ? (
+          <LiveMap center={here || DULUTH_CENTER} height={210}
+            markers={here ? [{ lng: here.lng, lat: here.lat, size: 30, kind: "truck", pulse: online }] : []} />
+        ) : <StormMap blips={[]} height={1.75} />)
+        : MAP_ENABLED && state.driver.lng ? (
           <LiveMap center={{ lng: state.driver.lng, lat: state.driver.lat }} height={210}
             markers={[{ lng: state.driver.lng, lat: state.driver.lat, size: 30, kind: "truck", pulse: online }]} />
         ) : (
@@ -3798,7 +3857,7 @@ function IncomingJob({ order, onAccept, onPass, busy }) {
   const dPay = driverNetPay(q, state.driver); // take-home
   const dHourly = driverHourlyFor(dPay, order.size?.mins || q.mins);
   const jt = JOB_TYPES[order.jobType || "driveway"];
-  const toolMatch = state.driver.tools?.includes(order.tool || jt.tool);
+  const toolMatch = !state.driver.tools?.length || state.driver.tools.includes(order.tool || jt.tool);
   const hazards = (prop?.hazards || []).map(h => MODIFIERS.hazards[h]?.label).filter(Boolean);
   const steep = prop?.grade === "steep";
   const markedHazards = (prop?.features || []).filter(f => f.geometry?.type === "Point").map(f => f.properties?.label).filter(Boolean);
@@ -4046,7 +4105,7 @@ function DriverActiveJob() {
     dispatch({ type: "ORDER_STATE", patch: { state: "arrived_done", completed: true } });
     dispatch({ type: "TOAST", msg: `Job complete · $${dPay} added to today` });
     notify(dispatch, { kind: "payment", title: `You earned $${dPay}`,
-      body: `${o.property?.label || "Job"} complete · paid out to your account.`, role: "driver" });
+      body: `${o.property?.label || "Job"} complete · ${isLive(state) ? "sent to your payouts" : "paid out to your account"}.`, role: "driver" });
     notify(dispatch, { kind: "job", title: "Your property is plowed",
       body: `${o.property?.label || "Your driveway"} is clear. Photos are on your receipt.`, role: "rider" });
   };
@@ -4331,6 +4390,7 @@ function PayoutSetupSheet({ onClose }) {
 
 function DriverEarnings({ onReferral }) {
   const { state, dispatch } = useStore();
+  const LIVE = isLive(state);
   const e = state.earnings;
   const ref = state.driverReferral;
   const max = Math.max(...e.payouts.map(p => p.amt), 1);
@@ -4350,21 +4410,23 @@ function DriverEarnings({ onReferral }) {
         <div style={{ font: `500 13px ${FB}`, color: C.mist, marginBottom: S.lg }}>
           ${e.today} today · {e.jobsToday} job{e.jobsToday !== 1 ? "s" : ""} completed
         </div>
-        {/* weekly goal */}
-        <div style={{ display: "flex", justifyContent: "space-between", font: `600 11px ${FB}`, color: C.mist, marginBottom: 6 }}>
+        {/* weekly goal (demo only) */}
+        {!LIVE && <><div style={{ display: "flex", justifyContent: "space-between", font: `600 11px ${FB}`, color: C.mist, marginBottom: 6 }}>
           <span>Weekly goal</span><span style={{ color: C.ice }}>${e.week} / ${WEEK_GOAL}</span>
         </div>
         <div style={{ height: 8, borderRadius: 8, background: C.night, overflow: "hidden" }}>
           <div style={{ width: `${goalPct * 100}%`, height: "100%",
             background: C.amber, transition: `width .8s ${EASE}` }} />
-        </div>
+        </div></>}
       </div>
 
       {/* quick stats */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: S.lg }}>
         <div style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: S.lg }}>
-          <div style={{ font: `700 24px ${FD}`, color: C.ice }}>$92<span style={{ fontSize: 13 }}>/hr</span></div>
-          <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 3 }}>Active-job rate at peak</div></div>
+          {LIVE ? <><div style={{ font: `700 24px ${FD}`, color: C.ice }}>{e.jobsWeek || 0}</div>
+            <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 3 }}>Jobs this week</div></>
+          : <><div style={{ font: `700 24px ${FD}`, color: C.ice }}>$92<span style={{ fontSize: 13 }}>/hr</span></div>
+          <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 3 }}>Active-job rate at peak</div></>}</div>
         <div style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: S.lg }}>
           <div style={{ font: `700 24px ${FD}`, color: C.push }}>{Math.round(driverPct(state.driver) * 100)}%</div>
           <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 3 }}>You keep per job</div></div>
@@ -4373,7 +4435,7 @@ function DriverEarnings({ onReferral }) {
       {/* interactive chart */}
       <Card style={{ marginBottom: S.lg }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: S.lg }}>
-          <Eyebrow color={C.mist}>Daily payouts</Eyebrow>
+          <Eyebrow color={C.mist}>{LIVE ? "Last 7 days" : "Daily payouts"}</Eyebrow>
           {sel && <Chip color={C.amber}>{sel.d} · ${sel.amt}</Chip>}
         </div>
         <div style={{ display: "flex", alignItems: "flex-end", gap: 9, height: 130 }}>
@@ -4412,7 +4474,7 @@ function DriverEarnings({ onReferral }) {
             Secured by Stripe · we never see your bank details
           </p>
         </div>
-      ) : (
+      ) : LIVE ? null : (
         <div style={{ background: C.night2, border: `1px solid ${C.line}`, borderRadius: 16, padding: S.lg, marginBottom: S.md }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: S.md }}>
             <div>
@@ -4431,8 +4493,8 @@ function DriverEarnings({ onReferral }) {
       )
       )}
 
-      {/* referral CTA */}
-      <Card onClick={onReferral} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+      {/* referral CTA (demo only until referrals are real) */}
+      {!LIVE && <Card onClick={onReferral} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
         borderColor: C.push + "55", background: C.slate }}>
         <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
           <div style={{ width: 40, height: 40, borderRadius: 12, background: C.push + "1E", display: "grid",
@@ -4441,7 +4503,7 @@ function DriverEarnings({ onReferral }) {
             <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 2 }}>
               {ref.credit > 0 ? `$${ref.credit} earned · ${ref.invited} referred` : `Paid when they finish ${ref.threshold} jobs`}</div></div></div>
         <Icon e="chevronright" s={16} color={C.mistDim} />
-      </Card>
+      </Card>}
     </section></Fade>
   );
 }
@@ -4449,11 +4511,15 @@ function DriverEarnings({ onReferral }) {
 function DriverAccount({ onReferral }) {
   const { state, dispatch } = useStore();
   const auth = useAuth();
-  const d = state.driver;
+  const base = state.driver;
   const ref = state.driverReferral;
   const [legalOpen, setLegalOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [reviewsOpen, setReviewsOpen] = useState(false);
   const LIVE = isLive(state);
+  const [fresh, setFresh] = useState(null); // latest rating / jobs from the database
+  useEffect(() => { if (LIVE) getProfile(state.userId).then(({ data }) => data && setFresh(profileToDriver(data))); }, [LIVE, state.userId]);
+  const d = fresh ? { ...base, rating: fresh.rating, reviews: fresh.reviews, jobs: fresh.jobs } : base;
   const openPayouts = async () => {
     try { const { url } = await connectDashboard(); window.open(url, "_blank", "noopener"); }
     catch (e) { dispatch({ type: "TOAST", msg: "Set up payouts in the Earnings tab first" }); }
@@ -4474,10 +4540,14 @@ function DriverAccount({ onReferral }) {
           display: "grid", placeItems: "center", fontSize: 26 }}><Icon e="pickup" s={26} /></div>
         <div><div style={{ font: `700 19px ${FB}` }}>{d.name}</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 3 }}>
-            <Stars v={d.rating} size={13} /><span style={{ font: `600 12px ${FB}`, color: C.mist }}>{d.rating} · {d.jobs} jobs</span></div></div>
+            {d.rating ? <><Stars v={Number(d.rating)} size={13} /><span style={{ font: `600 12px ${FB}`, color: C.mist }}>{d.rating} · {d.jobs} jobs</span></>
+              : <span style={{ font: `600 12px ${FB}`, color: C.mist }}>{d.jobs ? `${d.jobs} jobs · no ratings yet` : "New driver"}</span>}</div></div>
       </div>
       <ListGroup style={{ marginBottom: 14 }}>
         <ListRow icon="user" tint={C.amber} title="Profile and equipment" sub="Name, phone, truck and gear" onClick={() => setEditOpen(true)} last={!LIVE} />
+        {LIVE && <ListRow icon="star" tint={C.amber} title="Your reviews"
+          sub={d.reviews ? `${d.rating} average · ${d.reviews} review${d.reviews === 1 ? "" : "s"}` : "What customers say will show here"}
+          onClick={() => setReviewsOpen(true)} />}
         {LIVE && STRIPE_ENABLED && <ListRow icon="bank" tint={C.push} title="Payouts and tax forms" sub="Bank, payout history and 1099s in Stripe" onClick={openPayouts} last />}
       </ListGroup>
 
@@ -4531,14 +4601,14 @@ function DriverAccount({ onReferral }) {
         <Chip color={C.good}>Linked</Chip>
       </Card>}
 
-      {/* referral entry */}
-      <Card onClick={onReferral} style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center",
+      {/* referral entry (demo only) */}
+      {!LIVE && <Card onClick={onReferral} style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center",
         borderColor: C.push + "55" }}>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}><span style={{ fontSize: 20 }}><Icon e="handshake" s={20} /></span>
           <div><div style={{ font: `700 13px ${FB}` }}>Refer drivers · earn ${ref.reward} each</div>
             <div style={{ font: `500 12px ${FB}`, color: C.mist }}>Bring on plow operators you trust</div></div></div>
         <span style={{ color: C.push, display: "flex" }}><Icon e="chevronright" s={16} /></span>
-      </Card>
+      </Card>}
 
       <div style={{ height: 14 }} />
       <AppearancePicker />
@@ -4552,6 +4622,7 @@ function DriverAccount({ onReferral }) {
       {legalOpen && <LegalHub onClose={() => setLegalOpen(false)}
         acceptance={[state.legal?.driver, state.legal?.customer].filter(Boolean)} />}
       {editOpen && <ProfileSheet driver onClose={() => setEditOpen(false)} />}
+      {reviewsOpen && <ReviewsSheet userId={state.userId} name="" rating={d.rating} count={d.reviews || 0} onClose={() => setReviewsOpen(false)} />}
 
       {auth?.isConfigured && auth?.session && (
         <button onClick={async () => { await auth.signOut(); dispatch({ type: "SIGNED_OUT" }); }}
@@ -4766,23 +4837,27 @@ function Shell() {
 
   // Hydrate the app from the signed-in account (profile + saved properties).
   useEffect(() => {
-    if (!supabaseEnabled || !auth.session || !auth.profile) return;
+    if (!supabaseEnabled || !auth.session || !auth.profileReady) return;
     let cancelled = false;
     (async () => {
       const uid = auth.user.id;
-      const role = (driveIntentPending || auth.profile.role === "driver" || auth.profile.is_driver) ? "driver" : "rider";
+      const meta = auth.user.user_metadata || {};
+      // Normally the profile row exists; if it somehow doesn't, still treat this as a
+      // real account (never fall back to the demo) using the sign-up details.
+      const prof = auth.profile || { id: uid, email: auth.user.email, name: meta.name || "", phone: meta.phone || "", role: meta.role || "customer", is_driver: false };
+      const role = (driveIntentPending || prof.role === "driver" || prof.is_driver) ? "driver" : "rider";
       driveIntentPending = false;
       let props = [];
       if (role === "rider") {
-        const { data } = await loadProperties(uid);
-        props = data || [];
+        try { const { data } = await loadProperties(uid); props = data || []; } catch { /* show setup instead of hanging */ }
       }
       if (cancelled) return;
-      const me = profileToDriver(auth.profile);
-      dispatch({ type: "HYDRATE_USER", userId: uid, role, isDriver: !!auth.profile.is_driver,
-        driver: me && { ...me, tools: auth.profile.tools || [] },
-        profile: { name: auth.profile.name || "", phone: auth.profile.phone || "", email: auth.profile.email || "" },
+      const me = profileToDriver(prof);
+      dispatch({ type: "HYDRATE_USER", userId: uid, role, isDriver: !!prof.is_driver,
+        driver: me && { ...me, tools: prof.tools || [] },
+        profile: { name: prof.name || "", phone: prof.phone || "", email: prof.email || auth.user.email || "" },
         properties: props });
+      loadAccountStats(uid).then((st) => { if (!cancelled && st) dispatch({ type: "ACCOUNT_STATS", ...st }); }).catch(() => {});
       // Pick up a job that was in progress (page refresh, dead battery, new phone).
       const { data: row } = await loadActiveJob(uid);
       if (cancelled || !row) return;
@@ -4790,7 +4865,7 @@ function Shell() {
       if (role === "rider" && row.customer_id === uid) dispatch({ type: "SET_ORDER", order: rowToOrder(row) });
     })();
     return () => { cancelled = true; };
-  }, [auth.session, auth.profile]);
+  }, [auth.session, auth.profile, auth.profileReady]);
 
   // Persist a customer's properties to Supabase whenever they change.
   useEffect(() => {
@@ -4804,7 +4879,7 @@ function Shell() {
 
   // DEV ONLY — floating "Skip" that clears the auth gate + both onboarding flows. Remove before production.
   const devSkip = () => { setBypass(true); dispatch({ type: "DEV_SKIP" }); };
-  const SkipButton = (
+  const SkipButton = !DEMO_OK ? null : (
     <button onClick={devSkip} title="Dev: skip setup"
       style={{ position: "fixed", bottom: "calc(84px + env(safe-area-inset-bottom))", left: 12, zIndex: 9999,
         font: `600 11px ${FB}`, color: C.mist, background: C.glassStrong, border: `1px solid ${C.line}`,
@@ -4826,7 +4901,7 @@ function Shell() {
   }
 
   // Auth gate: when Supabase is configured, require sign-in (demo escape hatch stays).
-  if (supabaseEnabled && auth.loading) {
+  if (supabaseEnabled && (auth.loading || (auth.session && !state.userId && !bypass))) {
     return <div style={{ minHeight: "100vh", background: C.night, color: C.mist, fontFamily: FB,
       display: "grid", placeItems: "center" }}>
       <span style={{ width: 26, height: 26, borderRadius: "50%", border: `3px solid ${C.line}`,
@@ -4841,7 +4916,7 @@ function Shell() {
   }
 
   if (supabaseEnabled && !auth.session && !bypass) {
-    return <>{SkipButton}<AuthScreen auth={auth} onDemo={() => setBypass(true)} initialRole={DRIVE_INTENT ? "driver" : "customer"} /></>;
+    return <>{SkipButton}<AuthScreen auth={auth} onDemo={DEMO_OK ? () => setBypass(true) : undefined} initialRole={DRIVE_INTENT ? "driver" : "customer"} /></>;
   }
 
   return (

@@ -171,7 +171,7 @@ function DriverPanel({ id, onClose }) {
           <div style={{ ...card(), marginTop: 16, display: "grid", gap: 6, font: `400 14px ${FB}`, color: C.ice }}>
             <div><b>Email:</b> {p.email}</div><div><b>Phone:</b> {p.phone || "—"}</div>
             <div><b>Truck:</b> {p.truck || "—"}</div><div><b>Equipment:</b> {(p.tools || []).join(", ") || "—"}</div>
-            <div><b>Joined:</b> {day(p.created_at)} · <b>Rating:</b> {p.rating}</div>
+            <div><b>Joined:</b> {day(p.created_at)} · <b>Rating:</b> {p.rating ? `${Number(p.rating).toFixed(1)} (${p.ratings_count || 0})` : "no ratings yet"} · <b>Jobs done:</b> {p.jobs_count || 0}</div>
             <div><b>Payouts (Stripe):</b> {!p.stripe_account_id ? "not started" : d.stripeStatus?.ready ? "ready" : `in progress${d.stripeStatus?.due?.length ? ` — needs ${d.stripeStatus.due.join(", ")}` : ""}`}</div>
             <div style={{ marginTop: 8 }}>
               {p.suspended
@@ -209,6 +209,16 @@ function DriverPanel({ id, onClose }) {
               <b>{a.role === "driver" ? "Independent Contractor Agreement" : "Customer Terms + Release"}</b> · version {a.version}<br />
               <span style={{ color: C.mist }}>Agreed {date(a.accepted_at)} · recorded {date(a.recorded_at)}</span><br />
               <span style={{ color: C.mistDim, fontSize: 12 }}>{a.user_agent}</span>
+            </div>
+          ))}
+
+          <h3 style={{ font: `700 16px ${FD}`, color: C.ice, margin: "22px 0 10px" }}>Reviews</h3>
+          {(d.reviews || []).length === 0 && <p style={{ color: C.mist, font: `400 14px ${FB}` }}>No reviews yet.</p>}
+          {(d.reviews || []).map((r) => (
+            <div key={r.id} style={{ font: `400 13px/1.5 ${FB}`, color: C.ice, padding: "8px 0", borderBottom: `1px solid ${C.lineSoft}` }}>
+              <b style={{ color: C.amber }}>{"★".repeat(r.stars)}{"☆".repeat(5 - r.stars)}</b>
+              <span style={{ color: C.mist }}> · {r.rater || "Customer"} · {date(r.created_at)}</span>
+              {r.comment && <div style={{ marginTop: 2 }}>{r.comment}</div>}
             </div>
           ))}
 

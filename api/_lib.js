@@ -128,7 +128,7 @@ export async function markAuthorized(job, pi) {
 // VITE_VAPID_PUBLIC_KEY + VAPID_PRIVATE_KEY in Vercel (see DRIFT-ALERT-KEYS.txt).
 const VAPID_PUBLIC = process.env.VITE_VAPID_PUBLIC_KEY || process.env.VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY;
-const VAPID_SUBJECT = `mailto:${(process.env.OWNER_EMAILS || "support@driftplow.com").split(",")[0].trim()}`;
+const VAPID_SUBJECT = `mailto:${(process.env.OWNER_EMAILS || "support@driftplowing.com").split(",")[0].trim()}`;
 if (VAPID_PUBLIC && VAPID_PRIVATE) webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC, VAPID_PRIVATE);
 
 // Send "New plow request" to every online driver, once per job. Never throws.

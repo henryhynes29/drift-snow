@@ -12,18 +12,20 @@ export function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(supabaseEnabled);
+  const [profileFor, setProfileFor] = useState(null); // which user's profile lookup has finished
 
   const loadProfile = useCallback(async (userId) => {
-    if (!supabaseEnabled || !userId) { setProfile(null); return; }
-    const { data } = await supabase.from("profiles").select("*").eq("id", userId).single();
+    if (!supabaseEnabled || !userId) { setProfile(null); setProfileFor(null); return; }
+    const { data } = await supabase.from("profiles").select("*").eq("id", userId).maybeSingle();
     setProfile(data || null);
+    setProfileFor(userId);
   }, []);
 
   useEffect(() => {
     if (!supabaseEnabled) { setLoading(false); return; }
-    supabase.auth.getSession().then(({ data }) => {
+    supabase.auth.getSession().then(async ({ data }) => {
       setSession(data.session);
-      loadProfile(data.session?.user?.id);
+      await loadProfile(data.session?.user?.id);
       setLoading(false);
     });
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
@@ -64,6 +66,7 @@ export function AuthProvider({ children }) {
     session,
     user: session?.user || null,
     profile,
+    profileReady: !!session && profileFor === session.user.id,
     role: profile?.role || null,
     signUp, signIn, sendPhoneOtp, verifyPhoneOtp, signOut, refreshProfile,
   };
