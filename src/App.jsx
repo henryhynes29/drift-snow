@@ -1342,7 +1342,6 @@ function Onboarding() {
   const [step, setStep] = useState(state.userId ? 1 : 0); // signed-in users skip the welcome hero
   const [prop, setProp] = useState(null); // { address, center, features, sqft, mapImg }
   const [profile, setProfile] = useState({ name: "", phone: "", email: "" });
-  const [card, setCard] = useState({ num: "", exp: "", cvc: "" });
   const [valid, setValid] = useState({});
 
   const go = (n) => setStep(n);
@@ -1359,7 +1358,7 @@ function Onboarding() {
       features: prop?.features || [], sqft: prop?.sqft || 0, center: prop?.center, mapImg: prop?.mapImg,
       zones: [],
     };
-    dispatch({ type: "ONBOARD_DONE", profile: fp, property, payment: { brand: "Visa", last4: card.num.replace(/\D/g,"").slice(-4) || "4242" } });
+    dispatch({ type: "ONBOARD_DONE", profile: fp, property });
     dispatch({ type: "TOAST", msg: `Welcome${fp?.name ? ", " + fp.name.split(" ")[0] : ""}! You're all set.` });
   };
 
@@ -1463,46 +1462,12 @@ function Onboarding() {
 
       {step === 3 && (
         <Fade k="p">
-          <Eyebrow>Step 3 · Payment</Eyebrow>
-          <h2 style={h2}>Add a card</h2>
-          <p style={sub}>You're only charged after a job is done. No storm, no charge.</p>
-          {/* live card preview */}
-          <div style={{ margin: "16px 0", borderRadius: 16, padding: 18, position: "relative", overflow: "hidden",
-            background: C.slate2, border: `1px solid ${C.line}`, minHeight: 130 }}>
-            <div style={{ position: "absolute", top: -30, right: -20, width: 120, height: 120, borderRadius: "50%", background: C.amber + "22" }} />
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ font: `700 12px ${FB}`, color: C.mist, letterSpacing: ".08em" }}>DRIFT</span>
-              <span style={{ fontSize: 20 }}><Icon e="card" s={20} /></span>
-            </div>
-            <div style={{ font: `600 19px ${FB}`, letterSpacing: ".08em", color: C.ice, margin: "22px 0 14px" }}>
-              {card.num || "•••• •••• •••• ••••"}
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", font: `500 12px ${FB}`, color: C.mist }}>
-              <span>{profile.name || "Your name"}</span><span>{card.exp || "MM/YY"}</span>
-            </div>
-          </div>
-          <div style={{ display: "grid", gap: 12 }}>
-            <Field label="Card number" icon="card" value={card.num} inputMode="numeric" format={fmtCard}
-              onChange={(v) => setCard(c => ({ ...c, num: v }))} validate={validators.card}
-              placeholder="4242 4242 4242 4242" onValid={(v) => setV("card", v)} autoFocus />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <Field label="Expiry" value={card.exp} inputMode="numeric" format={fmtExp}
-                onChange={(v) => setCard(c => ({ ...c, exp: v }))} validate={validators.exp}
-                placeholder="MM/YY" onValid={(v) => setV("exp", v)} />
-              <Field label="CVC" value={card.cvc} inputMode="numeric"
-                onChange={(v) => setCard(c => ({ ...c, cvc: v.replace(/\D/g,"").slice(0,4) }))} validate={validators.cvc}
-                placeholder="123" onValid={(v) => setV("cvc", v)} />
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "14px 0", font: `500 12px ${FB}`, color: C.mistDim }}>
-            <span><Icon e="lock" s={14} /></span> Secured by Stripe · we never store your card
-          </div>
+          <Eyebrow>Step 3 · How DRIFT works</Eyebrow>
+          <h2 style={h2}>One last thing</h2>
+          <p style={sub}>Please read before you finish. You'll add a card the first time you book — Stripe keeps it safe, and you're only charged after the job is done.</p>
           {/* clickwrap: required before the account is created */}
-          <div style={{ marginTop: 26 }}>
-            <h3 style={{ font: `700 20px/1.2 ${FD}`, letterSpacing: "-.01em", color: C.ice, margin: "0 0 4px" }}>One last thing</h3>
-            <p style={{ ...sub, fontSize: 14, marginBottom: 14 }}>How DRIFT works — please read before you finish.</p>
+          <div style={{ marginTop: 16 }}>
             <CustomerConsent agreeLabel="Agree and finish setup"
-              blocked={!(valid.card && valid.exp && valid.cvc)} blockedLabel="Add your card above first"
               onAgree={(rec) => { acceptLegal(dispatch, rec, state.userId); finish(); }} />
           </div>
         </Fade>
