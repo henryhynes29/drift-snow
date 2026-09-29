@@ -5,6 +5,7 @@ import { supabaseEnabled } from "./lib/supabase.js";
 import { recordLegalAcceptance, loadProperties, replaceProperties, rateJob, pushDriverLocation, subscribeToDriverLocation, createJobFromOrder, patchJob, sendMessage, subscribeToMessages, loadMessages,
   updateMyProfile, rowToOrder, fetchJob, listOpenJobs, subscribeOpenJobs, claimJob, getProfile, profileToDriver, setDriverStatus, becomeDriver, cancelJob, expireJob, subscribeToJob, loadActiveJob } from "./lib/db.js";
 import { STRIPE_ENABLED, STRIPE_PK, getStripe, startHold, confirmHold, cancelJobPaid, completeJobPaid, tipJob, connectSession, connectStatus, connectDashboard, authedFetch, announceJob } from "./lib/payments.js";
+import { uploadJobPhoto, uploadDriverDoc, myDriverDocs, signedUrl } from "./lib/photos.js";
 import { unlockRinger, startRing, stopRing, keepAwake, isStandalone, isIOS, canPromptInstall, promptInstall,
   onInstallChange, pushSupported, enablePush, pushEnabled, localAlert } from "./lib/alerts.js";
 import { loadConnectAndInitialize } from "@stripe/connect-js";
@@ -268,6 +269,9 @@ function loadLegal() {
   catch (e) { return { customer: null, driver: null }; }
 }
 function saveLegal(legal) { try { localStorage.setItem("drift-legal", JSON.stringify(legal)); } catch (e) { /* private mode */ } }
+
+const AdminApp = React.lazy(() => import("./Admin.jsx"));
+const ADMIN_ROUTE = typeof window !== "undefined" && ["admin", "ops"].some((k) => new URLSearchParams(window.location.search).get(k) === "1");
 
 // Came from the "Drive with DRIFT" page (/?drive=1): open straight into driver sign-up.
 const DRIVE_INTENT = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("drive") === "1";
@@ -2533,7 +2537,7 @@ function RiderReceipt() {
                 <div key={phase} style={{ flex: 1 }}>
                   <div style={{ width: "100%", aspectRatio: "1.2", borderRadius: 12, overflow: "hidden",
                     border: `1px solid ${phase === "before" ? C.plow : C.push}55`, position: "relative", background: C.slate }}>
-                    {p ? <FauxPhoto seed={p.seed} phase={phase} /> :
+                    {p ? <FauxPhoto seed={p.seed} phase={phase} path={p.path} /> :
                       <div style={{ display: "grid", placeItems: "center", height: "100%", color: C.mistDim, font: `500 11px ${FB}` }}>no photo</div>}
                     <div style={{ position: "absolute", top: 6, left: 6, background: "rgba(0,0,0,.6)", borderRadius: 5,
                       padding: "2px 7px", font: `700 9px ${FB}`, color: "#fff" }}>{phase.toUpperCase()}</div>
@@ -2940,7 +2944,7 @@ function PhotoThumb({ photos }) {
   return (
     <div style={{ width: 46, height: 46, borderRadius: 10, overflow: "hidden", border: `1px solid ${C.line}`,
       background: img?.bg || C.slate, position: "relative", flexShrink: 0 }}>
-      {img && <FauxPhoto seed={img.seed} phase={img.phase} />}
+      {img && <FauxPhoto seed={img.seed} phase={img.phase} path={img.path} />}
       <div style={{ position: "absolute", bottom: 2, right: 2, background: "rgba(0,0,0,.6)", borderRadius: 4,
         padding: "1px 4px", font: `700 8px ${FB}`, color: "#fff" }}>{(photos.after?.length || 0) + (photos.before?.length || 0)}</div>
     </div>
@@ -2948,7 +2952,16 @@ function PhotoThumb({ photos }) {
 }
 
 // a generated "photo" — a snowy vs cleared driveway gradient, deterministic by seed
-function FauxPhoto({ seed = 1, phase = "after", style }) {
+function RealPhoto({ path, style }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => { let on = true; signedUrl("job-photos", path).then((u) => on && setUrl(u)); return () => { on = false; }; }, [path]);
+  return url
+    ? <img src={url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", ...style }} />
+    : <div style={{ width: "100%", height: "100%", background: C.slate, ...style }} />;
+}
+
+function FauxPhoto({ seed = 1, phase = "after", style, path }) {
+  if (path) return <RealPhoto path={path} style={style} />;
   const snowy = phase === "before";
   return (
     <div style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden",
@@ -2988,9 +3001,9 @@ function PhotoViewer({ job, onClose }) {
         </div>
         {/* wipe comparison */}
         <div style={{ position: "relative", width: "100%", aspectRatio: "1.3", borderRadius: 16, overflow: "hidden", border: `1px solid ${C.line}` }}>
-          <div style={{ position: "absolute", inset: 0 }}><FauxPhoto seed={after.seed} phase="after" /></div>
+          <div style={{ position: "absolute", inset: 0 }}><FauxPhoto seed={after.seed} phase="after" path={after.path} /></div>
           <div style={{ position: "absolute", inset: 0, width: `${wipe}%`, overflow: "hidden", borderRight: `2px solid ${C.amber}` }}>
-            <div style={{ width: `${100 / (wipe / 100)}%`, height: "100%" }}><FauxPhoto seed={before.seed} phase="before" /></div>
+            <div style={{ width: `${100 / (wipe / 100)}%`, height: "100%" }}><FauxPhoto seed={before.seed} phase="before" path={before.path} /></div>
           </div>
           <div style={{ position: "absolute", top: 10, left: 10, background: "rgba(0,0,0,.55)", borderRadius: 6, padding: "3px 8px", font: `700 10px ${FB}`, color: "#fff" }}>BEFORE</div>
           <div style={{ position: "absolute", top: 10, right: 10, background: "rgba(0,0,0,.55)", borderRadius: 6, padding: "3px 8px", font: `700 10px ${FB}`, color: "#fff" }}>AFTER</div>
@@ -3289,6 +3302,67 @@ const TOOL_OPTIONS = [
   { id: "Roadside kit", icon: "battery", label: "Roadside kit", note: "Jump-starts" },
 ];
 
+// ---- Driver documents (license, registration) — stored privately ----------
+const DOC_LABELS = { license: "Driver's license", registration: "Vehicle registration", insurance: "Insurance card (optional)" };
+function DocUpload({ kind, label, hint, onDone, status }) {
+  const { state, dispatch } = useStore();
+  const ref = useRef(null);
+  const [st, setSt] = useState(status || null); // null | uploading | done
+  const pick = async (e) => {
+    const f = e.target.files?.[0]; e.target.value = "";
+    if (!f) return;
+    setSt("uploading");
+    try { await uploadDriverDoc(state.userId, kind, f); setSt("done"); onDone && onDone(); dispatch({ type: "TOAST", msg: `${label} uploaded` }); }
+    catch (err) { setSt(status || null); dispatch({ type: "TOAST", msg: `Upload failed — ${err.message}` }); }
+  };
+  const done = st === "done" || st === "approved" || st === "pending";
+  const bad = st === "rejected";
+  return (
+    <button onClick={() => st !== "uploading" && ref.current?.click()} style={{ width: "100%", display: "flex", alignItems: "center", gap: 12,
+      padding: 14, borderRadius: 14, minHeight: TAP, cursor: "pointer", textAlign: "left",
+      background: done ? C.push + "12" : C.slate, border: `1px solid ${bad ? C.danger + "88" : done ? C.push + "55" : C.line}`,
+      WebkitTapHighlightColor: "transparent" }}>
+      <input ref={ref} type="file" accept="image/*,application/pdf" onChange={pick} style={{ display: "none" }} />
+      <div style={{ width: 38, height: 38, borderRadius: 11, flexShrink: 0, display: "grid", placeItems: "center",
+        background: done ? C.push + "26" : C.night2, color: bad ? C.danger : done ? C.push : C.mist }}>
+        {st === "uploading" ? <span style={{ width: 16, height: 16, borderRadius: "50%", border: `2px solid ${C.line}`, borderTopColor: C.amber, animation: "spin .7s linear infinite" }} />
+          : <Icon e={done ? "check" : "doc"} s={16} />}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ font: `600 14px ${FB}`, color: C.ice }}>{label}</div>
+        <div style={{ font: `400 12px ${FB}`, color: bad ? C.danger : C.mist, marginTop: 2 }}>
+          {st === "uploading" ? "Uploading…" : st === "approved" ? "Approved" : bad ? "Needs a new photo — tap to replace" : done ? "Uploaded · tap to replace" : hint}</div>
+      </div>
+      {!done && st !== "uploading" && <span style={{ font: `600 13px ${FB}`, color: C.amber }}>Upload</span>}
+    </button>
+  );
+}
+
+function DriverDocsCard() {
+  const { state } = useStore();
+  const [docs, setDocs] = useState(null);
+  const load = () => myDriverDocs(state.userId).then(setDocs);
+  useEffect(() => { load(); }, []);
+  const latest = (k) => docs?.find((d) => d.kind === k);
+  return (
+    <Card style={{ marginBottom: 14 }}>
+      <Eyebrow>Documents</Eyebrow>
+      <p style={{ font: `400 12px/1.45 ${FB}`, color: C.mistDim, margin: "6px 0 10px" }}>
+        Stored privately. Only you and DRIFT can see them — never customers.</p>
+      {!docs ? <Skeleton h={56} r={14} /> : (
+        <div style={{ display: "grid", gap: 8 }}>
+          {["license", "registration", "insurance"].map((k) => {
+            const d = latest(k);
+            return <DocUpload key={k + (d?.id || "")} kind={k} label={DOC_LABELS[k]} status={d?.status}
+              hint={k === "insurance" ? "Optional" : "Required to drive"} onDone={load} />;
+          })}
+          {docs.filter((d) => d.status === "rejected" && d.note).slice(0, 1).map((d) => (
+            <p key={d.id} style={{ font: `500 12px ${FB}`, color: C.danger, margin: 0 }}>Note from DRIFT: {d.note}</p>))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function DriverOnboarding() {
   const { state, dispatch } = useStore();
   const [step, setStep] = useState(0); // 0 intro, 1 identity, 2 equipment, 3 contractor agreement, 4 payout
@@ -3397,9 +3471,10 @@ function DriverOnboarding() {
             <Field label="Phone" icon="mobile" value={phone} inputMode="tel" format={fmtPhone} onChange={setPhone}
               validate={validators.phone} placeholder="(218) 555-0123" onValid={v => setV("phone", v)} />
             {!LIVE_ONB && <UploadRow k="license" label="Driver's license" hint="Front and back · photo or scan" />}
+            {LIVE_ONB && <DocUpload kind="license" label="Driver's license" hint="A clear photo of the front" onDone={() => setUploads(u => ({ ...u, license: "verified" }))} />}
           </div>
           <div style={{ position: "sticky", bottom: 16 }}>
-            <Btn full kind="good" onClick={() => setStep(2)} disabled={!(valid.name && valid.phone && (LIVE_ONB || uploads.license))}>Continue</Btn>
+            <Btn full kind="good" onClick={() => setStep(2)} disabled={!(valid.name && valid.phone && uploads.license)}>Continue</Btn>
           </div>
         </Fade>
       )}
@@ -3432,9 +3507,10 @@ function DriverOnboarding() {
             <Field label="Vehicle" icon="pickup" value={truck} onChange={setTruck}
               placeholder="F-350 · 9ft V-Plow" />
             {!LIVE_ONB && <UploadRow k="plate" label="Registration / plate" hint="Proof the rig is yours" />}
+            {LIVE_ONB && <DocUpload kind="registration" label="Vehicle registration" hint="Photo of the registration card" onDone={() => setUploads(u => ({ ...u, plate: "verified" }))} />}
           </div>
           <div style={{ position: "sticky", bottom: 16 }}>
-            <Btn full kind="good" onClick={() => setStep(3)} disabled={!(tools.length && (LIVE_ONB || uploads.plate))}>
+            <Btn full kind="good" onClick={() => setStep(3)} disabled={!(tools.length && uploads.plate)}>
               {tools.length ? "Continue" : "Pick at least one"}</Btn>
           </div>
         </Fade>
@@ -3985,6 +4061,14 @@ function DriverActiveJob() {
   const meLL = gps || driverLLD;
 
   const startPlow = () => dispatch({ type: "ORDER_STATE", patch: { state: "plowing" } });
+  // Save each photo to the job right away so the customer can see it too.
+  const savePhoto = (phase, photo) => {
+    dispatch({ type: "ADD_PHOTO", phase, photo });
+    if (LIVE && o.jobId) {
+      const cur = o.photos || { before: [], after: [] };
+      patchJob(o.jobId, { photos: { ...cur, [phase]: [...(cur[phase] || []), photo] } });
+    }
+  };
   const [finishing, setFinishing] = useState(false);
   const complete = async () => {
     if (LIVE && o.jobId && o.paymentStatus && o.paymentStatus !== "not_required") {
@@ -4023,7 +4107,7 @@ function DriverActiveJob() {
               return p ? (
                 <div key={phase} style={{ flex: 1, aspectRatio: "1.2", borderRadius: 12, overflow: "hidden",
                   border: `1px solid ${phase === "before" ? C.plow : C.push}55`, position: "relative" }}>
-                  <FauxPhoto seed={p.seed} phase={phase} />
+                  <FauxPhoto seed={p.seed} phase={phase} path={p.path} />
                   <div style={{ position: "absolute", top: 6, left: 6, background: "rgba(0,0,0,.6)", borderRadius: 5, padding: "2px 7px", font: `700 9px ${FB}`, color: "#fff" }}>{phase.toUpperCase()}</div>
                 </div>
               ) : null;
@@ -4118,8 +4202,8 @@ function DriverActiveJob() {
               <p style={{ font: `500 12px ${FB}`, color: C.mist, margin: "6px 0 10px" }}>
                 Snap a quick "before" photo. The customer sees it as proof of the starting conditions.
               </p>
-              <PhotoCapture phase="before" photos={o.photos?.before || []}
-                onCapture={(photo) => dispatch({ type: "ADD_PHOTO", phase: "before", photo })} />
+              <PhotoCapture phase="before" photos={o.photos?.before || []} jobId={o.jobId}
+                onCapture={(photo) => savePhoto("before", photo)} />
               <div style={{ marginTop: 12 }}>
                 <Btn full kind="good" onClick={startPlow} disabled={!(o.photos?.before?.length)}>
                   {o.photos?.before?.length ? "Start plowing" : "Take a before photo first"}
@@ -4148,8 +4232,8 @@ function DriverActiveJob() {
               <p style={{ font: `500 12px ${FB}`, color: C.mist, margin: "6px 0 10px" }}>
                 Show the finished job. This lands on the customer's receipt.
               </p>
-              <PhotoCapture phase="after" photos={o.photos?.after || []}
-                onCapture={(photo) => dispatch({ type: "ADD_PHOTO", phase: "after", photo })} />
+              <PhotoCapture phase="after" photos={o.photos?.after || []} jobId={o.jobId}
+                onCapture={(photo) => savePhoto("after", photo)} />
 
               <div style={{ marginTop: 14 }}>
                 <Btn full onClick={complete} disabled={!allChecked || !(o.photos?.after?.length) || finishing}>
@@ -4165,9 +4249,22 @@ function DriverActiveJob() {
 }
 
 // ---- Photo capture: simulated camera that produces a faux before/after ----
-function PhotoCapture({ phase, photos, onCapture }) {
+function PhotoCapture({ phase, photos, onCapture, jobId }) {
+  const { state, dispatch } = useStore();
   const [capturing, setCapturing] = useState(false);
+  const fileRef = useRef(null);
+  const real = isLive(state) && !!jobId;
+  const onFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setCapturing(true);
+    try { onCapture(await uploadJobPhoto(jobId, phase, file)); }
+    catch (err) { dispatch({ type: "TOAST", msg: `Photo didn't upload — ${err.message}` }); }
+    setCapturing(false);
+  };
   const snap = () => {
+    if (real) { fileRef.current?.click(); return; }
     setCapturing(true);
     setTimeout(() => {
       onCapture({ seed: Math.floor(Math.random() * 90) + 1, phase, ts: Date.now() });
@@ -4177,10 +4274,11 @@ function PhotoCapture({ phase, photos, onCapture }) {
   const col = phase === "before" ? C.plow : C.push;
   return (
     <div>
+      {real && <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={onFile} style={{ display: "none" }} />}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         {photos.map((p, i) => (
           <div key={i} style={{ width: 72, height: 72, borderRadius: 10, overflow: "hidden", border: `1px solid ${col}66`, position: "relative" }}>
-            <FauxPhoto seed={p.seed} phase={phase} />
+            <FauxPhoto seed={p.seed} phase={phase} path={p.path} />
             <div style={{ position: "absolute", bottom: 3, left: 3, background: "rgba(0,0,0,.6)", borderRadius: 4, padding: "1px 5px", font: `700 8px ${FB}`, color: "#fff" }}>{phase.toUpperCase()}</div>
           </div>
         ))}
@@ -4447,7 +4545,8 @@ function DriverAccount({ onReferral }) {
         </div>
       </Card>
 
-      {/* documents (demo only — real accounts handle ID and tax info through Stripe) */}
+      {LIVE && <DriverDocsCard />}
+      {/* documents (demo only) */}
       {!LIVE && <Card style={{ marginBottom: 14 }}>
         <Eyebrow>Documents</Eyebrow>
         <div style={{ marginTop: 8 }}>
@@ -4560,8 +4659,8 @@ function DriverReferral({ onBack }) {
 // ============================================================
 // AUTH SCREEN — real sign up / log in (Supabase)
 // ============================================================
-function AuthScreen({ auth, onDemo, initialRole }) {
-  const [mode, setMode] = useState("signup"); // signup | signin
+function AuthScreen({ auth, onDemo, initialRole, signInOnly, title }) {
+  const [mode, setMode] = useState(signInOnly ? "signin" : "signup"); // signup | signin
   const [role, setRole] = useState(initialRole || "customer"); // customer | driver
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -4600,7 +4699,7 @@ function AuthScreen({ auth, onDemo, initialRole }) {
           <div style={{ fontSize: 44, color: C.amber }}><Icon e="snowflake" s={44} /></div>
           <div style={{ font: `700 26px ${FD}`, letterSpacing: ".08em", marginTop: 6 }}>DRIFT</div>
           <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 4 }}>
-            {mode === "signup" ? "Create your account" : "Welcome back"}</div>
+            {title || (mode === "signup" ? "Create your account" : "Welcome back")}</div>
         </div>
 
         {mode === "signup" && (
@@ -4632,174 +4731,29 @@ function AuthScreen({ auth, onDemo, initialRole }) {
             {busy ? "One moment…" : mode === "signup" ? "Create account" : "Sign in"}</Btn>
         </div>
 
-        <button onClick={() => { setErr(""); setInfo(""); setMode(mode === "signup" ? "signin" : "signup"); }}
+        {!signInOnly && <button onClick={() => { setErr(""); setInfo(""); setMode(mode === "signup" ? "signin" : "signup"); }}
           style={{ width: "100%", marginTop: 14, background: "transparent", border: "none", cursor: "pointer",
             color: C.mist, font: `600 13px ${FB}`, padding: 8 }}>
           {mode === "signup" ? "Already have an account? Sign in" : "New here? Create an account"}
-        </button>
+        </button>}
 
-        <button onClick={onDemo} style={{ width: "100%", marginTop: 6, background: "transparent",
+        {onDemo && <button onClick={onDemo} style={{ width: "100%", marginTop: 6, background: "transparent",
           border: `1px dashed ${C.line}`, borderRadius: 12, cursor: "pointer", color: C.mistDim,
           font: `600 12px ${FB}`, padding: 11 }}>
           Skip — just explore the demo
-        </button>
+        </button>}
       </div>
     </div>
   );
 }
 
 
-// ---- Operator dashboard (private, ?ops=1) ---------------------------------
-const OPS_STATUS = {
-  requested: { label: "Requested", c: C.mist },
-  accepted: { label: "Accepted", c: C.plow },
-  enroute: { label: "En route", c: C.plow },
-  plowing: { label: "Plowing", c: C.amber },
-  completed: { label: "Done", c: C.push },
-  cancelled: { label: "Cancelled", c: C.danger },
-};
-
-function OpsTile({ label, value, accent = C.ice, sub }) {
-  return (
-    <div style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: "14px 16px" }}>
-      <div style={{ font: `500 12px ${FB}`, letterSpacing: ".01em", color: C.mistDim }}>{label}</div>
-      <div style={{ font: `800 26px ${FD}`, color: accent, marginTop: 6, lineHeight: 1 }}>{value}</div>
-      {sub && <div style={{ font: `500 11px ${FB}`, color: C.mistDim, marginTop: 5 }}>{sub}</div>}
-    </div>
-  );
-}
-
-function OpsDashboard() {
-  const { state } = useStore();
-  const [remote, setRemote] = useState(null);
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    let ok = true;
-    authedFetch("/api/ops-summary")
-      .then(r => (r.ok ? r.json() : null))
-      .then(d => { if (ok) { setRemote(d && !d.error ? d : null); setLoaded(true); } })
-      .catch(() => { if (ok) setLoaded(true); });
-    return () => { ok = false; };
-  }, []);
-
-  // Fallback view from this session's own data until the admin feed is live.
-  const local = useMemo(() => {
-    const hist = state.history || [];
-    const rev = hist.reduce((s, h) => s + (h.total || 0), 0);
-    const active = state.order && state.order.state !== "arrived_done" ? [state.order] : [];
-    const pay = Math.round(rev * 0.8);
-    return {
-      kpis: { jobsToday: hist.length + active.length, activeNow: active.length, completedToday: hist.length,
-        revenueToday: rev, payoutsToday: pay, platformToday: rev - pay, tipsToday: 0 },
-      activeDrivers: state.driverOnline ? 1 : 0,
-      jobs: [
-        ...active.map(o => ({ status: o.state === "arrived_done" ? "completed" : o.state,
-          price: o.quote?.riderTotal, driver_pay: o.quote?.driverPay, job_type: o.jobType,
-          address: o.property?.addr || o.property?.label, customer: state.profile?.name || "Customer",
-          driver: state.driver?.name })),
-        ...hist.map(h => ({ status: "completed", price: h.total, job_type: "driveway",
-          address: h.size, customer: "—", driver: h.driver })),
-      ],
-    };
-  }, [state]);
-
-  const data = remote || local;
-  const live = !!remote;
-  const k = data.kpis;
-  const money = (n) => `$${Math.round(n || 0).toLocaleString()}`;
-
-  return (
-    <div style={{ minHeight: "100vh", background: C.night, color: C.ice, fontFamily: FB }}>
-      <style>{`*{box-sizing:border-box;-webkit-font-smoothing:antialiased}`}</style>
-      <div style={{ maxWidth: 820, margin: "0 auto", padding: "26px 20px 60px" }}>
-        {/* header */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ width: 30, height: 30, borderRadius: 9, background: C.amber,
-              color: C.onAmber, display: "grid", placeItems: "center", fontWeight: 800 }}><Icon e="snowflake" s={18} /></div>
-            <div style={{ font: `800 22px ${FD}`, letterSpacing: ".01em" }}>DRIFT Ops</div>
-          </div>
-          <a href="/" style={{ font: `700 12px ${FB}`, color: C.mist, textDecoration: "none",
-            border: `1px solid ${C.line}`, borderRadius: 10, padding: "8px 12px" }}>← Back to app</a>
-        </div>
-        <div style={{ font: `500 13px ${FB}`, color: live ? C.push : C.amber, marginBottom: 20 }}>
-          {!loaded ? "Loading…" : live ? "● Live — connected to your database" : "Demo data — add the Supabase admin key to go live (see SETUP.md)"}
-        </div>
-
-        {/* KPI grid */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 14 }}>
-          <OpsTile label="Jobs today" value={k.jobsToday} />
-          <OpsTile label="Active now" value={k.activeNow} accent={C.amber} sub={`${data.activeDrivers} driver${data.activeDrivers !== 1 ? "s" : ""} out`} />
-          <OpsTile label="Completed" value={k.completedToday} accent={C.push} />
-          <OpsTile label="Revenue" value={money(k.revenueToday)} accent={C.amber} sub={`${money(k.platformToday)} platform`} />
-          <OpsTile label="Driver payouts" value={money(k.payoutsToday)} accent={C.plow} />
-          <OpsTile label="Tips" value={money(k.tipsToday)} accent={C.push} />
-        </div>
-
-        {/* jobs table */}
-        <div style={{ background: C.night2, border: `1px solid ${C.line}`, borderRadius: 16, overflow: "hidden" }}>
-          <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.line}`, font: `700 14px ${FB}` }}>
-            Today's jobs {data.jobs.length ? `· ${data.jobs.length}` : ""}
-          </div>
-          {data.jobs.length === 0 ? (
-            <div style={{ padding: "34px 18px", textAlign: "center", color: C.mistDim, font: `500 13px ${FB}` }}>
-              No jobs yet today. They'll appear here live as customers book.
-            </div>
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 560 }}>
-                <thead>
-                  <tr style={{ font: `600 12px ${FB}`, letterSpacing: ".01em", color: C.mistDim }}>
-                    {["Status", "Type", "Location", "Customer", "Driver", "Price", "Pay"].map(h => (
-                      <th key={h} style={{ textAlign: h === "Price" || h === "Pay" ? "right" : "left", padding: "10px 14px", fontWeight: 600 }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.jobs.map((j, i) => {
-                    const st = OPS_STATUS[j.status] || OPS_STATUS.requested;
-                    const jt = JOB_TYPES[j.job_type] || JOB_TYPES.driveway;
-                    return (
-                      <tr key={i} style={{ borderTop: `1px solid ${C.line}55`, font: `500 12px ${FB}` }}>
-                        <td style={{ padding: "11px 14px" }}>
-                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, font: `700 11px ${FB}`, color: st.c }}>
-                            <span style={{ width: 7, height: 7, borderRadius: "50%", background: st.c }} />{st.label}
-                          </span>
-                        </td>
-                        <td style={{ padding: "11px 14px", color: C.mist }}><Icon e={jt.icon} s={13} /> {jt.label}</td>
-                        <td style={{ padding: "11px 14px", color: C.ice, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{j.address || "—"}</td>
-                        <td style={{ padding: "11px 14px", color: C.mist }}>{j.customer || "—"}</td>
-                        <td style={{ padding: "11px 14px", color: C.mist }}>{j.driver || "Unassigned"}</td>
-                        <td style={{ padding: "11px 14px", textAlign: "right", color: C.ice, fontWeight: 700 }}>{j.price ? money(j.price) : "—"}</td>
-                        <td style={{ padding: "11px 14px", textAlign: "right", color: C.push }}>{j.driver_pay ? money(j.driver_pay) : "—"}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        <p style={{ font: `500 11px ${FB}`, color: C.mistDim, marginTop: 16, textAlign: "center" }}>
-          Private operator view · bookmark <code style={{ color: C.mist }}>?ops=1</code>. Add a password before sharing beyond you.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-// A few style objects are built once at load; refresh them when the theme flips
-// so buttons, inputs and status colors follow light/dark like everything else.
 function restyleStatics() {
   Object.assign(sub, { color: C.mist });
   Object.assign(legalLink, { color: C.plow });
   Object.assign(miniBtn, { background: C.slate, color: C.ice, border: `1px solid ${C.line}` });
   Object.assign(canvasBtn, { background: C.glassStrong, color: C.ice, border: `1px solid ${C.line}` });
   Object.assign(inp, { background: C.slate, border: `1px solid ${C.line}`, color: C.ice });
-  const st = { requested: C.mist, accepted: C.plow, enroute: C.plow, plowing: C.amber, completed: C.push, cancelled: C.danger };
-  Object.keys(st).forEach(k => { if (OPS_STATUS[k]) OPS_STATUS[k].c = st[k]; });
 }
 
 function Shell() {
@@ -4895,9 +4849,15 @@ function Shell() {
     </button>
   );
 
-  // Operator dashboard — private ops cockpit at ?ops=1 (for the business owner).
-  if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("ops") === "1") {
-    return <StoreCtx.Provider value={store}><OpsDashboard /></StoreCtx.Provider>;
+  // Owner dashboard at ?admin=1 (or ?ops=1). Sign in with an owner account;
+  // the server refuses everyone else.
+  if (ADMIN_ROUTE) {
+    if (!supabaseEnabled) return <div style={{ padding: 40, color: C.ice, background: C.night, minHeight: "100vh", fontFamily: FB }}>Connect Supabase to use the owner dashboard.</div>;
+    if (auth.loading) return <div style={{ minHeight: "100vh", background: C.night }} />;
+    if (!auth.session) return <AuthScreen auth={auth} signInOnly title="Owner sign in" />;
+    return <React.Suspense fallback={<div style={{ minHeight: "100vh", background: C.night }} />}>
+      <AdminApp email={auth.user?.email} onSignOut={async () => { await auth.signOut(); dispatch({ type: "SIGNED_OUT" }); }} />
+    </React.Suspense>;
   }
 
   // Auth gate: when Supabase is configured, require sign-in (demo escape hatch stays).
