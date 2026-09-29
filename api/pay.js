@@ -246,7 +246,10 @@ const ACTIONS = {
     const owedTotal = async () => {
       const { data } = await admin.from("jobs").select("driver_pay")
         .eq("driver_id", user.id).eq("payout_status", "owed");
-      return (data || []).reduce((s, j) => s + Number(j.driver_pay || 0), 0);
+      const { data: tips } = await admin.from("jobs").select("tip")
+        .eq("driver_id", user.id).not("tip_payment_intent_id", "is", null).is("tip_transfer_id", null);
+      return (data || []).reduce((s, j) => s + Number(j.driver_pay || 0), 0)
+        + (tips || []).reduce((s, j) => s + Number(j.tip || 0), 0);
     };
     if (!profile?.stripe_account_id) return { hasAccount: false, ready: false, due: [], owed: await owedTotal(), paidNow: 0 };
     const { ready, due } = await driverPayoutsReady(profile.stripe_account_id);
@@ -376,6 +379,24 @@ async function payOwedJobs(driverId, accountId) {
       total += Number(job.driver_pay || 0);
     } catch (e) {
       console.error("[pay:connect-status] owed payout failed", job.id, e.message);
+    }
+  }
+  // Tips left before the driver finished payout setup.
+  const { data: tipJobs } = await admin.from("jobs").select("*")
+    .eq("driver_id", driverId).not("tip_payment_intent_id", "is", null).is("tip_transfer_id", null);
+  for (const job of tipJobs || []) {
+    try {
+      const pi = await stripe.paymentIntents.retrieve(job.tip_payment_intent_id);
+      if (pi.status !== "succeeded") continue;
+      const t = await stripe.transfers.create({
+        amount: cents(job.tip), currency: "usd", destination: accountId,
+        source_transaction: pi.latest_charge, transfer_group: `job_${job.id}`,
+        metadata: { job_id: job.id, kind: "tip" },
+      }, { idempotencyKey: `tip-transfer-${job.id}` });
+      await updateJob(job.id, { tip_transfer_id: t.id });
+      total += Number(job.tip || 0);
+    } catch (e) {
+      console.error("[pay:connect-status] owed tip failed", job.id, e.message);
     }
   }
   return total;
