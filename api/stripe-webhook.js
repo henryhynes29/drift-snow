@@ -1,47 +1,82 @@
 // POST /api/stripe-webhook
-// Stripe calls this when things happen (payment captured, driver account ready).
-// Needs STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET.
+// Stripe tells us when things happen to a payment. The app already updates jobs
+// directly when it can; this is the backup that keeps the database right even if
+// a phone dies mid-checkout.
 //
-// NOTE: signature verification needs the RAW request body. On Vercel this is
-// handled by reading the stream below; if you migrate to Next.js, also add
-// `export const config = { api: { bodyParser: false } }`.
-import Stripe from "stripe";
+// In Stripe: Developers → Webhooks → Add endpoint →
+//   URL:    https://drift-snow.vercel.app/api/stripe-webhook
+//   Events: payment_intent.amount_capturable_updated, payment_intent.canceled,
+//           payment_intent.payment_failed, charge.refunded, charge.dispute.created
+// Then copy its signing secret (whsec_...) into Vercel as STRIPE_WEBHOOK_SECRET.
+import { stripe, admin, markAuthorized, send } from "./_lib.js";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", { apiVersion: "2024-06-20" });
+export const config = { api: { bodyParser: false } }; // signature check needs the raw body
 
-async function readRawBody(req) {
+async function rawBody(req) {
   const chunks = [];
-  for await (const chunk of req) chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  for await (const c of req) chunks.push(typeof c === "string" ? Buffer.from(c) : c);
   return Buffer.concat(chunks);
 }
 
+async function jobForIntent(piId) {
+  if (!piId) return null;
+  const { data } = await admin.from("jobs").select("*").eq("payment_intent_id", piId).maybeSingle();
+  return data;
+}
+
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).end();
+  if (req.method !== "POST") return send(res, 405, { error: "Method not allowed" });
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
-  if (!secret) return res.status(503).json({ error: "STRIPE_WEBHOOK_SECRET not set" });
+  if (!stripe || !admin || !secret) return send(res, 503, { error: "Webhook not configured" });
 
   let event;
   try {
-    const raw = await readRawBody(req);
-    event = stripe.webhooks.constructEvent(raw, req.headers["stripe-signature"], secret);
+    event = stripe.webhooks.constructEvent(await rawBody(req), req.headers["stripe-signature"], secret);
   } catch (e) {
-    return res.status(400).send(`Webhook signature verification failed: ${e.message}`);
+    return send(res, 400, { error: `Signature check failed: ${e.message}` });
   }
 
-  switch (event.type) {
-    case "payment_intent.succeeded": {
-      // const jobId = event.data.object.metadata.jobId;
-      // TODO: mark the job paid in Supabase (use the service-role key, server-side)
-      break;
+  try {
+    const obj = event.data.object;
+    switch (event.type) {
+      case "payment_intent.amount_capturable_updated": { // card hold succeeded
+        const job = await jobForIntent(obj.id);
+        if (job && job.status === "requested" && job.payment_status === "pending") await markAuthorized(job, obj);
+        break;
+      }
+      case "payment_intent.canceled": {
+        const job = await jobForIntent(obj.id);
+        if (job && ["pending", "authorized"].includes(job.payment_status)) {
+          await admin.from("jobs").update({
+            payment_status: "canceled",
+            ...(job.status === "requested" ? { status: "expired" } : {}),
+          }).eq("id", job.id);
+        }
+        break;
+      }
+      case "payment_intent.payment_failed": {
+        const job = await jobForIntent(obj.id);
+        if (job && job.payment_status === "pending") {
+          console.log("[webhook] card declined for job", job.id, obj.last_payment_error?.message);
+        }
+        break;
+      }
+      case "charge.refunded": {
+        const job = await jobForIntent(obj.payment_intent);
+        if (job && obj.refunded) await admin.from("jobs").update({ payment_status: "refunded" }).eq("id", job.id);
+        break;
+      }
+      case "charge.dispute.created": {
+        const { data: job } = await admin.from("jobs").select("id").eq("charge_id", obj.charge).maybeSingle();
+        if (job) await admin.from("jobs").update({ payment_status: "disputed" }).eq("id", job.id);
+        break;
+      }
+      default:
+        break;
     }
-    case "account.updated": {
-      // const acct = event.data.object;
-      // TODO: if charges/payouts enabled, set the driver's Connect status ready
-      break;
-    }
-    default:
-      break;
+  } catch (e) {
+    console.error("[webhook]", event.type, e);
+    return send(res, 500, { error: "Handler failed" }); // Stripe will retry
   }
-
-  res.status(200).json({ received: true });
+  return send(res, 200, { received: true });
 }

@@ -7,12 +7,21 @@
 // Vercel exposes all env vars to serverless functions regardless of prefix).
 import { createClient } from "@supabase/supabase-js";
 
+// Only the owner(s) can see this. Set OWNER_EMAILS in Vercel, e.g. "you@gmail.com".
+const OWNERS = (process.env.OWNER_EMAILS || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+
 const URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export default async function handler(req, res) {
   if (!URL || !KEY) return res.status(503).json({ error: "Supabase admin not configured" });
   const supabase = createClient(URL, KEY, { auth: { persistSession: false } });
+  // Who's asking? Must be signed in with an owner email.
+  const h = req.headers.authorization || "";
+  const token = h.startsWith("Bearer ") ? h.slice(7) : "";
+  const { data: who } = token ? await supabase.auth.getUser(token) : { data: null };
+  const email = (who?.user?.email || "").toLowerCase();
+  if (!email || !OWNERS.includes(email)) return res.status(403).json({ error: "Owners only" });
   try {
     const start = new Date(); start.setHours(0, 0, 0, 0);
     const { data: jobs, error } = await supabase

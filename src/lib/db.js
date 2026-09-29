@@ -148,6 +148,7 @@ export function rowToOrder(r, driver) {
     createdAt: new Date(r.created_at).getTime(),
     expiresAt: r.expires_at ? new Date(r.expires_at).getTime() : null,
     eta: r.eta_minutes, photos: r.photos || { before: [], after: [] },
+    paymentStatus: r.payment_status || "not_required", payoutStatus: r.payout_status || "none",
     timeline: [{ k: "requested", t: "now", label: "Request sent" }],
     live: true,
   };

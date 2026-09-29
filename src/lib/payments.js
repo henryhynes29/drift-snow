@@ -1,55 +1,55 @@
-// Frontend payment helpers for DRIFT — thin wrappers over the /api Stripe functions.
-// Everything here is a safe no-op until you set VITE_STRIPE_PUBLISHABLE_KEY, so the
-// demo keeps working with the mock card flow until the real keys are in Vercel.
+// Frontend payment helpers for DRIFT — thin wrappers over /api/pay.
+// The server reads every amount from the job in the database; the app only says
+// WHICH job. Everything here is a safe no-op until VITE_STRIPE_PUBLISHABLE_KEY is
+// set in Vercel, so the demo keeps working without Stripe.
 import { loadStripe } from "@stripe/stripe-js";
+import { supabase, supabaseEnabled } from "./supabase.js";
 
-const PK = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || "";
-export const STRIPE_ENABLED = !!PK;
+export const STRIPE_PK = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || "";
+export const STRIPE_ENABLED = !!STRIPE_PK;
 
-// Lazily create ONE Stripe instance (loadStripe caches internally too).
 let _stripe = null;
 export function getStripe() {
   if (!STRIPE_ENABLED) return null;
-  if (!_stripe) _stripe = loadStripe(PK);
+  if (!_stripe) _stripe = loadStripe(STRIPE_PK);
   return _stripe;
 }
 
-async function postJSON(url, body) {
-  const res = await fetch(url, {
+async function authHeader() {
+  if (!supabaseEnabled) return {};
+  const { data } = await supabase.auth.getSession();
+  const token = data?.session?.access_token;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+// fetch with the signed-in user's session attached
+export async function authedFetch(url, opts = {}) {
+  return fetch(url, { ...opts, headers: { ...(opts.headers || {}), ...(await authHeader()) } });
+}
+
+async function pay(action, body) {
+  const res = await authedFetch(`/api/pay?action=${action}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body || {}),
   });
   let data = {};
-  try { data = await res.json(); } catch { /* empty body */ }
+  try { data = await res.json(); } catch { /* empty */ }
   if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
   return data;
 }
 
-// Authorize a card for a job now; we capture it only when the job is completed
-// ("no storm, no charge"). Returns { clientSecret, paymentIntentId }.
-export async function createPaymentIntent({ amount, jobId, customerId }) {
-  if (!STRIPE_ENABLED) return { error: "Stripe not configured" };
-  return postJSON("/api/create-payment-intent", { amount, jobId, customerId });
-}
-
-// Capture the held authorization when the job is done, and (if the driver has
-// finished payout onboarding) transfer their share to their Connect account.
-export async function capturePayment({ paymentIntentId, driverAmount, driverStripeAccountId }) {
-  if (!STRIPE_ENABLED || !paymentIntentId) return { error: "Nothing to capture" };
-  return postJSON("/api/capture-payment", { paymentIntentId, driverAmount, driverStripeAccountId });
-}
-
-// Start (or resume) a driver's Stripe Connect payout onboarding. Returns a hosted
-// onboardingUrl to redirect the driver to.
-export async function createConnectAccount({ driverId, email, returnUrl }) {
-  if (!STRIPE_ENABLED) return { error: "Stripe not configured" };
-  return postJSON("/api/connect-create-account", { driverId, email, returnUrl });
-}
-
-// Charge a post-job tip and route it to the driver. Best-effort — a failed tip
-// should never block the receipt flow.
-export async function sendTip({ amount, jobId, driverStripeAccountId, paymentMethodId, customerId }) {
-  if (!STRIPE_ENABLED || !amount) return { error: "Nothing to tip" };
-  return postJSON("/api/tip", { amount, jobId, driverStripeAccountId, paymentMethodId, customerId });
-}
+// Customer: hold the card for a posted offer. -> { clientSecret, amount } | { required:false } | { alreadyAuthorized }
+export const startHold = (jobId) => pay("hold", { jobId });
+// Customer: after the card form succeeds, put the offer in front of drivers.
+export const confirmHold = (jobId) => pay("confirm-hold", { jobId });
+// Customer: cancel (or expire) an offer and release the card hold.
+export const cancelJobPaid = (jobId, reason = "cancelled") => pay("cancel", { jobId, reason });
+// Driver: finish the job -> customer is charged, driver is paid.
+export const completeJobPaid = (jobId, photos) => pay("complete", { jobId, photos });
+// Customer: tip after the job. 100% goes to the driver.
+export const tipJob = (jobId, amount) => pay("tip", { jobId, amount });
+// Driver: payouts setup (embedded Stripe onboarding) + status + Stripe dashboard link.
+export const connectSession = () => pay("connect-session").then((r) => r.clientSecret);
+export const connectStatus = () => pay("connect-status");
+export const connectDashboard = () => pay("connect-dashboard");

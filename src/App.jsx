@@ -4,7 +4,9 @@ import { useAuth } from "./lib/auth.jsx";
 import { supabaseEnabled } from "./lib/supabase.js";
 import { recordLegalAcceptance, loadProperties, replaceProperties, rateJob, pushDriverLocation, subscribeToDriverLocation, createJobFromOrder, patchJob, sendMessage, subscribeToMessages, loadMessages,
   rowToOrder, fetchJob, listOpenJobs, subscribeOpenJobs, claimJob, getProfile, profileToDriver, setDriverStatus, becomeDriver, cancelJob, expireJob, subscribeToJob, loadActiveJob } from "./lib/db.js";
-import { STRIPE_ENABLED, getStripe, createPaymentIntent, capturePayment, createConnectAccount, sendTip } from "./lib/payments.js";
+import { STRIPE_ENABLED, STRIPE_PK, getStripe, startHold, confirmHold, cancelJobPaid, completeJobPaid, tipJob, connectSession, connectStatus, connectDashboard, authedFetch } from "./lib/payments.js";
+import { loadConnectAndInitialize } from "@stripe/connect-js";
+import { ConnectComponentsProvider, ConnectAccountOnboarding, ConnectNotificationBanner } from "@stripe/react-connect-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { snowDepthNow, nextStorm, refreshConditions } from "./lib/weather.js";
 import { deliverExternal } from "./lib/notify.js";
@@ -192,20 +194,6 @@ const driverGrossPay = (q, driver) =>
 const driverNetPay = (q, driver) => Math.max(0, driverGrossPay(q, driver));
 const driverHourlyFor = (dPay, mins) => Math.round((dPay / ((mins || 25) + DRIVE_OVERHEAD_MIN)) * 60);
 
-// Capture the customer's held card + pay the driver when a job completes.
-// Best-effort: the UI still marks the job done even if this network call fails,
-// and it's a no-op until Stripe keys are set (demo mode).
-async function settleJobPayment(order, driverAmount, driver) {
-  if (!STRIPE_ENABLED || !order?.paymentIntentId) return;
-  try {
-    await capturePayment({
-      paymentIntentId: order.paymentIntentId,
-      driverAmount,
-      driverStripeAccountId: driver?.stripeAccountId,
-    });
-  } catch (e) { /* swallow — completion shouldn't hinge on the network */ }
-}
-
 // ---- Unified quote: honest, transparent pricing ---------------------------
 // riderTotal = base + area/linear (× site factors) + optional salt. That's it —
 // what the customer sees is what they pay, and the breakdown adds up to it.
@@ -279,9 +267,13 @@ function loadLegal() {
 }
 function saveLegal(legal) { try { localStorage.setItem("drift-legal", JSON.stringify(legal)); } catch (e) { /* private mode */ } }
 
+// Came from the "Drive with DRIFT" page (/?drive=1): open straight into driver sign-up.
+const DRIVE_INTENT = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("drive") === "1";
+let driveIntentPending = DRIVE_INTENT; // applied once, on the first account load
+
 const initial = {
   legal: loadLegal(),
-  role: "rider",                    // rider | driver
+  role: DRIVE_INTENT ? "driver" : "rider", // rider | driver
   onboarded: false,                 // fresh customer -> guided setup first
   profile: { name: "", phone: "", email: "" },
   payment: null,                    // { brand, last4 } once added
@@ -352,8 +344,12 @@ function persistNewJob(dispatch, order, userId) {
         dispatch({ type: "TOAST", msg: res?.error?.message ? `Couldn't send your request — ${res.error.message}` : "Couldn't send your request. Check your connection and try again." });
         return;
       }
-      if (cancelledBeforeSaved.has(order.id)) { cancelledBeforeSaved.delete(order.id); cancelJob(row.id); return; }
-      dispatch({ type: "ORDER_STATE", patch: { jobId: row.id, live: true,
+      if (cancelledBeforeSaved.has(order.id)) {
+        cancelledBeforeSaved.delete(order.id);
+        if (row.payment_status === "not_required") cancelJob(row.id); else cancelJobPaid(row.id).catch(() => {});
+        return;
+      }
+      dispatch({ type: "ORDER_STATE", patch: { jobId: row.id, live: true, paymentStatus: row.payment_status,
         expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : null,
         quote: { ...order.quote, riderTotal: Number(row.price), driverPay: Number(row.driver_pay) } } });
     })
@@ -1679,16 +1675,16 @@ function RiderHome({ go }) {
   const request = () => {
     const order = buildOrder();
     dispatch({ type: "REQUEST", order });
-    dispatch({ type: "TOAST", msg: `Offer sent — finding a nearby ${q.tool.toLowerCase()}` });
+    // With payments on, the card sheet explains the next step instead.
+    if (!(isLive(state) && STRIPE_ENABLED)) dispatch({ type: "TOAST", msg: `Offer sent — finding a nearby ${q.tool.toLowerCase()}` });
     notify(dispatch, { kind: "job", title: "Offer sent", body: `Finding a nearby ${q.tool.toLowerCase()} for ${prop?.label || "your property"}.`, role: "rider" });
     autoMatch(dispatch, state, order);
   };
 
   // With Stripe on, authorize the card first; otherwise straight to the demo request.
-  const startRequest = () => {
-    if (STRIPE_ENABLED) { setPayOpen(true); return; }
-    request();
-  };
+  // Card hold (when payments are on) happens on the tracking screen, after the
+  // offer is saved — the server reads the amount from the saved job.
+  const startRequest = () => request();
   const onAuthorized = (paymentIntentId) => {
     setPayOpen(false);
     const order = buildOrder({ paymentIntentId });
@@ -1921,8 +1917,6 @@ function RiderHome({ go }) {
       </div>
 
       {showSched && <ScheduleSheet price={q.riderTotal} onClose={() => setShowSched(false)} onPick={schedule} />}
-      {payOpen && <PaymentSheet amount={q.riderTotal} jobId={"pending"} customerId={state.userId || ""}
-        onAuthorized={onAuthorized} onClose={() => setPayOpen(false)} />}
       {gate && <ConsentGate role="customer" onClose={() => setGate(null)}
         onAgree={(rec) => { acceptLegal(dispatch, rec, state.userId); const run = gate; setGate(null); run(); }} />}
       {doc && <LegalReader docId={doc} onClose={() => setDoc(null)} />}
@@ -2022,7 +2016,7 @@ function autoMatch(dispatch, state, order) {
 // ---- Stripe card authorization (real payments, only when keys are set) -----
 // Inner form: renders Stripe's PaymentElement and authorizes (not captures) the
 // card. Manual capture means the hold is only charged when the job is completed.
-function PayForm({ amount, paymentIntentId, onAuthorized, onClose }) {
+function PayForm({ amount, jobId, onAuthorized, onClose }) {
   const stripe = useStripe();
   const elements = useElements();
   const [busy, setBusy] = useState(false);
@@ -2036,45 +2030,50 @@ function PayForm({ amount, paymentIntentId, onAuthorized, onClose }) {
       redirect: "if_required", // cards authorize without leaving the app
     });
     if (error) { setErr(error.message || "Card couldn't be authorized"); setBusy(false); return; }
-    onAuthorized(paymentIntentId);
+    try { const r = await confirmHold(jobId); onAuthorized(r.job); }
+    catch (e) { setErr(e.message); setBusy(false); }
   };
   return (
     <div>
       <PaymentElement options={{ layout: "tabs" }} />
       {err && <p style={{ font: `600 12px ${FB}`, color: C.danger, margin: "10px 0 0" }}>{err}</p>}
       <div style={{ marginTop: 16 }}>
-        <Btn full onClick={pay} disabled={busy || !stripe}>{busy ? "Authorizing…" : `Authorize $${amount}`}</Btn>
+        <Btn full onClick={pay} disabled={busy || !stripe}>{busy ? "Holding…" : `Hold $${amount} and send offer`}</Btn>
       </div>
       <p style={{ font: `500 11px ${FB}`, color: C.mistDim, textAlign: "center", marginTop: 10 }}>
-        You're only charged after it's plowed. No storm, no charge.
+        Charged only when the job is done. Payments secured by Stripe.
       </p>
     </div>
   );
 }
 
 // Outer sheet: fetches a PaymentIntent, then mounts Stripe Elements.
-function PaymentSheet({ amount, jobId, customerId, onAuthorized, onClose }) {
+function PaymentSheet({ amount, jobId, onAuthorized, onClose }) {
   const [secret, setSecret] = useState(null);
-  const [piId, setPiId] = useState(null);
   const [err, setErr] = useState(null);
   useEffect(() => {
     let ok = true;
-    createPaymentIntent({ amount, jobId, customerId })
-      .then(r => { if (!ok) return; r.clientSecret ? (setSecret(r.clientSecret), setPiId(r.paymentIntentId)) : setErr(r.error || "Couldn't start payment"); })
+    startHold(jobId)
+      .then(r => {
+        if (!ok) return;
+        if (r.alreadyAuthorized || r.authorized || r.required === false) { onAuthorized(r.job); return; }
+        r.clientSecret ? setSecret(r.clientSecret) : setErr(r.error || "Couldn't start payment");
+      })
       .catch(e => ok && setErr(e.message));
     return () => { ok = false; };
-  }, []);
-  const appearance = { theme: "night", variables: { colorPrimary: C.amber, colorBackground: C.night2,
-    colorText: C.ice, fontFamily: "Inter, sans-serif", borderRadius: "12px" } };
+  }, [jobId]);
+  const appearance = { theme: isLight ? "stripe" : "night", variables: { colorPrimary: C.amber, colorBackground: C.night2,
+    colorText: C.ice, fontFamily: "-apple-system, system-ui, sans-serif", borderRadius: "12px" } };
   return (
     <Sheet onClose={onClose}>
-      <Eyebrow>Confirm & authorize</Eyebrow>
+      <Eyebrow>Hold your card</Eyebrow>
       <h3 style={{ font: `700 26px ${FD}`, margin: "8px 0 4px" }}>${amount}</h3>
-      <p style={{ ...sub, marginBottom: 16 }}>Add a card to hold your spot — we only charge once your property is plowed.</p>
+      <p style={{ ...sub, marginBottom: 16 }}>Your offer goes to drivers once your card is held. You're only charged after the job is done. If nobody takes it, the hold is released.</p>
       {err ? (
         <div style={{ padding: "14px 16px", background: C.slate, borderRadius: 12, border: `1px solid ${C.danger}55` }}>
           <p style={{ font: `600 13px ${FB}`, color: C.danger, margin: 0 }}>{err}</p>
-          <p style={{ font: `500 12px ${FB}`, color: C.mist, margin: "6px 0 0" }}>Payments aren't fully set up yet. You can still explore the app.</p>
+          <button onClick={onClose} style={{ marginTop: 10, background: "none", border: "none", padding: 0, cursor: "pointer",
+            font: `600 13px ${FB}`, color: C.mist }}>Cancel this offer</button>
         </div>
       ) : !secret ? (
         <div style={{ display: "grid", gap: 10 }}>
@@ -2082,7 +2081,7 @@ function PaymentSheet({ amount, jobId, customerId, onAuthorized, onClose }) {
         </div>
       ) : (
         <Elements stripe={getStripe()} options={{ clientSecret: secret, appearance }}>
-          <PayForm amount={amount} paymentIntentId={piId} onAuthorized={onAuthorized} onClose={onClose} />
+          <PayForm amount={amount} jobId={jobId} onAuthorized={onAuthorized} onClose={onClose} />
         </Elements>
       )}
     </Sheet>
@@ -2262,7 +2261,8 @@ function RiderTracking() {
       return;
     }
     const map = { requested: "requested", accepted: "enroute", enroute: "enroute", plowing: "plowing", completed: "arrived_done" };
-    const patch = { state: map[row.status] || o.state, driverId: row.driver_id || null, photos: row.photos || o.photos };
+    const patch = { state: map[row.status] || o.state, driverId: row.driver_id || null, photos: row.photos || o.photos,
+      paymentStatus: row.payment_status, expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : o.expiresAt };
     if (row.driver_id && (!o.driver || o.driver.id !== row.driver_id)) {
       const { data: p } = await getProfile(row.driver_id);
       patch.driver = profileToDriver(p) || { id: row.driver_id, name: "Your driver", rating: "5.0", jobs: 0, truck: "Plow truck" };
@@ -2289,15 +2289,17 @@ function RiderTracking() {
 
   // ---- LIVE: offers expire after 5 minutes if nobody takes them ----
   const [now, setNow] = useState(Date.now());
+  const needsCard = LIVE && !!o.jobId && o.paymentStatus === "pending";
+  const paidJob = LIVE && o.paymentStatus && o.paymentStatus !== "not_required";
   useEffect(() => {
-    if (!LIVE || o.state !== "requested" || !o.expiresAt) return;
+    if (!LIVE || o.state !== "requested" || !o.expiresAt || needsCard) return;
     const iv = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(iv);
-  }, [LIVE, o.state, o.expiresAt]);
-  const leftMs = LIVE && o.expiresAt ? Math.max(0, o.expiresAt - now) : null;
+  }, [LIVE, o.state, o.expiresAt, needsCard]);
+  const leftMs = LIVE && o.expiresAt && !needsCard ? Math.max(0, o.expiresAt - now) : null;
   useEffect(() => {
     if (leftMs !== 0 || o.state !== "requested") return;
-    expireJob(o.jobId).then(() => fetchJob(o.jobId)).then((r) => {
+    (paidJob ? cancelJobPaid(o.jobId, "expired").catch(() => null) : expireJob(o.jobId)).then(() => fetchJob(o.jobId)).then((r) => {
       if (r?.data?.status === "requested" || r?.data?.status === "expired") applyRow({ ...r.data, status: "expired" });
       else applyRow(r?.data);
     });
@@ -2344,7 +2346,6 @@ function RiderTracking() {
       dispatch({ type: "ADD_PHOTO", phase: "before", photo: before });
       dispatch({ type: "ADD_PHOTO", phase: "after", photo: after });
       const driverPay = driverNetPay(o.quote, state.driver);
-      settleJobPayment(o, driverPay, state.driver);
       // credit earnings at the driver's flat 80% share
       dispatch({ type: "COMPLETE", q: { ...o.quote, driverPay }, size: o.size });
       dispatch({ type: "ORDER_STATE", patch: { state: "arrived_done", completed: true } });
@@ -2356,6 +2357,18 @@ function RiderTracking() {
     return () => clearTimeout(t);
   }, [o.state, state.driverOnline]);
 
+  const cancelOffer = async (quiet) => {
+    if (LIVE) {
+      if (!o.jobId) cancelledBeforeSaved.add(o.id);
+      else if (paidJob) {
+        try { await cancelJobPaid(o.jobId); }
+        catch (e) { dispatch({ type: "TOAST", msg: `Couldn't cancel — ${e.message}` }); return; }
+      } else cancelJob(o.jobId);
+    }
+    dispatch({ type: "CLEAR_ORDER" });
+    dispatch({ type: "TOAST", msg: quiet ? "Offer not sent — you weren't charged" : "Request cancelled — you weren't charged" });
+  };
+
   if (o.state === "arrived_done") return <RiderReceipt />;
 
   const first = d.name.split(" ")[0];
@@ -2364,7 +2377,7 @@ function RiderTracking() {
   const shownArrived = LIVE ? liveArrived : arrived;
   const stage = finding ? 0 : shownArrived ? 2 : 1;         // 0 sent · 1 on the way · 2 plowing · 3 done
   const big = finding ? "Finding your plow" : shownArrived ? "Plowing now" : LIVE ? "On the way" : `${Math.max(1, Math.ceil(eta))} min`;
-  const line = finding ? (LIVE ? (o.jobId ? `Your $${o.quote?.offer} offer is live for drivers nearby${mmss ? ` · ${mmss} left` : ""}` : "Sending your offer…")
+  const line = finding ? (LIVE ? (needsCard ? "Hold your card to send your offer to drivers" : o.jobId ? `Your $${o.quote?.offer} offer is live for drivers nearby${mmss ? ` · ${mmss} left` : ""}` : "Sending your offer…")
       : "Sent to plows near you — usually under 2 minutes")
     : shownArrived ? `${first} is clearing ${o.property?.label?.toLowerCase() === "home" ? "your driveway" : (o.property?.label || "your property")}`
     : `${first} is on the way`;
@@ -2428,14 +2441,24 @@ function RiderTracking() {
         </div>
       )}
 
+      {needsCard && (STRIPE_ENABLED
+        ? <PaymentSheet amount={o.quote?.riderTotal} jobId={o.jobId} onClose={() => cancelOffer(true)}
+            onAuthorized={(job) => {
+              dispatch({ type: "ORDER_STATE", patch: { paymentStatus: "authorized",
+                expiresAt: job?.expires_at ? new Date(job.expires_at).getTime() : Date.now() + 5 * 60 * 1000 } });
+              dispatch({ type: "TOAST", msg: "Card held — your offer is live" });
+            }} />
+        : <Sheet onClose={() => cancelOffer(true)}>
+            <p style={{ ...sub }}>Card payments aren't switched on in this version of the app yet.</p>
+            <Btn full onClick={() => cancelOffer(true)}>Cancel offer</Btn>
+          </Sheet>)}
+
       {/* chat — real Supabase thread when the job is persisted, else in-session */}
       {!finding && <JobChat jobId={o.jobId} senderId={state.userId} peerName={first}
         seed={[{ me: false, t: "On my way — about 8 min." }]} />}
 
       {!shownArrived && (
-        <button onClick={() => {
-            if (LIVE) { if (o.jobId) cancelJob(o.jobId); else cancelledBeforeSaved.add(o.id); }
-            dispatch({ type: "CLEAR_ORDER" }); dispatch({ type: "TOAST", msg: "Request cancelled — you weren't charged" }); }}
+        <button onClick={() => cancelOffer()}
           style={{ display: "block", margin: "18px auto 0", background: "none", border: "none", cursor: "pointer",
             font: `500 14px ${FB}`, color: C.danger, padding: 8 }}>Cancel request</button>
       )}
@@ -2462,9 +2485,8 @@ function RiderReceipt() {
       dispatch({ type: "TIP", amt: tip });
       notify(dispatch, { kind: "payment", title: `$${tip} tip from your customer`,
         body: `Nice work on ${o.property?.label || "the job"} — 100% of the tip is yours.`, role: "driver" });
-      if (STRIPE_ENABLED) {
-        sendTip({ amount: tip, jobId: o.id, driverStripeAccountId: d.stripeAccountId, customerId: state.userId })
-          .catch(() => { /* best-effort; never block the receipt */ });
+      if (isLive(state) && o.jobId && o.paymentStatus && o.paymentStatus !== "not_required") {
+        tipJob(o.jobId, tip).catch((e) => dispatch({ type: "TOAST", msg: `Tip didn't go through — ${e.message}` }));
       }
     }
     dispatch({ type: "CLEAR_ORDER" });
@@ -2488,7 +2510,9 @@ function RiderReceipt() {
           <div style={{ height: 1, background: C.line, margin: "8px 0" }} />
         </>}
         <Row label={q.offer != null ? "Total" : jtR.label} value={`$${q.riderTotal}`} big />
-        <p style={{ font: `400 12px ${FB}`, color: C.mistDim, margin: "8px 0 0" }}>Charged to ···{state.payment?.last4 || "4242"} when the job was marked done</p>
+        <p style={{ font: `400 12px ${FB}`, color: C.mistDim, margin: "8px 0 0" }}>{isLive(state) ? (o.paymentStatus === "captured" ? "Charged to your card when the job was marked done"
+          : o.paymentStatus === "failed" ? "We couldn't charge your card — we'll reach out" : "Receipt saved to Trips")
+          : `Charged to ···${state.payment?.last4 || "4242"} when the job was marked done`}</p>
       </div>
 
       {/* proof of work: before / after */}
@@ -3204,6 +3228,8 @@ function DriverOnboarding() {
   const [uploads, setUploads] = useState({});
   const setV = (k, v) => setValid(s => ({ ...s, [k]: v }));
   const TOTAL = 4;
+  // Real accounts: document uploads and bank setup aren't wired yet, so don't fake them.
+  const LIVE_ONB = isLive(state);
 
 
   const upload = (k) => {
@@ -3298,10 +3324,10 @@ function DriverOnboarding() {
               validate={validators.name} placeholder="Marcus Trent" onValid={v => setV("name", v)} />
             <Field label="Phone" icon="mobile" value={phone} inputMode="tel" format={fmtPhone} onChange={setPhone}
               validate={validators.phone} placeholder="(218) 555-0123" onValid={v => setV("phone", v)} />
-            <UploadRow k="license" label="Driver's license" hint="Front and back · photo or scan" />
+            {!LIVE_ONB && <UploadRow k="license" label="Driver's license" hint="Front and back · photo or scan" />}
           </div>
           <div style={{ position: "sticky", bottom: 16 }}>
-            <Btn full kind="good" onClick={() => setStep(2)} disabled={!(valid.name && valid.phone && uploads.license)}>Continue</Btn>
+            <Btn full kind="good" onClick={() => setStep(2)} disabled={!(valid.name && valid.phone && (LIVE_ONB || uploads.license))}>Continue</Btn>
           </div>
         </Fade>
       )}
@@ -3333,10 +3359,10 @@ function DriverOnboarding() {
             })}
             <Field label="Vehicle" icon="pickup" value={truck} onChange={setTruck}
               placeholder="F-350 · 9ft V-Plow" />
-            <UploadRow k="plate" label="Registration / plate" hint="Proof the rig is yours" />
+            {!LIVE_ONB && <UploadRow k="plate" label="Registration / plate" hint="Proof the rig is yours" />}
           </div>
           <div style={{ position: "sticky", bottom: 16 }}>
-            <Btn full kind="good" onClick={() => setStep(3)} disabled={!(tools.length && uploads.plate)}>
+            <Btn full kind="good" onClick={() => setStep(3)} disabled={!(tools.length && (LIVE_ONB || uploads.plate))}>
               {tools.length ? "Continue" : "Pick at least one"}</Btn>
           </div>
         </Fade>
@@ -3357,7 +3383,9 @@ function DriverOnboarding() {
         <Fade k="d4">
           <Eyebrow color={C.push}>Step 4 · Get paid</Eyebrow>
           <h2 style={h2}>Where should we send it?</h2>
-          <p style={sub}>Payouts run through Stripe Connect. Cash out the same day.</p>
+          <p style={sub}>{LIVE_ONB ? "Payouts go to your bank through Stripe. Set it up any time in the Earnings tab — Stripe collects your bank and W-9 details, DRIFT never sees them."
+            : "Payouts run through Stripe Connect. Cash out the same day."}</p>
+          {!LIVE_ONB && <>
           <div style={{ margin: "16px 0", borderRadius: 16, padding: 18, position: "relative", overflow: "hidden",
             background: C.slate, border: `1px solid ${C.push}44` }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
@@ -3368,11 +3396,12 @@ function DriverOnboarding() {
             <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 6 }}>{name || "Your name"} · Checking</div>
           </div>
           <UploadRow k="w9" label="W-9 tax form" hint="Required for 1099 contractors" />
+          </>}
           <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "14px 0", font: `500 12px ${FB}`, color: C.mistDim }}>
             <span><Icon e="lock" s={14} /></span> Bank details handled by Stripe · we never see them
           </div>
           <div style={{ position: "sticky", bottom: 16 }}>
-            <Btn full kind="good" onClick={finish} disabled={saving}>{saving ? "Saving…" : "Finish — start earning"}</Btn>
+            <Btn full kind="good" onClick={finish} disabled={saving}>{saving ? "Saving…" : LIVE_ONB ? "Finish setup" : "Finish — start earning"}</Btn>
           </div>
         </Fade>
       )}
@@ -3788,8 +3817,14 @@ function DriverActiveJob() {
   const meLL = gps || driverLLD;
 
   const startPlow = () => dispatch({ type: "ORDER_STATE", patch: { state: "plowing" } });
-  const complete = () => {
-    settleJobPayment(o, dPay, state.driver); // capture the customer's card + pay the driver
+  const [finishing, setFinishing] = useState(false);
+  const complete = async () => {
+    if (LIVE && o.jobId && o.paymentStatus && o.paymentStatus !== "not_required") {
+      setFinishing(true);
+      try { await completeJobPaid(o.jobId, o.photos); }
+      catch (e) { setFinishing(false); dispatch({ type: "TOAST", msg: `Couldn't finish — ${e.message}` }); return; }
+      setFinishing(false);
+    }
     dispatch({ type: "COMPLETE", q: { ...q, driverPay: dPay }, size: o.size });
     dispatch({ type: "ORDER_STATE", patch: { state: "arrived_done", completed: true } });
     dispatch({ type: "TOAST", msg: `Job complete · $${dPay} added to today` });
@@ -3949,8 +3984,8 @@ function DriverActiveJob() {
                 onCapture={(photo) => dispatch({ type: "ADD_PHOTO", phase: "after", photo })} />
 
               <div style={{ marginTop: 14 }}>
-                <Btn full onClick={complete} disabled={!allChecked || !(o.photos?.after?.length)}>
-                  {!allChecked ? "Check off all zones" : !(o.photos?.after?.length) ? "Add an after photo" : `Complete job · collect $${dPay}`}
+                <Btn full onClick={complete} disabled={!allChecked || !(o.photos?.after?.length) || finishing}>
+                  {finishing ? "Finishing…" : !allChecked ? "Check off all zones" : !(o.photos?.after?.length) ? "Add an after photo" : `Complete job · collect $${dPay}`}
                 </Btn>
               </div>
             </>
@@ -3990,6 +4025,76 @@ function PhotoCapture({ phase, photos, onCapture }) {
         </button>
       </div>
     </div>
+  );
+}
+
+// ---- Driver payouts (Stripe Connect, embedded onboarding) -----------------
+// Signed-in drivers set up payouts right inside the app. Stripe collects bank
+// and tax (W-9) details; DRIFT never sees them.
+function PayoutsCard() {
+  const { dispatch } = useStore();
+  const [st, setSt] = useState(null);       // { hasAccount, ready, due, owed, paidNow }
+  const [err, setErr] = useState(null);
+  const [open, setOpen] = useState(false);
+  const refresh = () => connectStatus()
+    .then((r) => { setSt(r); setErr(null);
+      if (r.paidNow > 0) dispatch({ type: "TOAST", msg: `$${r.paidNow} in earnings sent to your Stripe balance` }); })
+    .catch((e) => setErr(e.message));
+  useEffect(() => { refresh(); }, []);
+  const openDashboard = async () => {
+    try { const { url } = await connectDashboard(); window.open(url, "_blank", "noopener"); }
+    catch (e) { dispatch({ type: "TOAST", msg: e.message }); }
+  };
+  const card = { background: C.slate, border: `1px solid ${C.line}`, borderRadius: 16, padding: S.lg, marginBottom: S.md };
+  if (err) return <div style={card}><div style={{ font: `600 14px ${FB}`, color: C.ice }}>Payouts</div>
+    <p style={{ font: `400 13px ${FB}`, color: C.mist, margin: "6px 0 0" }}>{err}</p></div>;
+  if (!st) return <div style={card}><Skeleton h={16} w="40%" /><div style={{ height: 10 }} /><Skeleton h={44} r={12} /></div>;
+  return (
+    <div style={card}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ color: st.ready ? C.push : C.amber, display: "flex" }}><Icon e="bank" s={20} /></span>
+        <div style={{ flex: 1 }}>
+          <div style={{ font: `600 15px ${FB}`, color: C.ice }}>{st.ready ? "Payouts are on" : "Set up payouts"}</div>
+          <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 2 }}>
+            {st.ready ? "Your share of each job goes to your Stripe balance and then your bank automatically."
+              : "Add your bank and tax info with Stripe so you can get paid. Takes a few minutes."}</div>
+        </div>
+      </div>
+      {st.owed > 0 && (
+        <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 12, background: C.night2, font: `500 13px ${FB}`, color: C.ice }}>
+          ${Math.round(st.owed)} in earnings is waiting for you{st.ready ? "" : " — finish setup to get it"}.
+        </div>
+      )}
+      <div style={{ marginTop: 14, display: "grid", gap: 8 }}>
+        {!st.ready && <Btn full kind="good" onClick={() => setOpen(true)}>{st.hasAccount ? "Continue setup" : "Set up payouts"}</Btn>}
+        {st.hasAccount && <Btn full kind="dark" onClick={openDashboard}>Payout history and tax forms</Btn>}
+      </div>
+      <p style={{ font: `400 12px ${FB}`, color: C.mistDim, textAlign: "center", margin: "10px 0 0" }}>
+        Secured by Stripe · DRIFT never sees your bank details</p>
+      {open && <PayoutSetupSheet onClose={() => { setOpen(false); refresh(); }} />}
+    </div>
+  );
+}
+
+function PayoutSetupSheet({ onClose }) {
+  const [instance] = useState(() => loadConnectAndInitialize({
+    publishableKey: STRIPE_PK,
+    fetchClientSecret: connectSession,
+    appearance: {
+      overlays: "dialog",
+      variables: { colorPrimary: C.amber, colorBackground: C.night2, colorText: C.ice,
+        colorSecondaryText: C.mist, colorBorder: C.line, borderRadius: "12px",
+        fontFamily: "-apple-system, system-ui, sans-serif" },
+    },
+  }));
+  return (
+    <Sheet onClose={onClose}>
+      <h3 style={{ font: `700 22px ${FD}`, margin: "0 0 12px" }}>Set up payouts</h3>
+      <ConnectComponentsProvider connectInstance={instance}>
+        <ConnectNotificationBanner />
+        <ConnectAccountOnboarding onExit={onClose} />
+      </ConnectComponentsProvider>
+    </Sheet>
   );
 }
 
@@ -4057,8 +4162,9 @@ function DriverEarnings({ onReferral }) {
         </div>
       </Card>
 
-      {/* cash out / payout setup */}
-      {STRIPE_ENABLED && !state.driver.stripeAccountId ? (
+      {/* payouts: real Stripe setup for signed-in drivers, demo card otherwise */}
+      {isLive(state) && STRIPE_ENABLED ? <PayoutsCard /> : (
+      !isLive(state) && STRIPE_ENABLED && !state.driver.stripeAccountId ? (
         <div style={{ background: C.slate, border: `1px solid ${C.plow}55`,
           borderRadius: 16, padding: S.lg, marginBottom: S.md }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
@@ -4068,14 +4174,8 @@ function DriverEarnings({ onReferral }) {
           <p style={{ font: `500 12px ${FB}`, color: C.mist, margin: "0 0 14px" }}>
             Connect a bank account through Stripe to get paid — takes about 2 minutes. You keep 80% of every offer, the full ${CALLOUT_FEE} call-out fee, and all tips — deposited automatically.
           </p>
-          <Btn full kind="dark" onClick={async () => {
-            dispatch({ type: "TOAST", msg: "Opening secure Stripe setup…" });
-            try {
-              const r = await createConnectAccount({ driverId: state.userId || "driver",
-                email: state.profile.email, returnUrl: window.location.href });
-              if (r.onboardingUrl) window.location.href = r.onboardingUrl;
-              else dispatch({ type: "TOAST", msg: r.error || "Payouts aren't set up on the server yet" });
-            } catch (err) { dispatch({ type: "TOAST", msg: err.message }); }
+          <Btn full kind="dark" onClick={() => {
+            dispatch({ type: "TOAST", msg: "Sign in with a driver account to set up payouts" });
           }}>Connect bank with Stripe ›</Btn>
           <p style={{ font: `500 11px ${FB}`, color: C.mistDim, textAlign: "center", marginTop: 10 }}>
             Secured by Stripe · we never see your bank details
@@ -4097,6 +4197,7 @@ function DriverEarnings({ onReferral }) {
             $0.50 instant fee · free if you wait for Tuesday deposit
           </p>
         </div>
+      )
       )}
 
       {/* referral CTA */}
@@ -4280,9 +4381,9 @@ function DriverReferral({ onBack }) {
 // ============================================================
 // AUTH SCREEN — real sign up / log in (Supabase)
 // ============================================================
-function AuthScreen({ auth, onDemo }) {
+function AuthScreen({ auth, onDemo, initialRole }) {
   const [mode, setMode] = useState("signup"); // signup | signin
-  const [role, setRole] = useState("customer"); // customer | driver
+  const [role, setRole] = useState(initialRole || "customer"); // customer | driver
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -4396,7 +4497,7 @@ function OpsDashboard() {
 
   useEffect(() => {
     let ok = true;
-    fetch("/api/ops-summary")
+    authedFetch("/api/ops-summary")
       .then(r => (r.ok ? r.json() : null))
       .then(d => { if (ok) { setRemote(d && !d.error ? d : null); setLoaded(true); } })
       .catch(() => { if (ok) setLoaded(true); });
@@ -4529,7 +4630,9 @@ function Shell() {
   const [bypass, setBypass] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [legalDoc, setLegalDoc] = useState(null); // landing-page footer → document reader
-  const [entered, setEntered] = useState(false); // false = show the marketing homepage first
+  const [entered, setEntered] = useState(DRIVE_INTENT); // false = show the marketing homepage first
+  // Tidy the address bar so a refresh doesn't re-trigger driver sign-up.
+  useEffect(() => { if (DRIVE_INTENT && typeof window !== "undefined") window.history.replaceState(null, "", window.location.pathname); }, []);
   // Re-render everything when the theme flips (Account → Appearance, or the phone's setting in Auto).
   const [, setThemeTick] = useState(0);
   useEffect(() => onThemeChange(() => { restyleStatics(); setThemeTick(t => t + 1); }), []);
@@ -4557,6 +4660,7 @@ function Shell() {
     const status = statusMap[o.state];
     if (!status) return;
     if (status === "requested" || status === "accepted") return; // set by the database itself
+    if (status === "completed" && o.paymentStatus && o.paymentStatus !== "not_required") return; // done by the payment server
     const patch = { status };
     if (status === "completed") patch.photos = o.photos || undefined; // money + timestamps are set by the database
     patchJob(o.jobId, patch);
@@ -4568,7 +4672,8 @@ function Shell() {
     let cancelled = false;
     (async () => {
       const uid = auth.user.id;
-      const role = (auth.profile.role === "driver" || auth.profile.is_driver) ? "driver" : "rider";
+      const role = (driveIntentPending || auth.profile.role === "driver" || auth.profile.is_driver) ? "driver" : "rider";
+      driveIntentPending = false;
       let props = [];
       if (role === "rider") {
         const { data } = await loadProperties(uid);
@@ -4632,7 +4737,7 @@ function Shell() {
   }
 
   if (supabaseEnabled && !auth.session && !bypass) {
-    return <>{SkipButton}<AuthScreen auth={auth} onDemo={() => setBypass(true)} /></>;
+    return <>{SkipButton}<AuthScreen auth={auth} onDemo={() => setBypass(true)} initialRole={DRIVE_INTENT ? "driver" : "customer"} /></>;
   }
 
   return (
