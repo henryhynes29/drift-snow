@@ -16,8 +16,7 @@ import "@fontsource/instrument-sans/500";
 import "@fontsource/instrument-sans/600";
 import "@fontsource/ibm-plex-mono/500";
 import EmojiIcon from "./Icon.jsx";
-import mapboxgl from "mapbox-gl";
-import { MAP_ENABLED } from "./PropertyMap.jsx"; // sets the Mapbox token (and loads its CSS)
+import { MAP_ENABLED, MAPBOX_TOKEN } from "./mapConfig.js"; // no map library here — it loads on scroll
 import { fetchSnowForecast } from "./lib/weather.js";
 
 // ---------- tokens (fixed dark: lake-night) ----------
@@ -369,9 +368,12 @@ function MapboxServiceArea() {
   }, [state]);
   useEffect(() => {
     if (state !== "loading" || !el.current) return;
-    let map;
-    const fail = setTimeout(() => setState((s) => (s === "loading" ? "failed" : s)), 12000);
-    try {
+    let map, gone = false;
+    const fail = setTimeout(() => setState((s) => (s === "loading" ? "failed" : s)), 15000);
+    (async () => { try {
+      const [{ default: mapboxgl }] = await Promise.all([import("mapbox-gl"), import("mapbox-gl/dist/mapbox-gl.css")]);
+      if (gone || !el.current) return;
+      mapboxgl.accessToken = MAPBOX_TOKEN;
       map = new mapboxgl.Map({
         container: el.current, style: "mapbox://styles/mapbox/dark-v11",
         bounds: [[-92.52, 46.66], [-91.98, 46.86]], fitBoundsOptions: { padding: 40 },
@@ -398,8 +400,8 @@ function MapboxServiceArea() {
         });
         setState("ready");
       });
-    } catch { clearTimeout(fail); setState("failed"); }
-    return () => { clearTimeout(fail); try { map && map.remove(); } catch { /* already gone */ } };
+    } catch { clearTimeout(fail); setState("failed"); } })();
+    return () => { gone = true; clearTimeout(fail); try { map && map.remove(); } catch { /* already gone */ } };
   }, [state]);
 
   if (state === "failed") return <ServiceMap />;

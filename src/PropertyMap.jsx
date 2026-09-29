@@ -16,9 +16,9 @@ import "@mapbox/mapbox-gl-geocoder/dist/mapbox-gl-geocoder.css";
 import { C, FD, FB } from "./theme.js";
 import Icon from "./Icon.jsx";
 
-const TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
+import { MAPBOX_TOKEN as TOKEN, MAP_ENABLED, staticMapUrl } from "./mapConfig.js";
 if (TOKEN) mapboxgl.accessToken = TOKEN;
-export const MAP_ENABLED = !!TOKEN;
+export { MAP_ENABLED, staticMapUrl };
 
 const SQM_TO_SQFT = 10.7639;
 const STYLE = "mapbox://styles/mapbox/satellite-streets-v12";
@@ -69,29 +69,6 @@ function XMark({ s = 14 }) {
       <path d="M6 6l12 12M18 6L6 18" />
     </svg>
   );
-}
-
-// ---- Static Images URL of an outline (thumbnails + driver view) ----
-export function staticMapUrl(features, center, w = 320, h = 190) {
-  if (!TOKEN) return null;
-  const base = "https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v12/static";
-  if (features && features.length) {
-    const styled = {
-      type: "FeatureCollection",
-      features: features.map((f) => {
-        if (f.geometry?.type === "Point") {
-          return { type: "Feature", geometry: f.geometry, properties: { "marker-color": HAZARD_FILL, "marker-symbol": "danger", "marker-size": "small" } };
-        }
-        const isPush = f.properties?.mode === "push";
-        return { type: "Feature", geometry: f.geometry, properties: {
-          fill: isPush ? C.push : C.plow, "fill-opacity": 0.35, stroke: isPush ? C.push : C.plow, "stroke-width": 2 } };
-      }),
-    };
-    const overlay = "geojson(" + encodeURIComponent(JSON.stringify(styled)) + ")";
-    return `${base}/${overlay}/auto/${w}x${h}@2x?padding=30&access_token=${TOKEN}`;
-  }
-  if (center) return `${base}/${center.lng},${center.lat},17,0/${w}x${h}@2x?access_token=${TOKEN}`;
-  return null;
 }
 
 // ---- DOM marker helpers (SVG only, never text glyphs) ----

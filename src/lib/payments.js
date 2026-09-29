@@ -2,7 +2,7 @@
 // The server reads every amount from the job in the database; the app only says
 // WHICH job. Everything here is a safe no-op until VITE_STRIPE_PUBLISHABLE_KEY is
 // set in Vercel, so the demo keeps working without Stripe.
-import { loadStripe } from "@stripe/stripe-js";
+import { loadStripe } from "@stripe/stripe-js/pure"; // /pure: Stripe's script loads only when a card form opens
 import { supabase, supabaseEnabled } from "./supabase.js";
 
 export const STRIPE_PK = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || "";

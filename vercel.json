@@ -1,5 +1,19 @@
 {
   "crons": [
-    { "path": "/api/pay", "schedule": "17 20 * * *" }
+    {
+      "path": "/api/pay",
+      "schedule": "17 20 * * *"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/assets/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    }
   ]
 }

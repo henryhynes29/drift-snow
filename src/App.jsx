@@ -1,5 +1,15 @@
 import React, { useState, useEffect, useRef, useMemo, createContext, useContext, useReducer } from "react";
-import MapPropertyDesigner, { staticMapUrl, LiveMap, MAP_ENABLED } from "./PropertyMap.jsx";
+import { staticMapUrl, MAP_ENABLED } from "./mapConfig.js";
+// The map library is big (~1.6 MB) — load it only when a map is actually on screen.
+const MapDesignerLazy = React.lazy(() => import("./PropertyMap.jsx"));
+const LiveMapLazy = React.lazy(() => import("./PropertyMap.jsx").then((m) => ({ default: m.LiveMap })));
+const mapPlaceholder = (h) => <div style={{ height: h, background: C.mapBg, borderRadius: 14 }} />;
+function MapPropertyDesigner(props) {
+  return <React.Suspense fallback={mapPlaceholder(360)}><MapDesignerLazy {...props} /></React.Suspense>;
+}
+function LiveMap(props) {
+  return <React.Suspense fallback={mapPlaceholder(props.height || 220)}><LiveMapLazy {...props} /></React.Suspense>;
+}
 import { useAuth } from "./lib/auth.jsx";
 import { supabaseEnabled } from "./lib/supabase.js";
 import { recordLegalAcceptance, loadProperties, replaceProperties, rateJob, pushDriverLocation, subscribeToDriverLocation, createJobFromOrder, patchJob, sendMessage, subscribeToMessages, loadMessages,
@@ -8,7 +18,7 @@ import { STRIPE_ENABLED, STRIPE_PK, getStripe, startHold, confirmHold, cancelJob
 import { uploadJobPhoto, uploadDriverDoc, myDriverDocs, signedUrl } from "./lib/photos.js";
 import { unlockRinger, startRing, stopRing, keepAwake, isStandalone, isIOS, canPromptInstall, promptInstall,
   onInstallChange, pushSupported, enablePush, pushEnabled, localAlert } from "./lib/alerts.js";
-import { loadConnectAndInitialize } from "@stripe/connect-js";
+import { loadConnectAndInitialize } from "@stripe/connect-js/pure";
 import { ConnectComponentsProvider, ConnectAccountOnboarding, ConnectNotificationBanner } from "@stripe/react-connect-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
 import { snowDepthNow, nextStorm, refreshConditions, fetchSnowForecast } from "./lib/weather.js";
@@ -4954,14 +4964,14 @@ function restyleStatics() {
   Object.assign(inp, { background: C.slate, border: `1px solid ${C.line}`, color: C.ice });
 }
 
-function Shell() {
+function Shell({ startEntered = false }) {
   const [state, dispatch] = useReducer(reducer, initial);
   const store = useMemo(() => ({ state, dispatch }), [state]);
   const auth = useAuth();
   const [bypass, setBypass] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [legalDoc, setLegalDoc] = useState(null); // landing-page footer → document reader
-  const [entered, setEntered] = useState(DRIVE_INTENT); // false = show the marketing homepage first
+  const [entered, setEntered] = useState(DRIVE_INTENT || startEntered); // false = show the marketing homepage first
   // Tidy the address bar so a refresh doesn't re-trigger driver sign-up.
   useEffect(() => { if (DRIVE_INTENT && typeof window !== "undefined") window.history.replaceState(null, "", window.location.pathname); }, []);
   // Re-render everything when the theme flips (Account → Appearance, or the phone's setting in Auto).
@@ -5152,4 +5162,4 @@ function Shell() {
   );
 }
 
-export default function App() { return <Shell />; }
+export default function App({ startEntered }) { return <Shell startEntered={startEntered} />; }
