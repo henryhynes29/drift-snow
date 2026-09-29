@@ -16,6 +16,8 @@ import "@fontsource/instrument-sans/500";
 import "@fontsource/instrument-sans/600";
 import "@fontsource/ibm-plex-mono/500";
 import EmojiIcon from "./Icon.jsx";
+import mapboxgl from "mapbox-gl";
+import { MAP_ENABLED } from "./PropertyMap.jsx"; // sets the Mapbox token (and loads its CSS)
 import { fetchSnowForecast } from "./lib/weather.js";
 
 // ---------- tokens (fixed dark: lake-night) ----------
@@ -83,34 +85,74 @@ function Snow({ count = 40, near = false }) {
 }
 
 // ---------- the headline that gets plowed ----------
-// A snow bank sits over the words; an amber blade sweeps left→right and clears it.
+// "PLOWED." starts dusted in snow. A little plow truck drives across the word;
+// everything behind its blade turns clean amber, with snow spraying off the blade.
+function PlowTruck() {
+  return (
+    <svg viewBox="0 0 170 74" width="100%" height="100%" style={{ display: "block", overflow: "visible" }}>
+      <defs>
+        <linearGradient id="lpBody" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#4A6284" /><stop offset="1" stopColor="#24324A" />
+        </linearGradient>
+        <linearGradient id="lpBladeG" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stopColor="#B8760A" /><stop offset=".55" stopColor="#FFB020" /><stop offset="1" stopColor="#FFD166" />
+        </linearGradient>
+        <radialGradient id="lpBeam" cx="0" cy=".5" r="1">
+          <stop offset="0" stopColor="#FFF4D6" stopOpacity=".55" /><stop offset="1" stopColor="#FFF4D6" stopOpacity="0" />
+        </radialGradient>
+      </defs>
+      {/* headlight beam */}
+      <path d="M140 34 L200 18 L200 52 Z" fill="url(#lpBeam)" />
+      {/* bed + cab + hood */}
+      <rect x="8" y="30" width="72" height="22" rx="3" fill="url(#lpBody)" />
+      <path d="M80 52 V20 Q80 12 88 12 H110 Q116 12 119 18 L126 30 H138 Q142 30 142 34 V52 Z" fill="url(#lpBody)" />
+      <path d="M88 16 H108 Q112 16 114 20 L119 30 H88 Z" fill="#9CC3EA" opacity=".55" />
+      <rect x="8" y="30" width="72" height="3" fill="#6F88AA" opacity=".6" />
+      {/* beacon */}
+      <rect x="95" y="7" width="12" height="5" rx="2" fill="#FFB020" />
+      <circle cx="101" cy="7" r="9" fill="#FFB020" opacity=".35" className="lp-strobe" />
+      {/* headlight */}
+      <rect x="137" y="33" width="5" height="4" rx="1" fill="#FFF4D6" />
+      {/* plow frame + blade */}
+      <path d="M142 44 H152 M142 50 H150" stroke="#1B2433" strokeWidth="3" strokeLinecap="round" />
+      <path d="M150 24 Q168 40 158 66 L150 66 Q155 44 146 28 Z" fill="url(#lpBladeG)" />
+      <path d="M150 24 Q168 40 158 66" fill="none" stroke="#FFE3A3" strokeWidth="1.2" opacity=".8" />
+      {/* wheels */}
+      {[36, 112].map((cx) => (
+        <g key={cx}>
+          <circle cx={cx} cy="56" r="11" fill="#0A0D13" stroke="#3A4658" strokeWidth="2" />
+          <circle cx={cx} cy="56" r="4" fill="#5D6E86" />
+        </g>
+      ))}
+    </svg>
+  );
+}
+
 function PlowedHeadline() {
   return (
     <h1 style={{ margin: "26px 0 22px", position: "relative", lineHeight: .86, letterSpacing: "-.01em", textTransform: "uppercase" }}>
       <span style={{ display: "block", font: `800 clamp(46px,7.4vw,92px)/.9 ${DISPLAY}`, color: L.ice }}>Your driveway,</span>
-      <span className="lp-plowed" style={{ position: "relative", display: "inline-block", font: `900 clamp(92px,15vw,196px)/.84 ${DISPLAY}`,
-        color: L.amber, paddingRight: ".04em" }}>
-        Plowed.
-        {/* snow bank covering the word */}
-        <span aria-hidden className="lp-bank" style={{ position: "absolute", left: "-3%", right: "-4%", top: "2%", bottom: "-10%", filter: "drop-shadow(0 10px 18px rgba(0,0,0,.35))" }}>
-          <svg viewBox="0 0 400 120" preserveAspectRatio="none" style={{ width: "100%", height: "100%", display: "block" }}>
-            <defs>
-              <linearGradient id="lpBank" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0" stopColor="#FFFFFF" /><stop offset="1" stopColor="#D9E4EF" />
-              </linearGradient>
-            </defs>
-            <path d="M0 26 C 20 10, 40 22, 62 14 S 104 4, 126 16 S 170 30, 196 12 S 240 2, 262 18 S 300 26, 326 10 S 372 6, 400 20 L400 120 L0 120 Z" fill="url(#lpBank)" />
-            <path d="M0 26 C 20 10, 40 22, 62 14 S 104 4, 126 16 S 170 30, 196 12 S 240 2, 262 18 S 300 26, 326 10 S 372 6, 400 20" fill="none" stroke="#FFFFFF" strokeWidth="3" />
-            {[[30,40],[88,58],[140,36],[205,70],[250,44],[318,62],[362,40],[60,88],[180,96],[300,92]].map(([cx, cy], k) => (
-              <circle key={k} cx={cx} cy={cy} r={k % 3 ? 1.4 : 2.2} fill="#BFD3E6" opacity=".7" />))}
-          </svg>
-        </span>
-        {/* the blade */}
-        <span aria-hidden className="lp-blade" style={{ position: "absolute", top: "-14%", bottom: "-14%", width: "clamp(14px,1.8vw,22px)",
-          borderRadius: 4, background: `linear-gradient(180deg, ${L.amberHot}, ${L.amber} 40%, #B8760A)`,
-          boxShadow: `0 0 40px 8px ${L.amber}55, -26px 0 40px 6px rgba(255,255,255,.55)` }}>
-          <span style={{ position: "absolute", top: -14, left: "50%", width: 12, height: 12, marginLeft: -6, borderRadius: "50%",
-            background: L.amberHot, boxShadow: `0 0 24px 8px ${L.amber}` }} className="lp-strobe" />
+      <span className="lp-word" style={{ position: "relative", display: "inline-block", font: `900 clamp(92px,15vw,196px)/.84 ${DISPLAY}`,
+        paddingRight: ".04em", paddingBottom: ".06em" }}>
+        {/* snow-covered word (underneath) */}
+        <span className="lp-snowword" aria-hidden>Plowed.</span>
+        {/* clean amber word, revealed behind the blade */}
+        <span className="lp-clean" style={{ position: "absolute", left: 0, top: 0, right: 0, bottom: 0, color: L.amber }}>Plowed.</span>
+        {/* the truck */}
+        <span aria-hidden className="lp-truck" style={{ position: "absolute", bottom: "-.03em", width: ".95em", height: ".42em", zIndex: 2,
+          filter: "drop-shadow(0 .03em .05em rgba(0,0,0,.55))" }}>
+          <PlowTruck />
+          {/* snow thrown off the blade */}
+          <span className="lp-spray" style={{ position: "absolute", right: "-.04em", bottom: ".04em", width: ".2em", height: ".3em" }}>
+            {[0, 1, 2, 3, 4, 5, 6].map((k) => (
+              <i key={k} style={{ position: "absolute", left: 0, bottom: 0, width: k % 2 ? ".035em" : ".05em", height: k % 2 ? ".035em" : ".05em",
+                borderRadius: "50%", background: "#F2F7FC", animation: `lp-spray .55s ${k * .08}s ease-out infinite`,
+                "--sx": `${.08 + (k % 3) * .06}em`, "--sy": `${-.12 - (k % 4) * .05}em` }} />
+            ))}
+          </span>
+          {/* little berm of snow being pushed */}
+          <span style={{ position: "absolute", right: "-.1em", bottom: "-.01em", width: ".16em", height: ".07em", borderRadius: "50% 50% 0 0",
+            background: "linear-gradient(#FFFFFF,#CFDCE8)", opacity: .85, filter: "blur(.6px)" }} />
         </span>
       </span>
     </h1>
@@ -300,6 +342,86 @@ function Section({ id, kicker, title, lead, children, style }) {
   );
 }
 
+// ---------- Service area on a real Mapbox map ----------
+// Dark basemap, amber town markers, a soft coverage zone. Loads only when the
+// section scrolls into view (saves map loads), isn't draggable (no scroll traps
+// on phones), and falls back to the drawn map if Mapbox isn't available.
+function coverageRing() {
+  const c = [-92.265, 46.758], rx = 0.27, ry = 0.095, pts = [];
+  for (let i = 0; i <= 72; i++) {
+    const t = (i / 72) * Math.PI * 2;
+    // slightly egg-shaped: fuller toward Duluth/Superior
+    const k = 1 + 0.12 * Math.cos(t);
+    pts.push([c[0] + rx * k * Math.cos(t), c[1] + ry * Math.sin(t)]);
+  }
+  return { type: "Feature", geometry: { type: "Polygon", coordinates: [pts] } };
+}
+function MapboxServiceArea() {
+  const wrap = useRef(null);
+  const el = useRef(null);
+  const [state, setState] = useState(MAP_ENABLED ? "waiting" : "failed"); // waiting | loading | ready | failed
+  useEffect(() => {
+    if (state !== "waiting" || !wrap.current) return;
+    const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { setState("loading"); io.disconnect(); } },
+      { rootMargin: "300px" });
+    io.observe(wrap.current);
+    return () => io.disconnect();
+  }, [state]);
+  useEffect(() => {
+    if (state !== "loading" || !el.current) return;
+    let map;
+    const fail = setTimeout(() => setState((s) => (s === "loading" ? "failed" : s)), 12000);
+    try {
+      map = new mapboxgl.Map({
+        container: el.current, style: "mapbox://styles/mapbox/dark-v11",
+        bounds: [[-92.52, 46.66], [-91.98, 46.86]], fitBoundsOptions: { padding: 40 },
+        interactive: false, attributionControl: false, cooperativeGestures: true,
+      });
+      map.addControl(new mapboxgl.AttributionControl({ compact: true }), "bottom-right");
+      map.on("error", (e) => { if (!map.loaded()) { clearTimeout(fail); setState("failed"); } else console.warn("[map]", e?.error?.message); });
+      map.on("load", () => {
+        clearTimeout(fail);
+        // tint the basemap toward the landing palette
+        try {
+          map.setPaintProperty("water", "fill-color", "#0E1E33");
+          map.setPaintProperty("land", "background-color", "#0A0E15");
+        } catch { /* layer names can differ between style versions */ }
+        map.addSource("drift-cover", { type: "geojson", data: coverageRing() });
+        map.addLayer({ id: "drift-cover-fill", type: "fill", source: "drift-cover", paint: { "fill-color": L.amber, "fill-opacity": 0.07 } });
+        map.addLayer({ id: "drift-cover-line", type: "line", source: "drift-cover",
+          paint: { "line-color": L.amber, "line-opacity": 0.55, "line-width": 1.5, "line-dasharray": [2, 3] } });
+        TOWNS.forEach(([name, lat, lng, st, hq]) => {
+          const m = document.createElement("div");
+          m.className = "lp-mk" + (hq ? " lp-mk-hq" : "");
+          m.innerHTML = `<span class="lp-mk-dot"></span><span class="lp-mk-lbl">${name}<em>${st}</em></span>`;
+          new mapboxgl.Marker({ element: m, anchor: "left", offset: [-9, 0] }).setLngLat([lng, lat]).addTo(map);
+        });
+        setState("ready");
+      });
+    } catch { clearTimeout(fail); setState("failed"); }
+    return () => { clearTimeout(fail); try { map && map.remove(); } catch { /* already gone */ } };
+  }, [state]);
+
+  if (state === "failed") return <ServiceMap />;
+  return (
+    <div ref={wrap} style={{ position: "relative", borderRadius: 24, overflow: "hidden", border: `1px solid ${L.line}`, background: L.bg2 }}>
+      <div ref={el} className="lp-map" style={{ width: "100%", height: "clamp(340px, 42vw, 470px)" }} />
+      {/* edge vignette so the map melts into the page */}
+      <div aria-hidden style={{ position: "absolute", inset: 0, pointerEvents: "none",
+        boxShadow: `inset 0 0 80px 20px ${L.bg}`, borderRadius: 24 }} />
+      {state !== "ready" && (
+        <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
+          <Mono style={{ color: L.dim }}>Loading map…</Mono></div>
+      )}
+      <div style={{ position: "absolute", left: 18, top: 16, padding: "8px 12px", borderRadius: 10, background: "rgba(10,14,21,.8)",
+        border: `1px solid ${L.line}`, backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}>
+        <Mono style={{ color: L.amber }}>Service area</Mono>
+        <div style={{ font: `400 13px ${BODY}`, color: L.mist, marginTop: 4 }}>6 towns · MN &amp; WI</div>
+      </div>
+    </div>
+  );
+}
+
 // ---------- Twin Ports service map (real relative positions) ----------
 const TOWNS = [
   ["Duluth", 46.787, -92.100, "MN", true], ["Superior", 46.721, -92.104, "WI"], ["Hermantown", 46.807, -92.238, "MN"],
@@ -409,28 +531,44 @@ export default function Landing({ onStart, onLegal }) {
         @keyframes lp-draw{to{stroke-dashoffset:0}}
         @keyframes lp-truck{0%{transform:translate(0,0)}100%{transform:translate(92px,-52px)}}
         @keyframes lp-rise{from{opacity:0;transform:translateY(22px)}to{opacity:1;transform:none}}
-        @keyframes lp-clear{from{clip-path:inset(-20% -2% -20% 0)}to{clip-path:inset(-20% -2% -20% 104%)}}
-        @keyframes lp-sweep{0%{left:-6%;opacity:1}88%{opacity:1}100%{left:104%;opacity:0}}
+        @keyframes lp-reveal{0%{clip-path:inset(-10% 100% -10% -2%)}78%{clip-path:inset(-10% -2% -10% -2%)}100%{clip-path:inset(-10% -2% -10% -2%)}}
+        @keyframes lp-drive{0%{left:-.95em;opacity:1}78%{left:calc(100% - .83em);opacity:1}100%{left:calc(100% + .5em);opacity:0}}
+        @keyframes lp-spray{0%{transform:translate(0,0);opacity:.95}100%{transform:translate(var(--sx),var(--sy));opacity:0}}
         @keyframes lp-strobe{0%,100%{opacity:1}50%{opacity:.25}}
         @keyframes lp-beacon{0%,100%{opacity:.55;transform:scale(1)}50%{opacity:1;transform:scale(1.06)}}
         @keyframes lp-marquee{to{transform:translateX(-50%)}}
         @keyframes lp-ping{0%{transform:scale(1);opacity:.35}100%{transform:scale(2.8);opacity:0}}
         @keyframes lp-live{0%,100%{box-shadow:0 0 0 0 rgba(255,176,32,.6)}50%{box-shadow:0 0 0 6px rgba(255,176,32,0)}}
         .lp-rise{animation:lp-rise .9s cubic-bezier(.16,1,.3,1) both}
-        .lp-bank{animation:lp-clear 1.25s cubic-bezier(.65,0,.35,1) .55s both}
-        .lp-blade{left:-6%;animation:lp-sweep 1.25s cubic-bezier(.65,0,.35,1) .55s both}
+        .lp-snowword{color:transparent;-webkit-background-clip:text;background-clip:text;
+          background:radial-gradient(circle at 30% 40%,rgba(255,255,255,.95) .9px,transparent 1.4px) 0 0/7px 7px,
+            radial-gradient(circle at 70% 70%,rgba(255,255,255,.7) .7px,transparent 1.2px) 3px 2px/9px 9px,
+            linear-gradient(180deg,#F4F8FC 0%,#C9D6E3 100%);-webkit-background-clip:text;background-clip:text;opacity:.9}
+        .lp-clean{clip-path:inset(-10% -2% -10% -2%);animation:lp-reveal 2.3s cubic-bezier(.45,.05,.4,1) .5s both}
+        .lp-truck{left:calc(100% + .5em);opacity:0;animation:lp-drive 2.3s cubic-bezier(.45,.05,.4,1) .5s both}
         .lp-strobe{animation:lp-strobe 1.1s ease-in-out infinite}
         .lp-beacon{animation:lp-beacon 2.6s ease-in-out infinite}
         .lp-marquee{animation:lp-marquee 38s linear infinite}
         .lp-ping{transform-box:fill-box;transform-origin:center;animation:lp-ping 2.4s ease-out infinite}
         .lp-live{animation:lp-live 2s ease-in-out infinite}
+        .lp-mk{display:flex;align-items:center;gap:8px;pointer-events:none}
+        .lp-mk-dot{position:relative;width:12px;height:12px;border-radius:50%;background:${L.amber};box-shadow:0 0 0 4px ${L.amber}33,0 0 18px ${L.amber}88}
+        .lp-mk-hq .lp-mk-dot{width:16px;height:16px}
+        .lp-mk-hq .lp-mk-dot::after{content:"";position:absolute;inset:-6px;border-radius:50%;border:2px solid ${L.amber};animation:lp-ping 2.4s ease-out infinite}
+        .lp-mk-lbl{font:800 19px/1 ${DISPLAY};text-transform:uppercase;color:${L.ice};text-shadow:0 1px 8px rgba(0,0,0,.9),0 0 2px #000;white-space:nowrap}
+        .lp-mk-hq .lp-mk-lbl{font-size:26px}
+        .lp-mk-lbl em{font:500 10px ${MONO};font-style:normal;color:${L.mist};margin-left:6px;letter-spacing:.08em}
+        .lp-map .mapboxgl-ctrl-attrib{background:rgba(10,14,21,.7)!important}
+        .lp-map .mapboxgl-ctrl-attrib a{color:${L.dim}!important}
+        @media(max-width:640px){.lp-mk-lbl{font-size:15px}.lp-mk-hq .lp-mk-lbl{font-size:20px}.lp-mk-lbl em{display:none}}
         .lp-step{transition:transform .3s cubic-bezier(.2,.8,.2,1),border-color .3s}
         .lp-step:hover{transform:translateY(-6px);border-color:${L.amber}66!important}
         .lp-svc{transition:transform .3s cubic-bezier(.2,.8,.2,1),background .3s}
         .lp-svc:hover{transform:translateY(-4px);background:${L.panel2}!important}
         @media(prefers-reduced-motion:reduce){
           *{animation:none!important;transition:none!important}
-          .lp-bank,.lp-blade,.lp-snow{display:none!important}
+          .lp-truck,.lp-snow{display:none!important}
+          .lp-clean{clip-path:none!important}
         }
         @media(max-width:900px){
           .lp-hero{grid-template-columns:1fr!important;padding-top:44px!important;gap:56px!important}
@@ -627,7 +765,7 @@ export default function Landing({ onStart, onLegal }) {
       {/* ============ SERVICE AREA ============ */}
       <Section id="area" kicker="Service area" title="Head of the Lakes." lead="On-demand snow removal across the Twin Ports and the towns around them."
         style={{ paddingTop: 40 }}>
-        <ServiceMap />
+        <MapboxServiceArea />
       </Section>
 
       {/* ============ FAQ ============ */}
