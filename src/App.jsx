@@ -4,7 +4,7 @@ import { useAuth } from "./lib/auth.jsx";
 import { supabaseEnabled } from "./lib/supabase.js";
 import { recordLegalAcceptance, loadProperties, replaceProperties, rateJob, pushDriverLocation, subscribeToDriverLocation, createJobFromOrder, patchJob, sendMessage, subscribeToMessages, loadMessages,
   updateMyProfile, rowToOrder, fetchJob, listOpenJobs, subscribeOpenJobs, claimJob, getProfile, profileToDriver, setDriverStatus, becomeDriver, cancelJob, expireJob, subscribeToJob, loadActiveJob } from "./lib/db.js";
-import { STRIPE_ENABLED, STRIPE_PK, getStripe, startHold, confirmHold, cancelJobPaid, completeJobPaid, tipJob, connectSession, connectStatus, connectDashboard, authedFetch, listCards, startCardSetup, setDefaultCard, removeCard } from "./lib/payments.js";
+import { STRIPE_ENABLED, STRIPE_PK, getStripe, startHold, confirmHold, cancelJobPaid, completeJobPaid, tipJob, connectSession, connectStatus, connectDashboard, authedFetch } from "./lib/payments.js";
 import { loadConnectAndInitialize } from "@stripe/connect-js";
 import { ConnectComponentsProvider, ConnectAccountOnboarding, ConnectNotificationBanner } from "@stripe/react-connect-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
@@ -3051,9 +3051,6 @@ function AppearancePicker() {
 }
 
 // ---- Account settings: profile + saved cards ------------------------------
-const stripeAppearance = () => ({ theme: isLight ? "stripe" : "night", variables: { colorPrimary: C.amber,
-  colorBackground: C.night2, colorText: C.ice, fontFamily: "-apple-system, system-ui, sans-serif", borderRadius: "12px" } });
-
 function ProfileSheet({ onClose, driver }) {
   const { state, dispatch } = useStore();
   const [name, setName] = useState(driver ? (state.driver.name || state.profile.name || "") : (state.profile.name || ""));
@@ -3106,89 +3103,6 @@ function ProfileSheet({ onClose, driver }) {
   );
 }
 
-function AddCardForm({ onDone }) {
-  const stripe = useStripe();
-  const elements = useElements();
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState(null);
-  const save = async () => {
-    if (!stripe || !elements) return;
-    setBusy(true); setErr(null);
-    const { error, setupIntent } = await stripe.confirmSetup({ elements,
-      confirmParams: { return_url: window.location.href }, redirect: "if_required" });
-    if (error) { setErr(error.message || "Couldn't save that card"); setBusy(false); return; }
-    const pm = typeof setupIntent?.payment_method === "string" ? setupIntent.payment_method : setupIntent?.payment_method?.id;
-    if (pm) { try { await setDefaultCard(pm); } catch (e) { /* still saved */ } }
-    onDone();
-  };
-  return (
-    <div>
-      <PaymentElement options={{ layout: "tabs" }} />
-      {err && <p style={{ font: `600 13px ${FB}`, color: C.danger, margin: "10px 0 0" }}>{err}</p>}
-      <div style={{ marginTop: 14 }}><Btn full onClick={save} disabled={busy || !stripe}>{busy ? "Saving…" : "Save card"}</Btn></div>
-    </div>
-  );
-}
-
-function CardsSheet({ onClose }) {
-  const { dispatch } = useStore();
-  const [data, setData] = useState(null);     // { cards, defaultId }
-  const [err, setErr] = useState(null);
-  const [adding, setAdding] = useState(null); // SetupIntent client secret while adding
-  const [busyId, setBusyId] = useState(null);
-  const load = () => listCards().then((r) => { setData(r); setErr(null); }).catch((e) => setErr(e.message));
-  useEffect(() => { load(); }, []);
-  const startAdd = async () => {
-    try { const r = await startCardSetup(); setAdding(r.clientSecret); }
-    catch (e) { dispatch({ type: "TOAST", msg: e.message }); }
-  };
-  const act = async (id, fn, msg) => {
-    setBusyId(id);
-    try { await fn(id); dispatch({ type: "TOAST", msg }); await load(); }
-    catch (e) { dispatch({ type: "TOAST", msg: e.message }); }
-    setBusyId(null);
-  };
-  const brand = (b) => (b ? b[0].toUpperCase() + b.slice(1) : "Card");
-  return (
-    <Sheet onClose={onClose}>
-      <h3 style={{ font: `700 22px ${FD}`, margin: "0 0 4px" }}>Payment methods</h3>
-      <p style={{ ...sub, marginBottom: 14 }}>Your card is only charged after a job is done. Card details are stored by Stripe, not DRIFT.</p>
-      {adding ? (
-        <Elements stripe={getStripe()} options={{ clientSecret: adding, appearance: stripeAppearance() }}>
-          <AddCardForm onDone={() => { setAdding(null); dispatch({ type: "TOAST", msg: "Card saved" }); load(); }} />
-          <button onClick={() => setAdding(null)} style={{ display: "block", margin: "10px auto 0", background: "none", border: "none",
-            cursor: "pointer", font: `600 14px ${FB}`, color: C.mist, padding: 8 }}>Cancel</button>
-        </Elements>
-      ) : err ? (
-        <p style={{ font: `500 14px ${FB}`, color: C.danger }}>{err}</p>
-      ) : !data ? (
-        <div style={{ display: "grid", gap: 10 }}><Skeleton h={56} r={14} /><Skeleton h={56} r={14} /></div>
-      ) : (
-        <>
-          {data.cards.length === 0 && <p style={{ font: `400 14px ${FB}`, color: C.mist }}>No saved cards yet.</p>}
-          <div style={{ display: "grid", gap: 8 }}>
-            {data.cards.map((c) => (
-              <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: 14, borderRadius: 14,
-                background: C.slate, border: `1px solid ${c.isDefault ? C.amber + "88" : C.line}` }}>
-                <span style={{ color: C.mist, display: "flex" }}><Icon e="card" s={20} /></span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ font: `600 15px ${FB}`, color: C.ice }}>{brand(c.brand)} ···{c.last4}</div>
-                  <div style={{ font: `400 12px ${FB}`, color: C.mist }}>Expires {String(c.expMonth).padStart(2, "0")}/{String(c.expYear).slice(-2)}{c.isDefault ? " · Default" : ""}</div>
-                </div>
-                {!c.isDefault && <button disabled={busyId === c.id} onClick={() => act(c.id, setDefaultCard, "Default card updated")}
-                  style={{ ...miniBtn, minHeight: 34 }}>Make default</button>}
-                <button disabled={busyId === c.id} onClick={() => act(c.id, removeCard, "Card removed")} aria-label="Remove card"
-                  style={{ ...miniBtn, minHeight: 34, color: C.danger }}>Remove</button>
-              </div>
-            ))}
-          </div>
-          <div style={{ marginTop: 14 }}><Btn full kind="dark" onClick={startAdd}>Add a card</Btn></div>
-        </>
-      )}
-    </Sheet>
-  );
-}
-
 function RiderAccount({ onReferral }) {
   const { state, dispatch } = useStore();
   const auth = useAuth();
@@ -3196,7 +3110,8 @@ function RiderAccount({ onReferral }) {
   const ref = state.riderReferral;
   const [legalOpen, setLegalOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
-  const [cardsOpen, setCardsOpen] = useState(false);
+  // Real accounts: Stripe keeps the card and shows it (with Remove) in the card box
+  // when booking, so there's no separate card screen here.
   const realCards = isLive(state) && STRIPE_ENABLED;
   return (
     <Fade k="acct"><section style={{ paddingTop: 10, paddingBottom: 28 }}>
@@ -3211,9 +3126,8 @@ function RiderAccount({ onReferral }) {
       </button>
 
       <ListGroup>
-        <ListRow icon="card" tint={C.plow} title={realCards ? "Payment methods" : pay ? `${pay.brand} ···${pay.last4}` : "Add a card"}
-          sub={realCards ? "Add, remove or change your card" : "Charged only after a job is done"}
-          onClick={realCards ? () => setCardsOpen(true) : undefined} />
+        {!realCards && <ListRow icon="card" tint={C.plow} title={pay ? `${pay.brand} ···${pay.last4}` : "Add a card"}
+          sub="Charged only after a job is done" />}
         <ListRow icon="gift" tint={C.amber} title={`Invite neighbors · $${ref.reward} each`}
           sub={ref.credit > 0 ? `$${ref.credit} earned · ${ref.invited} invited` : `You both get $${ref.reward}`} onClick={onReferral} />
         <ListRow icon="lifebuoy" tint={C.push} title="Help" sub="Report an issue or get support" last
@@ -3233,7 +3147,6 @@ function RiderAccount({ onReferral }) {
       {legalOpen && <LegalHub onClose={() => setLegalOpen(false)}
         acceptance={[state.legal?.customer, state.legal?.driver].filter(Boolean)} />}
       {editOpen && <ProfileSheet onClose={() => setEditOpen(false)} />}
-      {cardsOpen && <CardsSheet onClose={() => setCardsOpen(false)} />}
 
       {auth?.isConfigured && auth?.session && (
         <button onClick={async () => { await auth.signOut(); dispatch({ type: "SIGNED_OUT" }); }}
