@@ -3,7 +3,7 @@ import MapPropertyDesigner, { staticMapUrl, LiveMap, MAP_ENABLED } from "./Prope
 import { useAuth } from "./lib/auth.jsx";
 import { supabaseEnabled } from "./lib/supabase.js";
 import { recordLegalAcceptance, loadProperties, replaceProperties, rateJob, pushDriverLocation, subscribeToDriverLocation, createJobFromOrder, patchJob, sendMessage, subscribeToMessages, loadMessages,
-  updateMyProfile, rowToOrder, fetchJob, listOpenJobs, subscribeOpenJobs, claimJob, getProfile, profileToDriver, setDriverStatus, becomeDriver, cancelJob, expireJob, subscribeToJob, loadActiveJob, loadAccountStats, loadReviews } from "./lib/db.js";
+  updateMyProfile, rowToOrder, fetchJob, listOpenJobs, subscribeOpenJobs, claimJob, getProfile, profileToDriver, setDriverStatus, becomeDriver, cancelJob, expireJob, subscribeToJob, loadActiveJob, loadAccountStats, loadReviews, listFavorites, addFavorite, removeFavorite, setSnowAlerts } from "./lib/db.js";
 import { STRIPE_ENABLED, STRIPE_PK, getStripe, startHold, confirmHold, cancelJobPaid, completeJobPaid, tipJob, connectSession, connectStatus, connectDashboard, authedFetch, announceJob } from "./lib/payments.js";
 import { uploadJobPhoto, uploadDriverDoc, myDriverDocs, signedUrl } from "./lib/photos.js";
 import { unlockRinger, startRing, stopRing, keepAwake, isStandalone, isIOS, canPromptInstall, promptInstall,
@@ -11,7 +11,7 @@ import { unlockRinger, startRing, stopRing, keepAwake, isStandalone, isIOS, canP
 import { loadConnectAndInitialize } from "@stripe/connect-js";
 import { ConnectComponentsProvider, ConnectAccountOnboarding, ConnectNotificationBanner } from "@stripe/react-connect-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
-import { snowDepthNow, nextStorm, refreshConditions } from "./lib/weather.js";
+import { snowDepthNow, nextStorm, refreshConditions, fetchSnowForecast } from "./lib/weather.js";
 import { deliverExternal } from "./lib/notify.js";
 import { surgePct as marketSurgePct, surgeLabel as marketSurgeLabel, SURGE, refreshMarket } from "./lib/market.js";
 import Landing from "./Landing.jsx";
@@ -1588,6 +1588,67 @@ function OfflineBanner() {
   );
 }
 
+// One-time nudge on the home screen to turn on snow alerts (until they do, or dismiss it).
+function SnowAlertNudge() {
+  const { state, dispatch } = useStore();
+  const [show, setShow] = useState(false);
+  const [howTo, setHowTo] = useState(false);
+  useEffect(() => {
+    let dismissed = false;
+    try { dismissed = localStorage.getItem("drift.snowNudge") === "1"; } catch { /* private mode */ }
+    if (dismissed) return;
+    if (isIOS() && !isStandalone()) { setShow(true); return; }
+    if (!pushSupported()) return;
+    pushEnabled().then((on) => setShow(!on)).catch(() => {});
+  }, []);
+  const dismiss = () => { setShow(false); try { localStorage.setItem("drift.snowNudge", "1"); } catch { /* ignore */ } };
+  const turnOn = async () => {
+    if (isIOS() && !isStandalone()) { setHowTo(true); return; }
+    try { await enablePush(state.userId); setShow(false); dispatch({ type: "TOAST", msg: "Snow alerts on — we'll give you a heads-up before storms" }); }
+    catch (e) { dispatch({ type: "TOAST", msg: e.message }); }
+  };
+  if (!show) return howTo ? <InstallSheet onClose={() => setHowTo(false)} /> : null;
+  return (
+    <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "12px 12px 12px 14px", borderRadius: 14, marginBottom: 12,
+      background: C.slate, border: `1px solid ${C.line}` }}>
+      <div style={{ width: 36, height: 36, borderRadius: 10, background: C.amber + "1F", color: C.amber,
+        display: "grid", placeItems: "center", flexShrink: 0 }}><Icon e="bell" s={18} /></div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ font: `600 14px ${FB}`, color: C.ice }}>Get snow alerts</div>
+        <div style={{ font: `400 13px/1.35 ${FB}`, color: C.mist, marginTop: 2 }}>A heads-up before a storm so you can book early.</div>
+      </div>
+      <Btn sm kind="dark" onClick={turnOn} style={{ padding: "0 12px" }}>Turn on</Btn>
+      <button onClick={dismiss} aria-label="Dismiss" style={{ background: "none", border: "none", color: C.mistDim, cursor: "pointer", padding: 4,
+        display: "grid", placeItems: "center" }}><Icon e="close" s={15} /></button>
+      {howTo && <InstallSheet onClose={() => setHowTo(false)} />}
+    </div>
+  );
+}
+
+// Real forecast (National Weather Service via /api/weather). Only shows when snow is expected.
+function LiveSnowBanner() {
+  const [f, setF] = useState(null);
+  const [hide, setHide] = useState(false);
+  useEffect(() => { fetchSnowForecast().then(setF); }, []);
+  if (hide || !f || !(f.next24 >= 1)) return null;
+  const soon = f.next12 >= 1;
+  return (
+    <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "12px 12px 12px 14px", borderRadius: 14, marginBottom: 12,
+      background: C.slate, border: `1px solid ${C.line}` }}>
+      <div style={{ width: 36, height: 36, borderRadius: 10, background: C.plow + "1F", color: C.plow,
+        display: "grid", placeItems: "center", flexShrink: 0 }}><Icon e="snowflake" s={19} /></div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ font: `600 14px ${FB}`, color: C.ice }}>Snow on the way · {f.range24 || `${f.next24}"`}</div>
+        <div style={{ font: `400 13px/1.35 ${FB}`, color: C.mist, marginTop: 2 }}>
+          {soon ? "Expected in the next 12 hours." : "Expected in the next 24 hours."} Book now to get in line before the rush.</div>
+      </div>
+      <button onClick={() => setHide(true)} aria-label="Dismiss" style={{ background: "none", border: "none",
+        color: C.mistDim, cursor: "pointer", padding: 6, display: "grid", placeItems: "center",
+        WebkitTapHighlightColor: "transparent" }}><Icon e="close" s={16} /></button>
+    </div>
+  );
+}
+
 // Weather-driven storm banner — active storm vs. incoming forecast, dismissible.
 function StormBanner() {
   const [hide, setHide] = useState(false);
@@ -1759,6 +1820,8 @@ function RiderHome({ go }) {
 
       {/* storm banner + sidewalk countdown run on sample weather — demo only until a real weather feed is connected */}
       {!LIVE && <StormBanner />}
+      {LIVE && <LiveSnowBanner />}
+      {LIVE && <SnowAlertNudge />}
       {!LIVE && SNOW_DEPTH_IN >= 2 && prop && <OrdinanceCountdown price={quickQuote("sidewalk").riderTotal} onBook={guard(bookSidewalk)} />}
 
       {/* ---- THE primary action: your saved place + one button (Uber "Home" / DoorDash reorder) ---- */}
@@ -2272,7 +2335,9 @@ function RiderTracking() {
     }
     const map = { requested: "requested", accepted: "enroute", enroute: "enroute", plowing: "plowing", completed: "arrived_done" };
     const patch = { state: map[row.status] || o.state, driverId: row.driver_id || null, photos: row.photos || o.photos,
-      paymentStatus: row.payment_status, expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : o.expiresAt };
+      paymentStatus: row.payment_status, expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : o.expiresAt,
+      exclusiveUntil: row.exclusive_until ? new Date(row.exclusive_until).getTime() : null,
+      preferredDriverIds: row.preferred_driver_ids || [] };
     if (row.driver_id && (!o.driver || o.driver.id !== row.driver_id)) {
       const { data: p } = await getProfile(row.driver_id);
       patch.driver = profileToDriver(p) || { id: row.driver_id, name: "Your driver", rating: null, jobs: 0, truck: "Plow truck" };
@@ -2297,7 +2362,7 @@ function RiderTracking() {
     return () => { unsub(); clearInterval(iv); };
   }, [LIVE, o.jobId, o.state, o.driver?.id]);
 
-  // ---- LIVE: offers expire after 5 minutes if nobody takes them ----
+  // ---- LIVE: offers expire after 20 minutes if nobody takes them ----
   const [now, setNow] = useState(Date.now());
   const needsCard = LIVE && !!o.jobId && o.paymentStatus === "pending";
   const paidJob = LIVE && o.paymentStatus && o.paymentStatus !== "not_required";
@@ -2315,6 +2380,15 @@ function RiderTracking() {
     });
   }, [leftMs === 0]);
   const mmss = leftMs != null ? `${Math.floor(leftMs / 60000)}:${String(Math.floor(leftMs / 1000) % 60).padStart(2, "0")}` : null;
+  // Favorite drivers get the offer alone for 2 minutes; then everyone else is alerted.
+  const dibsMs = LIVE && o.state === "requested" && o.exclusiveUntil && !needsCard ? Math.max(0, o.exclusiveUntil - now) : 0;
+  const favCount = (o.preferredDriverIds || []).length;
+  useEffect(() => {
+    if (!LIVE || !o.jobId || o.state !== "requested" || !o.exclusiveUntil || needsCard) return;
+    const wait = Math.max(0, o.exclusiveUntil - Date.now()) + 1500;
+    const t = setTimeout(() => announceJob(o.jobId), wait);
+    return () => clearTimeout(t);
+  }, [LIVE, o.jobId, o.state, o.exclusiveUntil, needsCard]);
 
   // once accepted, advance to "en route" so the stepper shows the driving leg
   useEffect(() => {
@@ -2387,7 +2461,10 @@ function RiderTracking() {
   const shownArrived = LIVE ? liveArrived : arrived;
   const stage = finding ? 0 : shownArrived ? 2 : 1;         // 0 sent · 1 on the way · 2 plowing · 3 done
   const big = finding ? "Finding your plow" : shownArrived ? "Plowing now" : LIVE ? "On the way" : `${Math.max(1, Math.ceil(eta))} min`;
-  const line = finding ? (LIVE ? (needsCard ? "Hold your card to send your offer to drivers" : o.jobId ? `Your $${o.quote?.offer} offer is live for drivers nearby${mmss ? ` · ${mmss} left` : ""}` : "Sending your offer…")
+  const line = finding ? (LIVE ? (needsCard ? "Hold your card to send your offer to drivers"
+        : !o.jobId ? "Sending your offer…"
+        : dibsMs > 0 ? `Sent to your favorite driver${favCount === 1 ? "" : "s"} first · everyone else sees it in ${Math.floor(dibsMs / 60000)}:${String(Math.floor(dibsMs / 1000) % 60).padStart(2, "0")}`
+        : `Your $${o.quote?.offer} offer is live for drivers nearby${mmss ? ` · ${mmss} left` : ""}`)
       : "Sent to plows near you — usually under 2 minutes")
     : shownArrived ? `${first} is clearing ${o.property?.label?.toLowerCase() === "home" ? "your driveway" : (o.property?.label || "your property")}`
     : `${first} is on the way`;
@@ -2457,7 +2534,9 @@ function RiderTracking() {
         ? <PaymentSheet amount={o.quote?.riderTotal} jobId={o.jobId} onClose={() => cancelOffer(true)}
             onAuthorized={(job) => {
               dispatch({ type: "ORDER_STATE", patch: { paymentStatus: "authorized",
-                expiresAt: job?.expires_at ? new Date(job.expires_at).getTime() : Date.now() + 5 * 60 * 1000 } });
+                expiresAt: job?.expires_at ? new Date(job.expires_at).getTime() : Date.now() + 20 * 60 * 1000,
+                exclusiveUntil: job?.exclusive_until ? new Date(job.exclusive_until).getTime() : null,
+                preferredDriverIds: job?.preferred_driver_ids || [] } });
               dispatch({ type: "TOAST", msg: "Card held — your offer is live" });
             }} />
         : <Sheet onClose={() => cancelOffer(true)}>
@@ -2487,6 +2566,15 @@ function RiderReceipt() {
   const isRoadside = ROADSIDE.includes(o.jobType);
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState("");
+  const [fav, setFav] = useState(false);
+  const canFav = isLive(state) && !!(d.id || o.driverId);
+  const toggleFav = async () => {
+    const id = d.id || o.driverId;
+    const r = fav ? await removeFavorite(state.userId, id) : await addFavorite(state.userId, id);
+    if (r?.error) { dispatch({ type: "TOAST", msg: "Couldn't save that — try again from Account" }); return; }
+    setFav(!fav);
+    dispatch({ type: "TOAST", msg: fav ? "Removed from favorites" : `${d.name.split(" ")[0]} saved — they'll get first dibs on your next offer` });
+  };
   const [tip, setTip] = useState(0);
   const [done, setDone] = useState(false);
 
@@ -2560,6 +2648,11 @@ function RiderReceipt() {
           <textarea value={comment} onChange={(e) => setComment(e.target.value.slice(0, 500))} rows={3}
             placeholder={rating >= 4 ? "What did they do well? (optional)" : "What could have gone better? (optional)"}
             style={{ ...inp, resize: "none", margin: "4px 0 12px", font: `400 15px/1.4 ${FB}` }} />
+        )}
+        {canFav && (
+          <button onClick={toggleFav} style={{ ...miniBtn, margin: "0 auto 12px", display: "inline-flex", alignItems: "center", gap: 6,
+            color: fav ? C.onAmber : C.ice, background: fav ? C.amber : C.night2, border: fav ? "none" : `1px solid ${C.line}` }}>
+            <Icon e="heart" s={15} /> {fav ? `${d.name.split(" ")[0]} is a favorite` : `Save ${d.name.split(" ")[0]} as a favorite`}</button>
         )}
         <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
           {[5, 10, 15].map(t => (
@@ -3130,6 +3223,63 @@ function ProfileSheet({ onClose, driver }) {
   );
 }
 
+// Snow alerts: on for everyone by default; the phone has to allow notifications.
+function SnowAlertsRow({ on, onInstall }) {
+  const { state, dispatch } = useStore();
+  const auth = useAuth();
+  const [phoneOn, setPhoneOn] = useState(null);
+  useEffect(() => { pushEnabled().then(setPhoneOn).catch(() => setPhoneOn(false)); }, []);
+  const active = on && phoneOn;
+  const tap = async () => {
+    try {
+      if (active) {                               // turn off
+        await setSnowAlerts(state.userId, false); auth.refreshProfile();
+        dispatch({ type: "TOAST", msg: "Snow alerts off" }); return;
+      }
+      if (isIOS() && !isStandalone()) { onInstall(); return; }   // iPhone needs the home-screen app first
+      await enablePush(state.userId); setPhoneOn(true);
+      if (!on) { await setSnowAlerts(state.userId, true); auth.refreshProfile(); }
+      dispatch({ type: "TOAST", msg: "Snow alerts on — we'll give you a heads-up before storms" });
+    } catch (e) { dispatch({ type: "TOAST", msg: e.message }); }
+  };
+  return <ListRow icon="snowflake" tint={C.plow} title={active ? "Snow alerts on" : "Turn on snow alerts"}
+    sub={active ? "A heads-up before storms · tap to turn off" : "Get a heads-up before a storm hits"} onClick={tap} />;
+}
+
+// Customer's favorite drivers (they get the first 2 minutes on every offer).
+function FavoritesSheet({ onClose }) {
+  const { state, dispatch } = useStore();
+  const [list, setList] = useState(null);
+  useEffect(() => { listFavorites(state.userId).then(setList); }, [state.userId]);
+  const remove = async (id) => {
+    await removeFavorite(state.userId, id);
+    setList((l) => l.filter((x) => x.id !== id));
+    dispatch({ type: "TOAST", msg: "Removed from favorites" });
+  };
+  return (
+    <Sheet onClose={onClose}>
+      <h3 style={{ font: `700 20px ${FD}`, color: C.ice, margin: "0 0 4px" }}>Favorite drivers</h3>
+      <p style={{ font: `400 14px/1.45 ${FB}`, color: C.mist, margin: "0 0 14px" }}>
+        When you book, your favorites who are online get your offer first, for 2 minutes, before anyone else sees it.</p>
+      {list === null ? <div style={{ font: `500 13px ${FB}`, color: C.mist }}>Loading…</div>
+        : list.length === 0 ? <div style={{ font: `500 14px/1.45 ${FB}`, color: C.mist, padding: "8px 0 4px" }}>
+            None yet. After a job, tap <b style={{ color: C.ice }}>Save as a favorite</b> on your receipt.</div>
+        : <div style={{ display: "grid", gap: 10 }}>
+          {list.map((f) => (
+            <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 12, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: "10px 12px" }}>
+              <Avatar name={f.name} size={40} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ font: `600 15px ${FB}`, color: C.ice }}>{f.name}</div>
+                <div style={{ font: `400 13px ${FB}`, color: C.mist }}>{f.rating ? `★ ${f.rating} (${f.reviews})` : "New driver"}{f.truck ? ` · ${f.truck}` : ""}</div>
+              </div>
+              <button onClick={() => remove(f.id)} style={{ ...miniBtn, color: C.danger }}>Remove</button>
+            </div>
+          ))}
+        </div>}
+    </Sheet>
+  );
+}
+
 function RiderAccount({ onReferral }) {
   const { state, dispatch } = useStore();
   const auth = useAuth();
@@ -3141,6 +3291,8 @@ function RiderAccount({ onReferral }) {
   // Real accounts: Stripe keeps the card and shows it (with Remove) in the card box
   // when booking, so there's no separate card screen here.
   const realCards = isLive(state) && STRIPE_ENABLED;
+  const [favsOpen, setFavsOpen] = useState(false);
+  const snowOn = auth?.profile?.snow_alerts !== false;
   return (
     <Fade k="acct"><section style={{ paddingTop: 10, paddingBottom: 28 }}>
       <button onClick={() => setEditOpen(true)} style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 22, width: "100%",
@@ -3158,6 +3310,9 @@ function RiderAccount({ onReferral }) {
           sub="Charged only after a job is done" />}
         {!isStandalone() && <ListRow icon="download" tint={C.plow} title="Add DRIFT to your Home Screen" sub="Opens like an app, one tap away"
           onClick={async () => { if (canPromptInstall()) await promptInstall(); else setInstallOpen(true); }} />}
+        {isLive(state) && <SnowAlertsRow on={snowOn} onInstall={() => setInstallOpen(true)} />}
+        {isLive(state) && <ListRow icon="heart" tint={C.amber} title="Favorite drivers" sub="They get first dibs on your offers"
+          onClick={() => setFavsOpen(true)} />}
         {!isLive(state) && <ListRow icon="gift" tint={C.amber} title={`Invite neighbors · $${ref.reward} each`}
           sub={ref.credit > 0 ? `$${ref.credit} earned · ${ref.invited} invited` : `You both get $${ref.reward}`} onClick={onReferral} />}
         <ListRow icon="lifebuoy" tint={C.push} title="Help" sub="Email support@driftplowing.com" last
@@ -3178,6 +3333,7 @@ function RiderAccount({ onReferral }) {
         acceptance={[state.legal?.customer, state.legal?.driver].filter(Boolean)} />}
       {editOpen && <ProfileSheet onClose={() => setEditOpen(false)} />}
       {installOpen && <InstallSheet onClose={() => setInstallOpen(false)} />}
+      {favsOpen && <FavoritesSheet onClose={() => setFavsOpen(false)} />}
 
       {auth?.isConfigured && auth?.session && (
         <button onClick={async () => { await auth.signOut(); dispatch({ type: "SIGNED_OUT" }); }}
@@ -3897,7 +4053,8 @@ function IncomingJob({ order, onAccept, onPass, busy }) {
 
         {/* top: label + countdown */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ font: `600 15px ${FB}`, color: C.amber }}>New request</div>
+          <div style={{ font: `600 15px ${FB}`, color: C.amber }}>{(order.preferredDriverIds || []).includes(state.userId)
+            ? "Your regular customer · first dibs" : "New request"}</div>
           <div style={{ position: "relative", width: 44, height: 44 }} aria-label={`${secs} seconds left`}>
             <svg width="44" height="44" style={{ transform: "rotate(-90deg)" }}>
               <circle cx="22" cy="22" r="18" fill="none" stroke={C.line} strokeWidth="3.5" />

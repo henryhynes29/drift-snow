@@ -17,7 +17,9 @@
 import {
   stripe, admin, HttpError, cents, requireUser, getJob, updateJob, getProfile,
   updateProfile, readJson, send, driverPayoutsReady, payDriverForJob, markAuthorized, announceJob,
+  onlineFavorites, FIRST_DIBS_MINUTES,
 } from "./_lib.js";
+import { snowCheck } from "./_weather.js";
 
 const OPEN = ["requested"];
 const ACTIVE = ["accepted", "enroute", "plowing"];
@@ -92,11 +94,18 @@ const ACTIONS = {
   // Payments off: the app calls this right after posting an offer so online
   // drivers get a "New plow request" alert. (With payments on, the card hold
   // triggers the alert instead.)
+  // Also called by the customer's app when the favorite-driver first-dibs window
+  // ends, so every other online driver gets alerted.
   async announce(user, { jobId }) {
-    const job = await getJob(jobId);
+    let job = await getJob(jobId);
     if (job.customer_id !== user.id) throw new HttpError(403, "Not your job");
-    if (job.status !== "requested" || job.payment_status !== "not_required") return { sent: 0 };
-    return { sent: await announceJob(job) };
+    if (job.status !== "requested" || !["not_required", "authorized"].includes(job.payment_status)) return { sent: 0 };
+    if (job.payment_status === "not_required" && !job.announced_at && !job.exclusive_until) {
+      const favs = await onlineFavorites(job.customer_id);
+      if (favs.length) job = await updateJob(job.id, { preferred_driver_ids: favs,
+        exclusive_until: new Date(Date.now() + FIRST_DIBS_MINUTES * 60 * 1000).toISOString() });
+    }
+    return { sent: await announceJob(job), exclusiveUntil: job.exclusive_until || null };
   },
 
   // ---------- 2. cancel / expire: release the hold ----------
@@ -433,5 +442,8 @@ async function sweep(req) {
       released += 1;
     } catch (e) { console.error("[pay:sweep]", job.id, e.message); }
   }
-  return { released };
+  // Same daily run: check the forecast and send a snow alert if a storm is coming.
+  let snow = null;
+  try { snow = await snowCheck(); } catch (e) { console.error("[pay:snow]", e.message); }
+  return { released, snow };
 }

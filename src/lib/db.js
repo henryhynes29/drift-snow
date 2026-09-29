@@ -149,6 +149,8 @@ export function rowToOrder(r, driver) {
     expiresAt: r.expires_at ? new Date(r.expires_at).getTime() : null,
     eta: r.eta_minutes, photos: r.photos || { before: [], after: [] },
     paymentStatus: r.payment_status || "not_required", payoutStatus: r.payout_status || "none",
+    exclusiveUntil: r.exclusive_until ? new Date(r.exclusive_until).getTime() : null,
+    preferredDriverIds: r.preferred_driver_ids || [],
     timeline: [{ k: "requested", t: "now", label: "Request sent" }],
     live: true,
   };
@@ -354,6 +356,31 @@ export async function rateJob({ jobId, raterId, rateeId, stars, comment }) {
   if (!supabaseEnabled || !isUuid(jobId) || !isUuid(rateeId)) return off();
   const text = (comment || "").trim().slice(0, 500) || null;
   return supabase.from("ratings").insert({ job_id: jobId, rater_id: raterId, ratee_id: rateeId, stars, comment: text });
+}
+
+// ---------- favorite drivers ----------
+// Favorites get first dibs (2 minutes) on this customer's offers.
+export async function listFavorites(userId) {
+  if (!supabaseEnabled || !isUuid(userId)) return [];
+  const { data } = await supabase.from("favorite_drivers").select("driver_id, created_at").eq("customer_id", userId);
+  const ids = (data || []).map((f) => f.driver_id);
+  if (!ids.length) return [];
+  const { data: ps } = await supabase.from("profiles").select("id, name, truck, tools, rating, ratings_count, jobs_count, tier").in("id", ids);
+  return (ps || []).map(profileToDriver);
+}
+export async function addFavorite(userId, driverId) {
+  if (!supabaseEnabled || !isUuid(userId) || !isUuid(driverId)) return off();
+  return supabase.from("favorite_drivers").upsert({ customer_id: userId, driver_id: driverId }, { onConflict: "customer_id,driver_id", ignoreDuplicates: true });
+}
+export async function removeFavorite(userId, driverId) {
+  if (!supabaseEnabled || !isUuid(userId) || !isUuid(driverId)) return off();
+  return supabase.from("favorite_drivers").delete().eq("customer_id", userId).eq("driver_id", driverId);
+}
+
+// Snow alerts on/off for this account (the phone also has to allow notifications).
+export async function setSnowAlerts(userId, on) {
+  if (!supabaseEnabled || !isUuid(userId)) return off();
+  return supabase.from("profiles").update({ snow_alerts: !!on }).eq("id", userId);
 }
 
 // Recent reviews about someone (a driver's reviews). Reviewers stay anonymous.

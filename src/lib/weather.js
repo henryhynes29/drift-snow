@@ -44,3 +44,18 @@ export async function refreshConditions() {
   try { _conditions = await fetchLiveConditions(); } catch { /* keep last good snapshot */ }
   return _conditions;
 }
+
+// Live forecast from our server (National Weather Service, Duluth).
+// -> { next12, next24, next36, range24 } in inches, or null if unavailable.
+let _live = null;
+export async function fetchSnowForecast() {
+  if (_live && Date.now() - _live.at < 15 * 60 * 1000) return _live.data;
+  try {
+    const r = await fetch("/api/weather");
+    if (!r.ok) return null;
+    const data = await r.json();
+    if (data.unavailable) return null;
+    _live = { at: Date.now(), data };
+    return data;
+  } catch { return null; }
+}

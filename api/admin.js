@@ -5,6 +5,7 @@
 // Uses the service-role key, so it can read across all accounts — which is
 // exactly why every action checks the owner list first.
 import { admin, stripe, HttpError, requireUser, readJson, send, driverPayoutsReady, getProfile } from "./_lib.js";
+import { forecastSnow, sendSnowAlert } from "./_weather.js";
 
 const OWNERS = (process.env.OWNER_EMAILS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
 const num = (v) => Number(v || 0);
@@ -184,6 +185,17 @@ const ACTIONS = {
     const name = (id) => { const p = people.find((x) => x.id === id); return p ? (p.name || p.email) : null; };
     return { jobs: jobs.map((j) => ({ ...j, customer: name(j.customer_id), driver: name(j.driver_id),
       photoCount: (j.photos?.before?.length || 0) + (j.photos?.after?.length || 0) })) };
+  },
+
+  // ---------- snow alerts ----------
+  async "snow-forecast"() { return await forecastSnow({ fresh: true }); },
+  async "snow-alert"({ title, body, audience }) {
+    const msg = { title: String(title || "").slice(0, 80), body: String(body || "").slice(0, 160) };
+    if (!msg.title) throw new HttpError(400, "Add a title");
+    return await sendSnowAlert({
+      customers: audience === "customers" || audience === "all" ? msg : null,
+      drivers: audience === "drivers" || audience === "all" ? msg : null,
+    });
   },
 
   // Private viewing links for one job's before/after photos.

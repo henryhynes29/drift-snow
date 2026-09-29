@@ -46,6 +46,53 @@ function Tile({ label, value, sub, tone }) {
   );
 }
 
+// Forecast + a manual "send snow alert" button. The daily check (3pm) sends one
+// automatically when 2"+ is expected in the next 24 hours.
+function SnowAlerts() {
+  const [f, setF] = useState(null);
+  const [who, setWho] = useState("customers");
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [msg, setMsg] = useState(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api("snow-forecast").then(setF).catch((e) => setF({ error: e.message })); }, []);
+  const send = async () => {
+    if (!title.trim()) { setMsg("Add a title first."); return; }
+    if (!window.confirm(`Send this alert to ${who === "all" ? "everyone" : who}?`)) return;
+    setBusy(true); setMsg(null);
+    try {
+      const r = await api("snow-alert", { title: title.trim(), body: body.trim(), audience: who });
+      setMsg(`Sent to ${r.customers} customer phone${r.customers === 1 ? "" : "s"} and ${r.drivers} driver phone${r.drivers === 1 ? "" : "s"}.`);
+    } catch (e) { setMsg(e.message); }
+    setBusy(false);
+  };
+  const inp = { width: "100%", boxSizing: "border-box", background: C.night2, border: `1px solid ${C.line}`, borderRadius: 10,
+    padding: "10px 12px", color: C.ice, font: `400 14px ${FB}`, outline: "none" };
+  return (
+    <section>
+      <h2 style={{ font: `700 20px ${FD}`, margin: "0 0 12px", color: C.ice }}>Snow alerts</h2>
+      <div style={{ ...card(), display: "grid", gap: 12 }}>
+        <div style={{ font: `400 14px ${FB}`, color: C.ice }}>
+          {!f ? "Checking the forecast…" : f.error ? `Forecast unavailable (${f.error})`
+            : <>Duluth forecast (National Weather Service): <b>{f.next12}"</b> next 12 hrs · <b>{f.next24}"</b> next 24 hrs · <b>{f.next36}"</b> next 36 hrs</>}
+          <div style={{ color: C.mistDim, fontSize: 12.5, marginTop: 4 }}>An alert goes out automatically around 3pm when 2"+ is expected in the next 24 hours (once a day, max).</div>
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {[["customers", "Customers"], ["drivers", "Drivers"], ["all", "Everyone"]].map(([k, l]) => (
+            <button key={k} onClick={() => setWho(k)} style={{ ...btn(), background: who === k ? C.amber : C.night2, color: who === k ? C.onAmber : C.ice }}>{l}</button>
+          ))}
+        </div>
+        <input value={title} onChange={(e) => setTitle(e.target.value.slice(0, 80))} placeholder={`Title, e.g. Snow's coming · 4–6" tonight`} style={inp} />
+        <input value={body} onChange={(e) => setBody(e.target.value.slice(0, 160))} placeholder="Message, e.g. Book now to get in line before the rush." style={inp} />
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <button onClick={send} disabled={busy} style={btn("amber")}>{busy ? "Sending…" : "Send alert"}</button>
+          {msg && <span style={{ font: `500 13px ${FB}`, color: C.mist }}>{msg}</span>}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function Overview() {
   const [d, setD] = useState(null);
   const [range, setRange] = useState("last30");
@@ -96,6 +143,7 @@ function Overview() {
           <Tile label="Problems" value={d.jobs.failedPayments + d.jobs.disputes} sub={`${d.jobs.failedPayments} failed charges · ${d.jobs.disputes} disputes`} />
         </div>
       </section>
+      <SnowAlerts />
     </div>
   );
 }

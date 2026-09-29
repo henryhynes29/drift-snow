@@ -112,16 +112,36 @@ export async function payDriverForJob(job, accountId) {
   return transfer;
 }
 
-// Card is held -> record it and give drivers a fresh 5 minutes to accept.
+export const OFFER_MINUTES = 20;      // how long an offer stays open for drivers
+export const FIRST_DIBS_MINUTES = 2;  // favorite drivers see it alone for this long
+
+// Card is held -> record it, give drivers a fresh 20 minutes to accept, and if
+// the customer has favorite drivers online, give them first dibs.
 export async function markAuthorized(job, pi) {
   if (job.payment_status === "authorized") return { alreadyAuthorized: true, job };
+  const favs = await onlineFavorites(job.customer_id);
   const updated = await updateJob(job.id, {
     payment_status: "authorized",
     payment_method_id: typeof pi.payment_method === "string" ? pi.payment_method : pi.payment_method?.id,
-    expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    expires_at: new Date(Date.now() + OFFER_MINUTES * 60 * 1000).toISOString(),
+    ...(favs.length ? { preferred_driver_ids: favs,
+      exclusive_until: new Date(Date.now() + FIRST_DIBS_MINUTES * 60 * 1000).toISOString() } : {}),
   });
   await announceJob(updated); // the offer is now visible — ring the drivers
   return { authorized: true, job: updated };
+}
+
+// The customer's favorite drivers who are online and allowed to drive right now.
+export async function onlineFavorites(customerId) {
+  try {
+    if (!admin || !customerId) return [];
+    const { data: favs } = await admin.from("favorite_drivers").select("driver_id").eq("customer_id", customerId);
+    const ids = (favs || []).map((f) => f.driver_id);
+    if (!ids.length) return [];
+    const { data: ok } = await admin.from("profiles").select("id")
+      .in("id", ids).eq("is_driver", true).eq("is_online", true).eq("suspended", false);
+    return (ok || []).map((p) => p.id);
+  } catch { return []; }
 }
 
 // ---------- job alerts (push notifications to online drivers) ----------
@@ -131,30 +151,18 @@ const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY;
 const VAPID_SUBJECT = `mailto:${(process.env.OWNER_EMAILS || "support@driftplowing.com").split(",")[0].trim()}`;
 if (VAPID_PUBLIC && VAPID_PRIVATE) webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC, VAPID_PRIVATE);
 
-// Send "New plow request" to every online driver, once per job. Never throws.
-export async function announceJob(job) {
+// Send a push notification to a list of users' phones. Returns how many went out.
+// Never throws. Phones that unsubscribed are cleaned up.
+export async function pushTo(userIds, message, { ttl = 300, urgency = "high" } = {}) {
   try {
-    if (!admin || !VAPID_PUBLIC || !VAPID_PRIVATE || !job || job.announced_at) return 0;
-    const { data: claimed } = await admin.from("jobs").update({ announced_at: new Date().toISOString() })
-      .eq("id", job.id).is("announced_at", null).select("id");
-    if (!claimed?.length) return 0; // someone else already announced it
-    const { data: drivers } = await admin.from("profiles").select("id")
-      .eq("is_driver", true).eq("is_online", true).neq("id", job.customer_id);
-    const ids = (drivers || []).map((d) => d.id);
-    if (!ids.length) return 0;
-    const { data: subs } = await admin.from("push_subscriptions").select("*").in("user_id", ids);
-    const pay = Math.round(Number(job.driver_pay || 0));
-    const kind = { driveway: "Driveway plow", sidewalk: "Sidewalk", digout: "Car dig-out", jumpstart: "Jump-start" }[job.job_type] || "Snow job";
-    const payload = JSON.stringify({
-      title: `New plow request · $${pay}`,
-      body: `${kind}${job.address ? ` · ${job.address}` : ""} — open DRIFT to accept`,
-      tag: `job-${job.id}`, url: "/",
-    });
+    if (!admin || !VAPID_PUBLIC || !VAPID_PRIVATE || !userIds?.length) return 0;
+    const { data: subs } = await admin.from("push_subscriptions").select("*").in("user_id", userIds);
+    const payload = JSON.stringify(message);
     let sent = 0;
     await Promise.all((subs || []).map(async (s) => {
       try {
         await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
-          payload, { TTL: 300, urgency: "high" });
+          payload, { TTL: ttl, urgency });
         sent += 1;
       } catch (e) {
         if (e.statusCode === 404 || e.statusCode === 410) {
@@ -163,6 +171,43 @@ export async function announceJob(job) {
       }
     }));
     return sent;
+  } catch (e) {
+    console.error("[alerts]", e.message);
+    return 0;
+  }
+}
+
+// "New plow request" alerts. During the first-dibs window only the customer's
+// favorite drivers are alerted; once it ends (or if there are no favorites),
+// every other online driver is. Each group is alerted once. Never throws.
+export async function announceJob(job) {
+  try {
+    if (!admin || !VAPID_PUBLIC || !VAPID_PRIVATE || !job || job.status !== "requested") return 0;
+    const pay = Math.round(Number(job.driver_pay || 0));
+    const kind = { driveway: "Driveway plow", sidewalk: "Sidewalk", digout: "Car dig-out", jumpstart: "Jump-start" }[job.job_type] || "Snow job";
+    const where = job.address ? ` · ${job.address}` : "";
+    const favs = job.preferred_driver_ids || [];
+    const firstDibs = favs.length && job.exclusive_until && new Date(job.exclusive_until) > new Date();
+
+    if (firstDibs) {
+      if (job.announced_at) return 0;
+      const { data: claimed } = await admin.from("jobs").update({ announced_at: new Date().toISOString() })
+        .eq("id", job.id).is("announced_at", null).select("id");
+      if (!claimed?.length) return 0;
+      return await pushTo(favs, { title: `Your regular customer needs you · $${pay}`,
+        body: `${kind}${where} — you get first dibs for ${FIRST_DIBS_MINUTES} minutes`, tag: `job-${job.id}`, url: "/" });
+    }
+
+    if (job.announced_all_at) return 0;
+    const { data: claimed } = await admin.from("jobs").update({ announced_all_at: new Date().toISOString(),
+      ...(job.announced_at ? {} : { announced_at: new Date().toISOString() }) })
+      .eq("id", job.id).is("announced_all_at", null).select("id");
+    if (!claimed?.length) return 0; // someone else already announced it
+    const { data: drivers } = await admin.from("profiles").select("id")
+      .eq("is_driver", true).eq("is_online", true).eq("suspended", false).neq("id", job.customer_id);
+    const ids = (drivers || []).map((d) => d.id).filter((id) => !favs.includes(id)); // favorites already heard
+    return await pushTo(ids, { title: `New plow request · $${pay}`,
+      body: `${kind}${where} — open DRIFT to accept`, tag: `job-${job.id}`, url: "/" });
   } catch (e) {
     console.error("[alerts]", e.message);
     return 0;

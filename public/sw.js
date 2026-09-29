@@ -15,8 +15,8 @@ self.addEventListener("push", (event) => {
     badge: "/icon-192.png",
     tag: data.tag || "drift",
     renotify: true,
-    requireInteraction: true,           // stays on screen until the driver taps it
-    vibrate: [400, 200, 400, 200, 400, 200, 400],
+    requireInteraction: data.sticky !== false,   // job alerts stay on screen until tapped; snow alerts don't
+    vibrate: data.sticky === false ? [200, 100, 200] : [400, 200, 400, 200, 400, 200, 400],
     data: { url: data.url || "/" },
   }));
 });
