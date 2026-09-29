@@ -13,40 +13,40 @@
 // ============================================================
 
 const DARK = {
-  night: "#0B0B0C",   // app background
-  night2: "#131315",  // inset panels, inputs
-  slate: "#1A1A1D",   // cards
-  slate2: "#222226",  // raised / selected cards
-  line: "#2A2A30",    // hairlines
-  lineSoft: "#1F1F23",
-  ice: "#F5F5F7",     // primary text
-  mist: "#A1A1AA",    // secondary text
-  mistDim: "#6E6E77", // tertiary text
-  amber: "#FFB020",   // brand — fills + accent text
+  night: "#07090D",   // app background — lake-night (matches the landing page)
+  night2: "#0D1118",  // inset panels, inputs
+  slate: "#121822",   // cards
+  slate2: "#18202C",  // raised / selected cards
+  line: "#243042",    // hairlines
+  lineSoft: "#1A2230",
+  ice: "#EEF3F8",     // primary text
+  mist: "#9BA7B7",    // secondary text
+  mistDim: "#66738A", // tertiary text
+  amber: "#FFB020",   // brand — plow-beacon amber
   amberDeep: "#C7830F",
-  amberSoft: "#FFC24D",
+  amberSoft: "#FFD166",
   onAmber: "#1A1204", // text on amber fills
-  plow: "#0A84FF",
-  push: "#32D74B",
-  onPush: "#06210E",
-  good: "#32D74B",
-  danger: "#FF453A",
+  plow: "#4C9BFF",
+  push: "#3DDC84",
+  onPush: "#062112",
+  good: "#3DDC84",
+  danger: "#FF5A4F",
   violet: "#A78BFA",
-  glass: "rgba(11,11,12,.82)",       // sticky header / map overlays
-  glassStrong: "rgba(19,19,21,.92)",
-  scrim: "rgba(0,0,0,.6)",
-  mapBg: "#141418",                   // demo map canvas
-  mapGrid: "#232329",
+  glass: "rgba(7,9,13,.8)",          // sticky header / map overlays
+  glassStrong: "rgba(13,17,24,.93)",
+  scrim: "rgba(0,0,0,.62)",
+  mapBg: "#0F141C",                  // demo map canvas
+  mapGrid: "#1C2430",
 };
 
 const LIGHT = {
-  night: "#F2F2F7",   // iOS grouped background
-  night2: "#F8F8FA",
+  night: "#EEF2F6",   // cool snow-white background
+  night2: "#F7F9FB",
   slate: "#FFFFFF",
   slate2: "#FFFFFF",
-  line: "#E2E2E7",
-  lineSoft: "#ECECF0",
-  ice: "#111114",
+  line: "#DDE3EA",
+  lineSoft: "#E8EDF2",
+  ice: "#0E131A",
   mist: "#5C5C66",
   mistDim: "#8A8A93",
   amber: "#C47A00",   // deeper marigold: readable as text on white, still reads as the brand
@@ -79,9 +79,13 @@ const SHADOW_LIGHT = {
   sheet: "0 -12px 40px rgba(17,17,20,.14)",
 };
 
-// SF-first system stack — matches the Apple ecosystem, no web-font download.
-export const FD = '-apple-system,"SF Pro Display","SF Pro Text",system-ui,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif';
-export const FB = '-apple-system,"SF Pro Text",system-ui,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif';
+// DRIFT type (shared with the landing page; fonts are bundled, see main.jsx):
+//   FD — Big Shoulders Display: condensed Great-Lakes industrial display, for
+//        headings and big numbers. FB — Instrument Sans for everything else.
+//   FM — IBM Plex Mono for small labels/readouts.
+export const FD = '"Big Shoulders Display", Impact, "Arial Narrow", sans-serif';
+export const FB = '"Instrument Sans", -apple-system, system-ui, "Segoe UI", Roboto, sans-serif';
+export const FM = '"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace';
 
 const KEY = "drift-theme";
 

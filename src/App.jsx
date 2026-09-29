@@ -16,7 +16,7 @@ import { deliverExternal } from "./lib/notify.js";
 import { surgePct as marketSurgePct, surgeLabel as marketSurgeLabel, SURGE, refreshMarket } from "./lib/market.js";
 import Landing from "./Landing.jsx";
 import Icon from "./Icon.jsx";
-import { C, E, FD, FB, applyTheme, getThemeMode, onThemeChange, isLight } from "./theme.js";
+import { C, E, FD, FB, FM, applyTheme, getThemeMode, onThemeChange, isLight } from "./theme.js";
 import { LegalReader, LegalHub, CustomerConsent, DriverConsent, ConsentGate, hasCurrentAcceptance } from "./LegalDocs.jsx";
 
 // ============================================================
@@ -520,9 +520,9 @@ function reducer(s, a) {
 }
 
 // ---- UI atoms --------------------------------------------------------------
-// Section label — sentence case, quiet. (Tracked uppercase labels read as generated.)
+// Section label — small mono "dispatch readout" label (same voice as the landing page).
 function Eyebrow({ children, color }) {
-  return <div style={{ font: `600 13px/1.2 ${FB}`, letterSpacing: "-.005em", color: color || C.mist }}>{children}</div>;
+  return <div style={{ font: `500 11.5px/1.3 ${FM}`, letterSpacing: ".08em", textTransform: "uppercase", color: color || C.mist }}>{children}</div>;
 }
 // A driver's written reviews. Reviewers are anonymous ("Customer").
 function ReviewsSheet({ userId, name, rating, count, onClose }) {
@@ -534,7 +534,7 @@ function ReviewsSheet({ userId, name, rating, count, onClose }) {
   }
   return (
     <Sheet onClose={onClose}>
-      <h3 style={{ font: `700 20px ${FD}`, color: C.ice, margin: "0 0 4px" }}>{name ? `${name}'s reviews` : "Reviews"}</h3>
+      <h3 style={{ font: `800 24px ${FD}`, textTransform: "uppercase", color: C.ice, margin: "0 0 4px" }}>{name ? `${name}'s reviews` : "Reviews"}</h3>
       <div style={{ display: "flex", alignItems: "center", gap: 8, font: `600 13px ${FB}`, color: C.mist, marginBottom: 14 }}>
         {rating ? <><Stars v={Number(rating)} size={14} /> {rating} · {count} review{count === 1 ? "" : "s"}</> : "No ratings yet"}
       </div>
@@ -576,7 +576,7 @@ function Btn({ children, onClick, kind = "primary", disabled, full, sm, style })
   const base = {
     font: `700 ${sm ? 14 : 16}px/1 ${FB}`, letterSpacing: "-.01em",
     minHeight: sm ? 40 : TAP, padding: sm ? "0 18px" : "0 24px",
-    borderRadius: sm ? 11 : 14, cursor: disabled ? "not-allowed" : "pointer",
+    borderRadius: 999, cursor: disabled ? "not-allowed" : "pointer",
     border: "1px solid transparent", width: full ? "100%" : "auto",
     display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8,
     transform: press ? "scale(.965)" : "scale(1)",
@@ -635,7 +635,7 @@ function Avatar({ name, size = 44, color = C.amber }) {
   const init = (name || "?").split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
   return <div style={{ width: size, height: size, borderRadius: size * .32, flexShrink: 0,
     background: color, display: "grid", placeItems: "center",
-    font: `800 ${size * .36}px ${FD}`, color: C.onAmber, boxShadow: E.low }}>{init}</div>;
+    font: `800 ${size * .36}px ${FD}`, textTransform: "uppercase", color: C.onAmber, boxShadow: E.low }}>{init}</div>;
 }
 
 // segmented control (iOS-style)
@@ -679,7 +679,7 @@ function Skeleton({ h = 16, w = "100%", r = 8, style }) {
     backgroundSize: "200% 100%", animation: "shimmer 1.4s infinite", ...style }} />;
 }
 
-const h2 = { font: `700 30px/1.08 ${FD}`, letterSpacing: "-.02em", margin: "8px 0 8px" };
+const h2 = { font: `800 38px/.95 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", margin: "10px 0 10px" };
 const sub = { font: `400 15px/1.5 ${FB}`, color: C.mist, margin: 0 };
 const legalLink = { background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit",
   color: C.plow, textDecoration: "underline", textUnderlineOffset: 2 };
@@ -1054,7 +1054,7 @@ function PropertyDesigner({ onDone, existing, compact }) {
         {phase === 0 && (
           <div style={{ position: "absolute", top: 10, right: 10, background: C.glassStrong, backdropFilter: "blur(6px)",
             border: `1px solid ${hasPlow ? C.amber : C.line}`, borderRadius: 12, padding: "8px 12px", textAlign: "right", transition: "border-color .2s" }}>
-            <div style={{ font: `700 22px ${FD}`, color: hasPlow ? C.amber : C.mistDim, lineHeight: 1 }}>{hasPlow ? `$${animPrice}` : "—"}</div>
+            <div style={{ font: `800 26px ${FD}`, textTransform: "uppercase", color: hasPlow ? C.amber : C.mistDim, lineHeight: 1 }}>{hasPlow ? `$${animPrice}` : "—"}</div>
             <div style={{ font: `600 10px ${FB}`, color: C.mist, marginTop: 3 }}>{hasPlow ? `${animSqft.toLocaleString()} sq ft` : "outline to price"}</div>
           </div>
         )}
@@ -1432,7 +1432,7 @@ function Onboarding() {
             </div>
           </div>
 
-          <h1 style={{ font: `700 42px/0.96 ${FD}`, margin: "0 0 10px", textAlign: "center", letterSpacing: ".01em" }}>
+          <h1 style={{ font: `800 50px/0.96 ${FD}`, textTransform: "uppercase", margin: "0 0 10px", textAlign: "center", letterSpacing: ".01em" }}>
             Never shovel<br />again.</h1>
           <p style={{ ...sub, maxWidth: 300, margin: "0 auto 18px", textAlign: "center", fontSize: 15 }}>
             Map your property once. Tap once each storm. A local plow operator clears it exactly how you drew it.
@@ -1815,7 +1815,7 @@ function RiderHome({ go }) {
 
   return (
     <Fade k="home"><section style={{ paddingTop: 10, paddingBottom: 28 }}>
-      <h1 style={{ font: `700 30px/1.1 ${FD}`, letterSpacing: "-.02em", color: C.ice, margin: "4px 0 18px" }}>
+      <h1 style={{ font: `800 35px/1.1 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice, margin: "4px 0 18px" }}>
         {greet}{first ? `, ${first}` : ""}</h1>
 
       {/* storm banner + sidewalk countdown run on sample weather — demo only until a real weather feed is connected */}
@@ -1894,7 +1894,7 @@ function RiderHome({ go }) {
                           background: on ? C.amber + "16" : C.night2, border: `1.5px solid ${on ? C.amber : "transparent"}`,
                           transition: `background .15s, border-color .15s`, WebkitTapHighlightColor: "transparent" }}>
                         <div style={{ font: `600 12px ${FB}`, color: on ? C.amber : C.mist }}>{t.label}</div>
-                        <div style={{ font: `700 20px/1.15 ${FD}`, letterSpacing: "-.02em", color: C.ice, marginTop: 3 }}>${t.offer}</div>
+                        <div style={{ font: `800 24px/1.15 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice, marginTop: 3 }}>${t.offer}</div>
                         <div style={{ font: `400 11.5px ${FB}`, color: C.mistDim, marginTop: 1 }}>{t.note}</div>
                       </button>
                     );
@@ -1909,7 +1909,7 @@ function RiderHome({ go }) {
                   <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                     <button onClick={() => bump(-OFFER_STEP)} aria-label="Lower offer" disabled={q.offer <= OFFER_MIN}
                       style={{ ...miniBtn, width: 38, minHeight: 38, padding: 0, borderRadius: 10, opacity: q.offer <= OFFER_MIN ? .4 : 1 }}><Icon e="minus" s={16} /></button>
-                    <span style={{ minWidth: 56, textAlign: "center", font: `700 17px ${FD}`, color: C.ice }} aria-live="polite">${q.offer}</span>
+                    <span style={{ minWidth: 56, textAlign: "center", font: `800 20px ${FD}`, textTransform: "uppercase", color: C.ice }} aria-live="polite">${q.offer}</span>
                     <button onClick={() => bump(OFFER_STEP)} aria-label="Raise offer"
                       style={{ ...miniBtn, width: 38, minHeight: 38, padding: 0, borderRadius: 10 }}><Icon e="plus" s={16} /></button>
                   </div>
@@ -1926,7 +1926,7 @@ function RiderHome({ go }) {
                 {/* total */}
                 <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginTop: 16, gap: 12 }}>
                   <div>
-                    <div style={{ font: `700 30px/1 ${FD}`, letterSpacing: "-.02em", color: C.ice }}>${animPrice}</div>
+                    <div style={{ font: `800 35px/1 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice }}>${animPrice}</div>
                     <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 6 }}>total · ~{q.mins} min on site</div>
                   </div>
                   <div style={{ textAlign: "right", font: `400 13px/1.5 ${FB}`, color: C.mist }}>
@@ -1969,7 +1969,7 @@ function RiderHome({ go }) {
         <div style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 20, padding: 20 }}>
           <div style={{ width: 44, height: 44, borderRadius: 12, background: C.amber + "1F", color: C.amber,
             display: "grid", placeItems: "center", marginBottom: 14 }}><Icon e="home" s={22} /></div>
-          <div style={{ font: `700 20px ${FD}`, letterSpacing: "-.01em", color: C.ice }}>Add your driveway</div>
+          <div style={{ font: `800 24px ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice }}>Add your driveway</div>
           <div style={{ font: `400 14px/1.5 ${FB}`, color: C.mist, margin: "6px 0 18px" }}>
             Search your address and we'll place a starting outline. Takes about a minute — then it's one tap every storm.</div>
           <Btn full onClick={() => go("props")}>Add my driveway</Btn>
@@ -2024,7 +2024,7 @@ function ScheduleSheet({ onClose, onPick, price }) {
   return (
     <Sheet onClose={onClose}>
       <Eyebrow>Schedule a plow</Eyebrow>
-      <h2 style={{ font: `700 26px ${FD}`, margin: "8px 0 16px" }}>When should we come?</h2>
+      <h2 style={{ font: `800 31px ${FD}`, textTransform: "uppercase", margin: "8px 0 16px" }}>When should we come?</h2>
 
       {/* day picker */}
       <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4, marginBottom: S.lg }}>
@@ -2036,7 +2036,7 @@ function ScheduleSheet({ onClose, onPick, price }) {
             color: day === i ? C.onAmber : C.ice, transition: `all .2s ${EASE}`,
             boxShadow: "none", WebkitTapHighlightColor: "transparent" }}>
             <div style={{ font: `700 11px ${FB}`, opacity: .85 }}>{dayLabel(d, i)}</div>
-            <div style={{ font: `700 19px ${FD}`, marginTop: 2 }}>{d.getDate()}</div>
+            <div style={{ font: `800 22px ${FD}`, textTransform: "uppercase", marginTop: 2 }}>{d.getDate()}</div>
           </button>
         ))}
       </div>
@@ -2138,7 +2138,7 @@ function PaymentSheet({ amount, jobId, onAuthorized, onClose }) {
   return (
     <Sheet onClose={onClose}>
       <Eyebrow>Hold your card</Eyebrow>
-      <h3 style={{ font: `700 26px ${FD}`, margin: "8px 0 4px" }}>${amount}</h3>
+      <h3 style={{ font: `800 31px ${FD}`, textTransform: "uppercase", margin: "8px 0 4px" }}>${amount}</h3>
       <p style={{ ...sub, marginBottom: 16 }}>Your offer goes to drivers once your card is held. You're only charged after the job is done. If nobody takes it, the hold is released.</p>
       {err ? (
         <div style={{ padding: "14px 16px", background: C.slate, borderRadius: 12, border: `1px solid ${C.danger}55` }}>
@@ -2253,7 +2253,7 @@ function NotificationSheet({ onClose }) {
   return (
     <Sheet onClose={onClose}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
-        <div><Eyebrow>Activity</Eyebrow><h3 style={{ font: `700 24px ${FD}`, margin: "6px 0 0" }}>Notifications</h3></div>
+        <div><Eyebrow>Activity</Eyebrow><h3 style={{ font: `800 28px ${FD}`, textTransform: "uppercase", margin: "6px 0 0" }}>Notifications</h3></div>
         {list.some(n => !n.read) && (
           <button onClick={() => dispatch({ type: "NOTIF_READ" })} style={{ ...miniBtn, padding: "7px 12px" }}>Mark all read</button>
         )}
@@ -2488,7 +2488,7 @@ function RiderTracking() {
 
       {/* one big number, one line, one thin progress bar (Uber / DoorDash) */}
       <div style={{ padding: "20px 2px 0" }}>
-        <div style={{ font: `700 ${finding || arrived ? 28 : 40}px/1.05 ${FD}`, letterSpacing: "-.02em", color: C.ice }}>{big}</div>
+        <div style={{ font: `800 ${finding || arrived ? 36 : 50}px/.95 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice }}>{big}</div>
         <div style={{ font: `400 15px ${FB}`, color: C.mist, marginTop: 6 }}>{line}</div>
         <div style={{ display: "flex", gap: 5, marginTop: 16 }} aria-label={`Step ${stage + 1} of 4`}>
           {[0, 1, 2, 3].map(i => (
@@ -2602,7 +2602,7 @@ function RiderReceipt() {
       <div style={{ textAlign: "center", margin: "10px 0 20px" }}>
         <div style={{ width: 60, height: 60, borderRadius: "50%", background: C.push + "22", border: `2px solid ${C.push}`,
           display: "grid", placeItems: "center", margin: "0 auto 14px", fontSize: 28, color: C.push }}><Icon e="check" s={28} /></div>
-        <h2 style={{ font: `700 28px ${FD}`, margin: 0 }}>{isRoadside ? "Back on the road" : "Plowed & clear"}</h2>
+        <h2 style={{ font: `800 33px ${FD}`, textTransform: "uppercase", margin: 0 }}>{isRoadside ? "Back on the road" : "Plowed & clear"}</h2>
         <p style={{ ...sub, marginTop: 6 }}>{d.name} finished your {jtR.label.toLowerCase()}{q.salt ? " + salting" : ""}.</p>
       </div>
 
@@ -2743,7 +2743,7 @@ function RiderProperties() {
   if (editing) {
     const existing = editing === "new" ? null : { center: editing.center, features: editing.features, sqft: editing.sqft, address: editing.addr };
     return (
-      <Fade k="edit"><section style={{ paddingTop: 4 }}>
+      <Fade k="edit"><section style={{ paddingTop: 18 }}>
         <button onClick={() => setEditing(null)} style={{ ...miniBtn, marginBottom: 12 }}>‹ Back</button>
         <Eyebrow>{editing === "new" ? "New property" : "Edit property"}</Eyebrow>
         <h2 style={h2}>Set up the property</h2>
@@ -2780,7 +2780,7 @@ function RiderProperties() {
   }
 
   return (
-    <Fade k="props"><section style={{ paddingTop: 4 }}>
+    <Fade k="props"><section style={{ paddingTop: 18 }}>
       <Eyebrow>Your properties</Eyebrow>
       <h2 style={{ ...h2, marginBottom: 6 }}>Properties</h2>
       <p style={{ ...sub, marginBottom: S.lg }}>Set each up once. Every future job reuses the map and site details.</p>
@@ -2815,7 +2815,7 @@ function RiderProperties() {
                 </div>
                 <div style={{ textAlign: "right", flexShrink: 0 }}>
                   <div style={{ font: `400 11.5px ${FB}`, color: C.mistDim }}>Suggested</div>
-                  <div style={{ font: `700 19px ${FD}`, color: C.ice }}>${pq.suggested ?? pq.riderTotal}</div>
+                  <div style={{ font: `800 22px ${FD}`, textTransform: "uppercase", color: C.ice }}>${pq.suggested ?? pq.riderTotal}</div>
                   <button onClick={(ev) => { ev.stopPropagation(); startEdit(p); }}
                     style={{ ...miniBtn, minHeight: 32, fontSize: 12, marginTop: 7 }}>Edit</button>
                 </div>
@@ -2847,7 +2847,7 @@ function RiderProperties() {
           <div style={{ marginTop: 10, background: C.night2, border: `1px solid ${C.line}`, borderRadius: 14, padding: 15 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
               <span style={{ font: `600 12px ${FB}`, color: C.mist }}>Send a plow when snow reaches</span>
-              <span style={{ font: `700 24px ${FD}`, color: C.amber, lineHeight: 1 }}>{state.autoPlowThreshold}"</span>
+              <span style={{ font: `800 28px ${FD}`, textTransform: "uppercase", color: C.amber, lineHeight: 1 }}>{state.autoPlowThreshold}"</span>
             </div>
             <input type="range" min="1" max="12" step="1" value={state.autoPlowThreshold}
               onChange={e => dispatch({ type: "AUTOPLOW_THRESHOLD", inches: +e.target.value })}
@@ -2924,7 +2924,7 @@ function RiderHistory() {
   const list = tab === "upcoming" ? sched : state.history;
 
   return (
-    <Fade k="hist"><section style={{ paddingTop: 4 }}>
+    <Fade k="hist"><section style={{ paddingTop: 18 }}>
       <Eyebrow>Your plows</Eyebrow>
       <h2 style={{ ...h2, marginBottom: S.md }}>Trips</h2>
 
@@ -2936,7 +2936,7 @@ function RiderHistory() {
           { v: `$${totalSpent}`, l: "Total spent", c: C.amber },
         ].map((s, i) => (
           <div key={i} style={{ flex: 1, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: "13px 12px" }}>
-            <div style={{ font: `700 22px ${FD}`, color: s.c, lineHeight: 1 }}>{s.v}</div>
+            <div style={{ font: `800 26px ${FD}`, textTransform: "uppercase", color: s.c, lineHeight: 1 }}>{s.v}</div>
             <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 4 }}>{s.l}</div>
           </div>
         ))}
@@ -2971,7 +2971,7 @@ function RiderHistory() {
                       </div>
                     </div>
                     <div style={{ textAlign: "right", flexShrink: 0 }}>
-                      <div style={{ font: `700 20px ${FD}`, color: C.ice }}>${job.quote.riderTotal}</div>
+                      <div style={{ font: `800 24px ${FD}`, textTransform: "uppercase", color: C.ice }}>${job.quote.riderTotal}</div>
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 9, marginTop: S.md }}>
@@ -3011,7 +3011,7 @@ function RiderHistory() {
                     </div>
                   </div>
                   <div style={{ textAlign: "right", flexShrink: 0 }}>
-                    <div style={{ font: `700 20px ${FD}`, color: C.ice }}>${h.total}</div>
+                    <div style={{ font: `800 24px ${FD}`, textTransform: "uppercase", color: C.ice }}>${h.total}</div>
                     {hasPhotos && <div style={{ font: `600 11px ${FB}`, color: C.mistDim, marginTop: 2 }}>View ›</div>}
                   </div>
                 </Card>
@@ -3100,7 +3100,7 @@ function PhotoViewer({ job, onClose }) {
       display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 400 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <div style={{ font: `700 18px ${FD}`, color: C.ice }}>Before / After</div>
+          <div style={{ font: `800 21px ${FD}`, textTransform: "uppercase", color: C.ice }}>Before / After</div>
           <button onClick={onClose} style={{ ...miniBtn, padding: "7px 12px" }}>Close</button>
         </div>
         {/* wipe comparison */}
@@ -3195,7 +3195,7 @@ function ProfileSheet({ onClose, driver }) {
   const label = { font: `600 13px ${FB}`, color: C.mist, margin: "14px 0 6px", display: "block" };
   return (
     <Sheet onClose={onClose}>
-      <h3 style={{ font: `700 22px ${FD}`, margin: "0 0 4px" }}>{driver ? "Profile and equipment" : "Your profile"}</h3>
+      <h3 style={{ font: `800 26px ${FD}`, textTransform: "uppercase", margin: "0 0 4px" }}>{driver ? "Profile and equipment" : "Your profile"}</h3>
       <label style={label}>Name</label>
       <input value={name} onChange={(e) => setName(e.target.value)} style={input} autoComplete="name" />
       <label style={label}>Phone</label>
@@ -3258,7 +3258,7 @@ function FavoritesSheet({ onClose }) {
   };
   return (
     <Sheet onClose={onClose}>
-      <h3 style={{ font: `700 20px ${FD}`, color: C.ice, margin: "0 0 4px" }}>Favorite drivers</h3>
+      <h3 style={{ font: `800 24px ${FD}`, textTransform: "uppercase", color: C.ice, margin: "0 0 4px" }}>Favorite drivers</h3>
       <p style={{ font: `400 14px/1.45 ${FB}`, color: C.mist, margin: "0 0 14px" }}>
         When you book, your favorites who are online get your offer first, for 2 minutes, before anyone else sees it.</p>
       {list === null ? <div style={{ font: `500 13px ${FB}`, color: C.mist }}>Loading…</div>
@@ -3299,7 +3299,7 @@ function RiderAccount({ onReferral }) {
         background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left" }}>
         <Avatar name={p.name || "You"} size={58} />
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ font: `700 22px ${FD}`, letterSpacing: "-.01em", color: C.ice }}>{p.name || "Your account"}</div>
+          <div style={{ font: `800 26px ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice }}>{p.name || "Your account"}</div>
           <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 2 }}>{[p.phone, p.email].filter(Boolean).join(" · ") || "Add your contact info"}</div>
           <div style={{ font: `600 13px ${FB}`, color: C.amber, marginTop: 4 }}>Edit profile</div>
         </div>
@@ -3360,7 +3360,7 @@ function ReferralHero({ code, reward, subtitle, accent = C.amber }) {
       <div style={{ position: "absolute", top: -40, right: -30, fontSize: 130, opacity: .08 }}><Icon e="gift" s={130} /></div>
       <div style={{ font: `700 13px ${FB}`, color: accent, letterSpacing: ".01em" }}>Your code</div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "8px 0 14px" }}>
-        <div style={{ font: `700 26px ${FD}`, letterSpacing: ".04em", color: C.ice }}>{code}</div>
+        <div style={{ font: `800 31px ${FD}`, textTransform: "uppercase", letterSpacing: ".04em", color: C.ice }}>{code}</div>
         <button onClick={copy} style={{ ...miniBtn, padding: "6px 10px", borderColor: accent + "66" }}>Copy</button>
       </div>
       <p style={{ font: `500 13px ${FB}`, color: C.mist, margin: "0 0 16px", maxWidth: 300 }}>{subtitle}</p>
@@ -3391,7 +3391,7 @@ function RiderReferral({ onBack }) {
   };
 
   return (
-    <Fade k="rref"><section style={{ paddingTop: 4 }}>
+    <Fade k="rref"><section style={{ paddingTop: 18 }}>
       <button onClick={onBack} style={{ ...miniBtn, marginBottom: 14 }}>‹ Account</button>
       <Eyebrow>Referrals</Eyebrow>
       <h2 style={h2}>Give $15, get $15</h2>
@@ -3399,11 +3399,11 @@ function RiderReferral({ onBack }) {
       {/* credit banner */}
       <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
         <div style={{ flex: 1, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 12, padding: 14 }}>
-          <div style={{ font: `700 24px ${FD}`, color: C.amber }}>${animCredit}</div>
+          <div style={{ font: `800 28px ${FD}`, textTransform: "uppercase", color: C.amber }}>${animCredit}</div>
           <div style={{ font: `500 12px ${FB}`, color: C.mist }}>Credit earned</div>
         </div>
         <div style={{ flex: 1, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 12, padding: 14 }}>
-          <div style={{ font: `700 24px ${FD}`, color: C.ice }}>{ref.invited}</div>
+          <div style={{ font: `800 28px ${FD}`, textTransform: "uppercase", color: C.ice }}>{ref.invited}</div>
           <div style={{ font: `500 12px ${FB}`, color: C.mist }}>Neighbors invited</div>
         </div>
       </div>
@@ -3603,7 +3603,7 @@ function DriverOnboarding() {
               <div style={{ fontSize: 50, color: "#F5F5F7" }}><Icon e="plowtruck" s={50} /></div>
             </div>
           </div>
-          <h1 style={{ font: `700 38px/1 ${FD}`, margin: "0 0 10px", textAlign: "center" }}>
+          <h1 style={{ font: `800 45px/1 ${FD}`, textTransform: "uppercase", margin: "0 0 10px", textAlign: "center" }}>
             Plow on your<br />own schedule.</h1>
           <p style={{ ...sub, maxWidth: 300, margin: "0 auto 20px", textAlign: "center", fontSize: 15 }}>
             Turn on when the snow flies. Take the jobs you want. You're your own boss.
@@ -3761,7 +3761,7 @@ function InstallSheet({ onClose }) {
   );
   return (
     <Sheet onClose={onClose}>
-      <h3 style={{ font: `700 22px ${FD}`, margin: "0 0 4px" }}>Add DRIFT to your Home Screen</h3>
+      <h3 style={{ font: `800 26px ${FD}`, textTransform: "uppercase", margin: "0 0 4px" }}>Add DRIFT to your Home Screen</h3>
       <p style={{ ...sub, marginBottom: 8 }}>It opens full screen like a normal app{ios ? ", and it's required on iPhone for job alerts when DRIFT is closed" : ""}.</p>
       {ios ? <>
         {step(1, <>Open this page in <b>Safari</b>.</>)}
@@ -3914,7 +3914,7 @@ function DriverDrive() {
           animation: online ? "pulse 1.6s infinite" : "none" }} />
         {online ? "Online" : "Offline"}
       </div>
-      <h1 style={{ font: `700 30px/1.1 ${FD}`, letterSpacing: "-.02em", color: C.ice, margin: "6px 0 4px" }}>
+      <h1 style={{ font: `800 35px/1.1 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice, margin: "6px 0 4px" }}>
         {online ? "Watching for requests" : "Ready to plow?"}</h1>
       <p style={{ font: `400 15px ${FB}`, color: C.mist, margin: "0 0 16px" }}>
         {online ? (LIVE ? `${pool.length} open request${pool.length === 1 ? "" : "s"} nearby` : `${SNOW_DEPTH_IN}" down · 12 open requests nearby`)
@@ -3950,7 +3950,7 @@ function DriverDrive() {
         border: `1px solid ${C.line}`, borderRadius: 16 }}>
         {[[`$${state.earnings.today}`, "Today"], [state.earnings.jobsToday, "Jobs"], [`$${state.earnings.week}`, "This week"]].map(([v, l], i) => (
           <div key={l} style={{ padding: "14px 12px", borderLeft: i ? `1px solid ${C.lineSoft}` : "none" }}>
-            <div style={{ font: `700 21px/1 ${FD}`, letterSpacing: "-.01em", color: C.ice }}>{v}</div>
+            <div style={{ font: `800 25px/1 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice }}>{v}</div>
             <div style={{ font: `400 12.5px ${FB}`, color: C.mist, marginTop: 5 }}>{l}</div>
           </div>
         ))}
@@ -4066,7 +4066,7 @@ function IncomingJob({ order, onAccept, onPass, busy }) {
         </div>
 
         {/* pay — the number that matters */}
-        <div style={{ font: `700 60px/1 ${FD}`, letterSpacing: "-.03em", color: C.ice, marginTop: 14 }}>${dPay}</div>
+        <div style={{ font: `800 71px/1 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice, marginTop: 14 }}>${dPay}</div>
         <div style={{ font: `400 15px ${FB}`, color: C.mist, marginTop: 8 }}>
           {jt.label} · ~{order.size?.mins || q.mins} min on site · ~${dHourly}/hr</div>
         {q.offer != null && (
@@ -4161,7 +4161,7 @@ function ClusterRoute() {
                 <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 2 }}>{jt.label} · {n.dist} · {n.mins} min</div>
               </div>
               <div style={{ textAlign: "right" }}>
-                <div style={{ font: `700 15px ${FD}`, color: C.push }}>${n.pay}</div>
+                <div style={{ font: `800 18px ${FD}`, textTransform: "uppercase", color: C.push }}>${n.pay}</div>
                 <div style={{ font: `700 11px ${FB}`, color: on ? C.push : C.mistDim }}>{on ? <><Icon e="check" s={11} /> Added</> : "+ Add"}</div>
               </div>
             </button>
@@ -4274,7 +4274,7 @@ function DriverActiveJob() {
         <div style={{ textAlign: "center", margin: "20px 0" }}>
           <div style={{ width: 64, height: 64, borderRadius: "50%", background: C.push + "22", border: `2px solid ${C.push}`,
             display: "grid", placeItems: "center", margin: "0 auto 16px", fontSize: 30, color: C.push }}><Icon e="check" s={30} /></div>
-          <h2 style={{ font: `700 30px ${FD}`, margin: 0 }}>Job complete</h2>
+          <h2 style={{ font: `800 35px ${FD}`, textTransform: "uppercase", margin: 0 }}>Job complete</h2>
           <p style={{ ...sub, marginTop: 6 }}>Nice work. Payout added to today's earnings.</p>
         </div>
         <div style={{ background: C.night2, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 14 }}>
@@ -4301,13 +4301,13 @@ function DriverActiveJob() {
   }
 
   return (
-    <section style={{ paddingTop: 4 }}>
+    <section style={{ paddingTop: 18 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 12 }}>
         <div>
           <Eyebrow color={arrived ? C.push : C.amber}>{arrived ? "At the property" : "En route"}</Eyebrow>
-          <h2 style={{ font: `700 28px ${FD}`, margin: "6px 0 0" }}>{arrived ? "Plow the job" : LIVE ? "Head to the property" : `${Math.ceil(eta)} min to site`}</h2>
+          <h2 style={{ font: `800 33px ${FD}`, textTransform: "uppercase", margin: "6px 0 0" }}>{arrived ? "Plow the job" : LIVE ? "Head to the property" : `${Math.ceil(eta)} min to site`}</h2>
         </div>
-        <div style={{ font: `700 20px ${FD}`, color: C.push }}>${dPay}</div>
+        <div style={{ font: `800 24px ${FD}`, textTransform: "uppercase", color: C.push }}>${dPay}</div>
       </div>
 
       {MAP_ENABLED && jobCenter ? (
@@ -4536,7 +4536,7 @@ function PayoutSetupSheet({ onClose }) {
   }));
   return (
     <Sheet onClose={onClose}>
-      <h3 style={{ font: `700 22px ${FD}`, margin: "0 0 12px" }}>Set up payouts</h3>
+      <h3 style={{ font: `800 26px ${FD}`, textTransform: "uppercase", margin: "0 0 12px" }}>Set up payouts</h3>
       <ConnectComponentsProvider connectInstance={instance}>
         <ConnectNotificationBanner />
         <ConnectAccountOnboarding onExit={onClose} />
@@ -4557,13 +4557,13 @@ function DriverEarnings({ onReferral }) {
   const animWeek = useCountUp(e.week, 600);
 
   return (
-    <Fade k="earn"><section style={{ paddingTop: 4 }}>
+    <Fade k="earn"><section style={{ paddingTop: 18 }}>
       {/* hero balance */}
       <div style={{ borderRadius: 20, padding: S.xl, marginBottom: S.lg, position: "relative", overflow: "hidden",
         background: C.slate, border: `1px solid ${C.amber}44` }}>
         <div style={{ position: "absolute", top: -46, right: -30, fontSize: 150, opacity: .06 }}><Icon e="cash" s={150} /></div>
         <Eyebrow>This week</Eyebrow>
-        <div style={{ font: `700 46px/1 ${FD}`, color: C.amber, margin: "8px 0 4px" }}>${animWeek}</div>
+        <div style={{ font: `800 54px/1 ${FD}`, textTransform: "uppercase", color: C.amber, margin: "8px 0 4px" }}>${animWeek}</div>
         <div style={{ font: `500 13px ${FB}`, color: C.mist, marginBottom: S.lg }}>
           ${e.today} today · {e.jobsToday} job{e.jobsToday !== 1 ? "s" : ""} completed
         </div>
@@ -4580,12 +4580,12 @@ function DriverEarnings({ onReferral }) {
       {/* quick stats */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: S.lg }}>
         <div style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: S.lg }}>
-          {LIVE ? <><div style={{ font: `700 24px ${FD}`, color: C.ice }}>{e.jobsWeek || 0}</div>
+          {LIVE ? <><div style={{ font: `800 28px ${FD}`, textTransform: "uppercase", color: C.ice }}>{e.jobsWeek || 0}</div>
             <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 3 }}>Jobs this week</div></>
-          : <><div style={{ font: `700 24px ${FD}`, color: C.ice }}>$92<span style={{ fontSize: 13 }}>/hr</span></div>
+          : <><div style={{ font: `800 28px ${FD}`, textTransform: "uppercase", color: C.ice }}>$92<span style={{ fontSize: 13 }}>/hr</span></div>
           <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 3 }}>Active-job rate at peak</div></>}</div>
         <div style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: S.lg }}>
-          <div style={{ font: `700 24px ${FD}`, color: C.push }}>{Math.round(driverPct(state.driver) * 100)}%</div>
+          <div style={{ font: `800 28px ${FD}`, textTransform: "uppercase", color: C.push }}>{Math.round(driverPct(state.driver) * 100)}%</div>
           <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 3 }}>You keep per job</div></div>
       </div>
 
@@ -4638,7 +4638,7 @@ function DriverEarnings({ onReferral }) {
               <div style={{ font: `700 14px ${FB}`, color: C.ice }}>Available now</div>
               <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 2 }}>Stripe Connect · same-day</div>
             </div>
-            <div style={{ font: `700 26px ${FD}`, color: C.push }}>${e.week}</div>
+            <div style={{ font: `800 31px ${FD}`, textTransform: "uppercase", color: C.push }}>${e.week}</div>
           </div>
           <Btn full kind="good" onClick={() => dispatch({ type: "TOAST", msg: `$${e.week} sent — arrives in seconds` })}>
             Cash out instantly
@@ -4691,7 +4691,7 @@ function DriverAccount({ onReferral }) {
     );
   };
   return (
-    <section style={{ paddingTop: 4 }}>
+    <section style={{ paddingTop: 18 }}>
       <div style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 16 }}>
         <div style={{ width: 56, height: 56, borderRadius: 16, background: C.slate, border: `1px solid ${C.line}`,
           display: "grid", placeItems: "center", fontSize: 26 }}><Icon e="pickup" s={26} /></div>
@@ -4711,7 +4711,7 @@ function DriverAccount({ onReferral }) {
       {/* your share — one flat rate, no tiers */}
       <Card style={{ marginBottom: 14 }}>
         <Eyebrow>Your share</Eyebrow>
-        <div style={{ font: `700 32px/1 ${FD}`, letterSpacing: "-.02em", color: C.ice, marginTop: 8 }}>
+        <div style={{ font: `800 38px/1 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice, marginTop: 8 }}>
           80%<span style={{ font: `400 14px ${FB}`, color: C.mist, letterSpacing: 0 }}> of every offer</span></div>
         <p style={{ font: `400 13px/1.45 ${FB}`, color: C.mist, margin: "8px 0 0" }}>
           Plus the full $10 call-out fee and 100% of tips. Customers set their offer — you choose which ones to take. Same rate for every driver.</p>
@@ -4801,18 +4801,18 @@ function DriverReferral({ onBack }) {
     dispatch({ type: "TOAST", msg: "Driver invite sent!" });
   };
   return (
-    <Fade k="dref"><section style={{ paddingTop: 4 }}>
+    <Fade k="dref"><section style={{ paddingTop: 18 }}>
       <button onClick={onBack} style={{ ...miniBtn, marginBottom: 14 }}>‹ Back</button>
       <Eyebrow color={C.push}>Driver referrals</Eyebrow>
       <h2 style={h2}>Earn ${ref.reward} per driver</h2>
 
       <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
         <div style={{ flex: 1, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 12, padding: 14 }}>
-          <div style={{ font: `700 24px ${FD}`, color: C.push }}>${ref.credit}</div>
+          <div style={{ font: `800 28px ${FD}`, textTransform: "uppercase", color: C.push }}>${ref.credit}</div>
           <div style={{ font: `500 12px ${FB}`, color: C.mist }}>Bonuses earned</div>
         </div>
         <div style={{ flex: 1, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 12, padding: 14 }}>
-          <div style={{ font: `700 24px ${FD}`, color: C.ice }}>{ref.invited}</div>
+          <div style={{ font: `800 28px ${FD}`, textTransform: "uppercase", color: C.ice }}>{ref.invited}</div>
           <div style={{ font: `500 12px ${FB}`, color: C.mist }}>Drivers referred</div>
         </div>
       </div>
@@ -4888,11 +4888,16 @@ function AuthScreen({ auth, onDemo, initialRole, signInOnly, title }) {
     <div style={{ minHeight: "100vh", background: C.night, color: C.ice, fontFamily: FB, display: "flex", justifyContent: "center" }}>
       <style>{`*{box-sizing:border-box;-webkit-font-smoothing:antialiased} input::placeholder{color:${C.mistDim}}`}</style>
       <div style={{ width: "100%", maxWidth: 440, minHeight: "100vh", display: "flex", flexDirection: "column", justifyContent: "center", padding: "0 24px" }}>
-        <div style={{ textAlign: "center", marginBottom: 22 }}>
-          <div style={{ fontSize: 44, color: C.amber }}><Icon e="snowflake" s={44} /></div>
-          <div style={{ font: `700 26px ${FD}`, letterSpacing: ".08em", marginTop: 6 }}>DRIFT</div>
-          <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 4 }}>
-            {title || (mode === "signup" ? "Create your account" : "Welcome back")}</div>
+        <div style={{ marginBottom: 26 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ width: 34, height: 34, borderRadius: 9, background: C.amber, color: C.onAmber, display: "grid", placeItems: "center" }}>
+              <Icon e="snowflake" s={19} /></span>
+            <span style={{ font: `900 28px/1 ${FD}`, textTransform: "uppercase", letterSpacing: ".06em" }}>DRIFT</span>
+          </div>
+          <h1 style={{ font: `900 52px/.9 ${FD}`, textTransform: "uppercase", margin: "26px 0 10px", color: C.ice }}>
+            {title ? title : mode === "signup" ? <>Let's get you<br /><span style={{ color: C.amber }}>plowed.</span></> : <>Welcome<br /><span style={{ color: C.amber }}>back.</span></>}</h1>
+          <div style={{ font: `400 15px/1.5 ${FB}`, color: C.mist }}>
+            {mode === "signup" ? "Create your account — it takes about a minute." : "Sign in to your DRIFT account."}</div>
         </div>
 
         {mode === "signup" && (
@@ -5097,7 +5102,8 @@ function Shell() {
           @media (prefers-reduced-motion: reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
         `}</style>
 
-        <div style={{ width: "100%", maxWidth: 440, minHeight: "100vh", background: C.night, display: "flex", flexDirection: "column", position: "relative" }}>
+        <div style={{ width: "100%", maxWidth: 440, minHeight: "100vh", display: "flex", flexDirection: "column", position: "relative",
+          background: isLight ? C.night : `radial-gradient(90% 38% at 100% 0%, ${C.amber}12, transparent 70%), radial-gradient(80% 40% at 0% 100%, #0E1A2B, transparent 70%), ${C.night}` }}>
           <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
             padding: `calc(${S.md}px + env(safe-area-inset-top)) ${S.xl}px ${S.md}px`, position: "sticky", top: 0, zIndex: 30,
             background: C.glass, backdropFilter: "saturate(180%) blur(20px)", WebkitBackdropFilter: "saturate(180%) blur(20px)",
@@ -5106,8 +5112,8 @@ function Shell() {
               <div style={{ width: 32, height: 32, borderRadius: 9, background: C.amber, color: C.onAmber,
                 display: "grid", placeItems: "center" }}><Icon e="snowflake" s={17} /></div>
               <div>
-                <div style={{ font: `700 18px/1 ${FD}`, letterSpacing: ".04em", color: C.ice }}>DRIFT</div>
-                <div style={{ font: `500 11px ${FB}`, color: C.mistDim, marginTop: 2 }}>
+                <div style={{ font: `900 25px/1 ${FD}`, textTransform: "uppercase", letterSpacing: ".06em", color: C.ice }}>DRIFT</div>
+                <div style={{ font: `500 10px ${FM}`, letterSpacing: ".08em", textTransform: "uppercase", color: C.mistDim, marginTop: 3 }}>
                   {state.role === "driver" && !inSetup ? "Driver · Duluth, MN" : "Duluth, MN"}</div>
               </div>
             </div>
