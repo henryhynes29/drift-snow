@@ -27,7 +27,8 @@ export default async function handler(req, res) {
   try {
     if (!stripe) throw new HttpError(503, "Payments aren't set up on the server yet");
     if (!admin) throw new HttpError(503, "Server isn't connected to the database yet");
-    if (action === "sweep") return send(res, 200, await sweep(req));
+    // Vercel's nightly cron calls GET /api/pay (no action) with the CRON_SECRET.
+    if (action === "sweep" || (req.method === "GET" && !action)) return send(res, 200, await sweep(req));
     if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
     const body = await readJson(req);
     const user = await requireUser(req);
@@ -55,7 +56,8 @@ const ACTIONS = {
       const pi = await stripe.paymentIntents.retrieve(job.payment_intent_id);
       if (pi.status === "requires_capture") return await markAuthorized(job, pi);
       if (["requires_payment_method", "requires_confirmation", "requires_action"].includes(pi.status)) {
-        return { clientSecret: pi.client_secret, amount: Number(job.price) };
+        return { clientSecret: pi.client_secret, amount: Number(job.price),
+          customerSessionClientSecret: await savedCardsSession(pi.customer) };
       }
     }
 
@@ -72,7 +74,8 @@ const ACTIONS = {
       metadata: { job_id: job.id, customer_id: user.id, kind: "job" },
     }, { idempotencyKey: `hold-${job.id}` });
     await updateJob(job.id, { payment_intent_id: pi.id });
-    return { clientSecret: pi.client_secret, amount: Number(job.price) };
+    return { clientSecret: pi.client_secret, amount: Number(job.price),
+      customerSessionClientSecret: await savedCardsSession(customerId) };
   },
 
   // Called right after the card form succeeds (the webhook does the same thing,
@@ -161,6 +164,45 @@ const ACTIONS = {
     return { job: await updateJob(job.id, patch), status: pi.status };
   },
 
+  // ---------- 4b. customer's saved cards (Account → Payment methods) ----------
+  async cards(user) {
+    const profile = await getProfile(user.id);
+    if (!profile?.stripe_customer_id) return { cards: [], defaultId: null };
+    const [list, cust] = await Promise.all([
+      stripe.customers.listPaymentMethods(profile.stripe_customer_id, { type: "card", limit: 20 }),
+      stripe.customers.retrieve(profile.stripe_customer_id),
+    ]);
+    const defaultId = cust?.invoice_settings?.default_payment_method || null;
+    return {
+      defaultId,
+      cards: list.data.map((pm) => ({ id: pm.id, brand: pm.card?.brand, last4: pm.card?.last4,
+        expMonth: pm.card?.exp_month, expYear: pm.card?.exp_year, isDefault: pm.id === defaultId })),
+    };
+  },
+  // Start adding a card (SetupIntent) — the card form saves it without charging.
+  async "card-setup"(user) {
+    const customerId = await ensureCustomer(user);
+    const si = await stripe.setupIntents.create({
+      customer: customerId, usage: "off_session", payment_method_types: ["card"],
+      metadata: { user_id: user.id },
+    });
+    return { clientSecret: si.client_secret };
+  },
+  async "card-default"(user, { pm }) {
+    const customerId = await ownCard(user, pm);
+    await stripe.customers.update(customerId, { invoice_settings: { default_payment_method: pm } });
+    return { ok: true };
+  },
+  async "card-remove"(user, { pm }) {
+    await ownCard(user, pm);
+    const { data: busy } = await admin.from("jobs").select("id")
+      .eq("customer_id", user.id).eq("payment_method_id", pm)
+      .in("status", ["requested", "accepted", "enroute", "plowing"]).limit(1);
+    if (busy?.length) throw new HttpError(409, "This card is holding an active job. Remove it after the job is done.");
+    await stripe.paymentMethods.detach(pm);
+    return { ok: true };
+  },
+
   // ---------- 5. driver payouts (Stripe Connect, Accounts v2) ----------
   // Creates the driver's Stripe account once, then returns a short-lived
   // session for the embedded onboarding form inside the app.
@@ -234,6 +276,34 @@ async function ensureCustomer(user) {
   }, { idempotencyKey: `cust-${user.id}` });
   await updateProfile(user.id, { stripe_customer_id: c.id });
   return c.id;
+}
+
+// Lets the card form show (and remove) the customer's saved cards.
+async function savedCardsSession(customerId) {
+  if (!customerId) return null;
+  try {
+    const cs = await stripe.customerSessions.create({
+      customer: customerId,
+      components: { payment_element: { enabled: true, features: {
+        payment_method_redisplay: "enabled",
+        payment_method_remove: "enabled",
+        payment_method_allow_redisplay_filters: ["always", "limited", "unspecified"],
+      } } },
+    });
+    return cs.client_secret;
+  } catch (e) {
+    console.error("[pay:hold] customer session", e.message);
+    return null; // the form still works, just without saved cards
+  }
+}
+
+// The card must belong to the signed-in customer.
+async function ownCard(user, pmId) {
+  const profile = await getProfile(user.id);
+  if (!pmId || !profile?.stripe_customer_id) throw new HttpError(404, "Card not found");
+  const pm = await stripe.paymentMethods.retrieve(pmId);
+  if (pm.customer !== profile.stripe_customer_id) throw new HttpError(403, "Not your card");
+  return profile.stripe_customer_id;
 }
 
 async function releaseHold(job) {

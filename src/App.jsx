@@ -3,8 +3,8 @@ import MapPropertyDesigner, { staticMapUrl, LiveMap, MAP_ENABLED } from "./Prope
 import { useAuth } from "./lib/auth.jsx";
 import { supabaseEnabled } from "./lib/supabase.js";
 import { recordLegalAcceptance, loadProperties, replaceProperties, rateJob, pushDriverLocation, subscribeToDriverLocation, createJobFromOrder, patchJob, sendMessage, subscribeToMessages, loadMessages,
-  rowToOrder, fetchJob, listOpenJobs, subscribeOpenJobs, claimJob, getProfile, profileToDriver, setDriverStatus, becomeDriver, cancelJob, expireJob, subscribeToJob, loadActiveJob } from "./lib/db.js";
-import { STRIPE_ENABLED, STRIPE_PK, getStripe, startHold, confirmHold, cancelJobPaid, completeJobPaid, tipJob, connectSession, connectStatus, connectDashboard, authedFetch } from "./lib/payments.js";
+  updateMyProfile, rowToOrder, fetchJob, listOpenJobs, subscribeOpenJobs, claimJob, getProfile, profileToDriver, setDriverStatus, becomeDriver, cancelJob, expireJob, subscribeToJob, loadActiveJob } from "./lib/db.js";
+import { STRIPE_ENABLED, STRIPE_PK, getStripe, startHold, confirmHold, cancelJobPaid, completeJobPaid, tipJob, connectSession, connectStatus, connectDashboard, authedFetch, listCards, startCardSetup, setDefaultCard, removeCard } from "./lib/payments.js";
 import { loadConnectAndInitialize } from "@stripe/connect-js";
 import { ConnectComponentsProvider, ConnectAccountOnboarding, ConnectNotificationBanner } from "@stripe/react-connect-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
@@ -453,6 +453,7 @@ function reducer(s, a) {
         ? "DRIFT-" + a.profile.name.split(" ")[0].toUpperCase() : s.riderReferral.code },
     };
     case "SET_PROFILE": return { ...s, profile: { ...s.profile, ...a.patch } };
+    case "UPDATE_DRIVER": return { ...s, driver: { ...s.driver, ...a.patch } };
     case "SET_PAYMENT": return { ...s, payment: a.payment };
     case "ADD_PROPERTY": return { ...s, properties: [...s.properties, a.p], activeProperty: a.p };
     case "SET_PROPERTY": return { ...s, activeProperty: a.p };
@@ -2050,6 +2051,7 @@ function PayForm({ amount, jobId, onAuthorized, onClose }) {
 // Outer sheet: fetches a PaymentIntent, then mounts Stripe Elements.
 function PaymentSheet({ amount, jobId, onAuthorized, onClose }) {
   const [secret, setSecret] = useState(null);
+  const [custSecret, setCustSecret] = useState(null);
   const [err, setErr] = useState(null);
   useEffect(() => {
     let ok = true;
@@ -2057,7 +2059,8 @@ function PaymentSheet({ amount, jobId, onAuthorized, onClose }) {
       .then(r => {
         if (!ok) return;
         if (r.alreadyAuthorized || r.authorized || r.required === false) { onAuthorized(r.job); return; }
-        r.clientSecret ? setSecret(r.clientSecret) : setErr(r.error || "Couldn't start payment");
+        if (r.clientSecret) { setCustSecret(r.customerSessionClientSecret || null); setSecret(r.clientSecret); }
+        else setErr(r.error || "Couldn't start payment");
       })
       .catch(e => ok && setErr(e.message));
     return () => { ok = false; };
@@ -2080,7 +2083,8 @@ function PaymentSheet({ amount, jobId, onAuthorized, onClose }) {
           <Skeleton h={44} /><Skeleton h={44} /><Skeleton h={48} r={14} />
         </div>
       ) : (
-        <Elements stripe={getStripe()} options={{ clientSecret: secret, appearance }}>
+        <Elements stripe={getStripe()} options={{ clientSecret: secret, appearance,
+          ...(custSecret ? { customerSessionClientSecret: custSecret } : {}) }}>
           <PayForm amount={amount} jobId={jobId} onAuthorized={onAuthorized} onClose={onClose} />
         </Elements>
       )}
@@ -3046,24 +3050,170 @@ function AppearancePicker() {
   );
 }
 
+// ---- Account settings: profile + saved cards ------------------------------
+const stripeAppearance = () => ({ theme: isLight ? "stripe" : "night", variables: { colorPrimary: C.amber,
+  colorBackground: C.night2, colorText: C.ice, fontFamily: "-apple-system, system-ui, sans-serif", borderRadius: "12px" } });
+
+function ProfileSheet({ onClose, driver }) {
+  const { state, dispatch } = useStore();
+  const [name, setName] = useState(driver ? (state.driver.name || state.profile.name || "") : (state.profile.name || ""));
+  const [phone, setPhone] = useState(state.profile.phone || "");
+  const [truck, setTruck] = useState(state.driver.truck || "");
+  const [tools, setTools] = useState(state.driver.tools || []);
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    const patch = { name: name.trim(), phone: phone.trim(), ...(driver ? { truck: truck.trim(), tools } : {}) };
+    if (isLive(state)) {
+      const { error } = await updateMyProfile(state.userId, patch);
+      if (error) { setBusy(false); dispatch({ type: "TOAST", msg: `Couldn't save — ${error.message}` }); return; }
+    }
+    dispatch({ type: "SET_PROFILE", patch: { name: patch.name, phone: patch.phone } });
+    if (driver) dispatch({ type: "UPDATE_DRIVER", patch: { name: patch.name, truck: patch.truck, tools } });
+    dispatch({ type: "TOAST", msg: "Saved" });
+    onClose();
+  };
+  const input = { width: "100%", background: C.slate, border: `1px solid ${C.line}`, borderRadius: 12, padding: "13px 14px",
+    color: C.ice, font: `500 16px ${FB}`, outline: "none" };
+  const label = { font: `600 13px ${FB}`, color: C.mist, margin: "14px 0 6px", display: "block" };
+  return (
+    <Sheet onClose={onClose}>
+      <h3 style={{ font: `700 22px ${FD}`, margin: "0 0 4px" }}>{driver ? "Profile and equipment" : "Your profile"}</h3>
+      <label style={label}>Name</label>
+      <input value={name} onChange={(e) => setName(e.target.value)} style={input} autoComplete="name" />
+      <label style={label}>Phone</label>
+      <input value={phone} onChange={(e) => setPhone(fmtPhone(e.target.value))} style={input} inputMode="tel" autoComplete="tel" placeholder="(218) 555-0123" />
+      <label style={label}>Email</label>
+      <div style={{ ...input, color: C.mist }}>{state.profile.email || "—"}</div>
+      {driver && <>
+        <label style={label}>Truck</label>
+        <input value={truck} onChange={(e) => setTruck(e.target.value)} style={input} placeholder="F-350 · 9ft V-Plow" />
+        <label style={label}>Equipment</label>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {TOOL_OPTIONS.map((t) => { const on = tools.includes(t.id); return (
+            <button key={t.id} onClick={() => setTools((ts) => on ? ts.filter((x) => x !== t.id) : [...ts, t.id])}
+              style={{ display: "flex", alignItems: "center", gap: 6, padding: "10px 13px", borderRadius: 20, cursor: "pointer",
+                background: on ? C.push + "18" : C.slate, border: `1px solid ${on ? C.push : C.line}`,
+                font: `600 13px ${FB}`, color: on ? C.push : C.mist }}>
+              <Icon e={t.icon} s={15} />{t.label}{on && <Icon e="check" s={13} />}</button>); })}
+        </div>
+        <p style={{ font: `400 12px ${FB}`, color: C.mistDim, margin: "8px 0 0" }}>You'll only see jobs your equipment can do.</p>
+      </>}
+      <div style={{ marginTop: 18 }}>
+        <Btn full onClick={save} disabled={busy || !name.trim() || (driver && !tools.length)}>{busy ? "Saving…" : "Save"}</Btn>
+      </div>
+    </Sheet>
+  );
+}
+
+function AddCardForm({ onDone }) {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const save = async () => {
+    if (!stripe || !elements) return;
+    setBusy(true); setErr(null);
+    const { error, setupIntent } = await stripe.confirmSetup({ elements,
+      confirmParams: { return_url: window.location.href }, redirect: "if_required" });
+    if (error) { setErr(error.message || "Couldn't save that card"); setBusy(false); return; }
+    const pm = typeof setupIntent?.payment_method === "string" ? setupIntent.payment_method : setupIntent?.payment_method?.id;
+    if (pm) { try { await setDefaultCard(pm); } catch (e) { /* still saved */ } }
+    onDone();
+  };
+  return (
+    <div>
+      <PaymentElement options={{ layout: "tabs" }} />
+      {err && <p style={{ font: `600 13px ${FB}`, color: C.danger, margin: "10px 0 0" }}>{err}</p>}
+      <div style={{ marginTop: 14 }}><Btn full onClick={save} disabled={busy || !stripe}>{busy ? "Saving…" : "Save card"}</Btn></div>
+    </div>
+  );
+}
+
+function CardsSheet({ onClose }) {
+  const { dispatch } = useStore();
+  const [data, setData] = useState(null);     // { cards, defaultId }
+  const [err, setErr] = useState(null);
+  const [adding, setAdding] = useState(null); // SetupIntent client secret while adding
+  const [busyId, setBusyId] = useState(null);
+  const load = () => listCards().then((r) => { setData(r); setErr(null); }).catch((e) => setErr(e.message));
+  useEffect(() => { load(); }, []);
+  const startAdd = async () => {
+    try { const r = await startCardSetup(); setAdding(r.clientSecret); }
+    catch (e) { dispatch({ type: "TOAST", msg: e.message }); }
+  };
+  const act = async (id, fn, msg) => {
+    setBusyId(id);
+    try { await fn(id); dispatch({ type: "TOAST", msg }); await load(); }
+    catch (e) { dispatch({ type: "TOAST", msg: e.message }); }
+    setBusyId(null);
+  };
+  const brand = (b) => (b ? b[0].toUpperCase() + b.slice(1) : "Card");
+  return (
+    <Sheet onClose={onClose}>
+      <h3 style={{ font: `700 22px ${FD}`, margin: "0 0 4px" }}>Payment methods</h3>
+      <p style={{ ...sub, marginBottom: 14 }}>Your card is only charged after a job is done. Card details are stored by Stripe, not DRIFT.</p>
+      {adding ? (
+        <Elements stripe={getStripe()} options={{ clientSecret: adding, appearance: stripeAppearance() }}>
+          <AddCardForm onDone={() => { setAdding(null); dispatch({ type: "TOAST", msg: "Card saved" }); load(); }} />
+          <button onClick={() => setAdding(null)} style={{ display: "block", margin: "10px auto 0", background: "none", border: "none",
+            cursor: "pointer", font: `600 14px ${FB}`, color: C.mist, padding: 8 }}>Cancel</button>
+        </Elements>
+      ) : err ? (
+        <p style={{ font: `500 14px ${FB}`, color: C.danger }}>{err}</p>
+      ) : !data ? (
+        <div style={{ display: "grid", gap: 10 }}><Skeleton h={56} r={14} /><Skeleton h={56} r={14} /></div>
+      ) : (
+        <>
+          {data.cards.length === 0 && <p style={{ font: `400 14px ${FB}`, color: C.mist }}>No saved cards yet.</p>}
+          <div style={{ display: "grid", gap: 8 }}>
+            {data.cards.map((c) => (
+              <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: 14, borderRadius: 14,
+                background: C.slate, border: `1px solid ${c.isDefault ? C.amber + "88" : C.line}` }}>
+                <span style={{ color: C.mist, display: "flex" }}><Icon e="card" s={20} /></span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ font: `600 15px ${FB}`, color: C.ice }}>{brand(c.brand)} ···{c.last4}</div>
+                  <div style={{ font: `400 12px ${FB}`, color: C.mist }}>Expires {String(c.expMonth).padStart(2, "0")}/{String(c.expYear).slice(-2)}{c.isDefault ? " · Default" : ""}</div>
+                </div>
+                {!c.isDefault && <button disabled={busyId === c.id} onClick={() => act(c.id, setDefaultCard, "Default card updated")}
+                  style={{ ...miniBtn, minHeight: 34 }}>Make default</button>}
+                <button disabled={busyId === c.id} onClick={() => act(c.id, removeCard, "Card removed")} aria-label="Remove card"
+                  style={{ ...miniBtn, minHeight: 34, color: C.danger }}>Remove</button>
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: 14 }}><Btn full kind="dark" onClick={startAdd}>Add a card</Btn></div>
+        </>
+      )}
+    </Sheet>
+  );
+}
+
 function RiderAccount({ onReferral }) {
   const { state, dispatch } = useStore();
   const auth = useAuth();
   const p = state.profile, pay = state.payment;
   const ref = state.riderReferral;
   const [legalOpen, setLegalOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [cardsOpen, setCardsOpen] = useState(false);
+  const realCards = isLive(state) && STRIPE_ENABLED;
   return (
     <Fade k="acct"><section style={{ paddingTop: 10, paddingBottom: 28 }}>
-      <div style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 22 }}>
+      <button onClick={() => setEditOpen(true)} style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 22, width: "100%",
+        background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left" }}>
         <Avatar name={p.name || "You"} size={58} />
-        <div style={{ minWidth: 0 }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ font: `700 22px ${FD}`, letterSpacing: "-.01em", color: C.ice }}>{p.name || "Your account"}</div>
           <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 2 }}>{[p.phone, p.email].filter(Boolean).join(" · ") || "Add your contact info"}</div>
+          <div style={{ font: `600 13px ${FB}`, color: C.amber, marginTop: 4 }}>Edit profile</div>
         </div>
-      </div>
+      </button>
 
       <ListGroup>
-        <ListRow icon="card" tint={C.plow} title={pay ? `${pay.brand} ···${pay.last4}` : "Add a card"} sub="Charged only after a job is done" />
+        <ListRow icon="card" tint={C.plow} title={realCards ? "Payment methods" : pay ? `${pay.brand} ···${pay.last4}` : "Add a card"}
+          sub={realCards ? "Add, remove or change your card" : "Charged only after a job is done"}
+          onClick={realCards ? () => setCardsOpen(true) : undefined} />
         <ListRow icon="gift" tint={C.amber} title={`Invite neighbors · $${ref.reward} each`}
           sub={ref.credit > 0 ? `$${ref.credit} earned · ${ref.invited} invited` : `You both get $${ref.reward}`} onClick={onReferral} />
         <ListRow icon="lifebuoy" tint={C.push} title="Help" sub="Report an issue or get support" last
@@ -3082,6 +3232,8 @@ function RiderAccount({ onReferral }) {
       </ListGroup>
       {legalOpen && <LegalHub onClose={() => setLegalOpen(false)}
         acceptance={[state.legal?.customer, state.legal?.driver].filter(Boolean)} />}
+      {editOpen && <ProfileSheet onClose={() => setEditOpen(false)} />}
+      {cardsOpen && <CardsSheet onClose={() => setCardsOpen(false)} />}
 
       {auth?.isConfigured && auth?.session && (
         <button onClick={async () => { await auth.signOut(); dispatch({ type: "SIGNED_OUT" }); }}
@@ -4221,6 +4373,12 @@ function DriverAccount({ onReferral }) {
   const d = state.driver;
   const ref = state.driverReferral;
   const [legalOpen, setLegalOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const LIVE = isLive(state);
+  const openPayouts = async () => {
+    try { const { url } = await connectDashboard(); window.open(url, "_blank", "noopener"); }
+    catch (e) { dispatch({ type: "TOAST", msg: "Set up payouts in the Earnings tab first" }); }
+  };
   const docRow = (label, status) => {
     const ok = status === "received" || status === "verified";
     return (
@@ -4239,6 +4397,10 @@ function DriverAccount({ onReferral }) {
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 3 }}>
             <Stars v={d.rating} size={13} /><span style={{ font: `600 12px ${FB}`, color: C.mist }}>{d.rating} · {d.jobs} jobs</span></div></div>
       </div>
+      <ListGroup style={{ marginBottom: 14 }}>
+        <ListRow icon="user" tint={C.amber} title="Profile and equipment" sub="Name, phone, truck and gear" onClick={() => setEditOpen(true)} last={!LIVE} />
+        {LIVE && STRIPE_ENABLED && <ListRow icon="bank" tint={C.push} title="Payouts and tax forms" sub="Bank, payout history and 1099s in Stripe" onClick={openPayouts} last />}
+      </ListGroup>
 
       {/* your share — one flat rate, no tiers */}
       <Card style={{ marginBottom: 14 }}>
@@ -4269,8 +4431,8 @@ function DriverAccount({ onReferral }) {
         </div>
       </Card>
 
-      {/* documents */}
-      <Card style={{ marginBottom: 14 }}>
+      {/* documents (demo only — real accounts handle ID and tax info through Stripe) */}
+      {!LIVE && <Card style={{ marginBottom: 14 }}>
         <Eyebrow>Documents</Eyebrow>
         <div style={{ marginTop: 8 }}>
           {docRow("Driver's license", d.docs?.license || "pending")}
@@ -4280,14 +4442,14 @@ function DriverAccount({ onReferral }) {
         <p style={{ font: `500 11px ${FB}`, color: C.mistDim, margin: "10px 0 0" }}>
           DRIFT doesn't provide insurance. Any coverage you carry is your own choice and your responsibility.
         </p>
-      </Card>
+      </Card>}
 
-      <Card style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      {!LIVE && <Card style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}><span style={{ fontSize: 20 }}><Icon e="bank" s={20} /></span>
           <div><div style={{ font: `700 13px ${FB}` }}>Payout account</div>
             <div style={{ font: `500 12px ${FB}`, color: C.mist }}>Stripe Connect · ···6789</div></div></div>
         <Chip color={C.good}>Linked</Chip>
-      </Card>
+      </Card>}
 
       {/* referral entry */}
       <Card onClick={onReferral} style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center",
@@ -4309,6 +4471,7 @@ function DriverAccount({ onReferral }) {
       </ListGroup>
       {legalOpen && <LegalHub onClose={() => setLegalOpen(false)}
         acceptance={[state.legal?.driver, state.legal?.customer].filter(Boolean)} />}
+      {editOpen && <ProfileSheet driver onClose={() => setEditOpen(false)} />}
 
       {auth?.isConfigured && auth?.session && (
         <button onClick={async () => { await auth.signOut(); dispatch({ type: "SIGNED_OUT" }); }}

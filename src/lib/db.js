@@ -318,3 +318,13 @@ export async function recordLegalAcceptance(userId, rec) {
     user_agent: rec.ua || null,
   });
 }
+
+// ---------- Account settings ----------
+// Name / phone (and, for drivers, truck + equipment). Money and verification
+// fields are protected by the database and can't be changed from here.
+export async function updateMyProfile(userId, patch) {
+  if (!supabaseEnabled || !isUuid(userId)) return { data: null };
+  const allowed = {};
+  for (const k of ["name", "phone", "truck", "tools"]) if (k in patch) allowed[k] = patch[k];
+  return supabase.from("profiles").update(allowed).eq("id", userId);
+}

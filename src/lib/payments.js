@@ -53,3 +53,8 @@ export const tipJob = (jobId, amount) => pay("tip", { jobId, amount });
 export const connectSession = () => pay("connect-session").then((r) => r.clientSecret);
 export const connectStatus = () => pay("connect-status");
 export const connectDashboard = () => pay("connect-dashboard");
+// Customer: saved cards (Account → Payment methods)
+export const listCards = () => pay("cards");
+export const startCardSetup = () => pay("card-setup");
+export const setDefaultCard = (pm) => pay("card-default", { pm });
+export const removeCard = (pm) => pay("card-remove", { pm });
