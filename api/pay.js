@@ -225,16 +225,21 @@ const ACTIONS = {
   // ---------- 5. driver payouts (Stripe Connect, Accounts v2) ----------
   // Creates the driver's Stripe account once, then returns a short-lived
   // session for the embedded onboarding form inside the app.
-  async "connect-session"(user) {
+  // entityType: "individual" (paid as yourself, SSN) or "company" (a business —
+  // paid to the business bank account under its EIN; Stripe sends the 1099 to
+  // the business). Only used the first time, when the Stripe account is created.
+  async "connect-session"(user, body = {}) {
     const profile = await getProfile(user.id);
     if (!profile?.is_driver) throw new HttpError(403, "Finish driver setup first");
     let accountId = profile.stripe_account_id;
     if (!accountId) {
+      const entity = body.entityType === "company" ? "company" : "individual";
+      const businessName = entity === "company" ? String(body.businessName || "").trim().slice(0, 80) : "";
       const acct = await stripe.v2.core.accounts.create({
         contact_email: user.email,
-        display_name: profile.name || user.email,
+        display_name: businessName || profile.name || user.email,
         dashboard: "express",
-        identity: { country: "us", entity_type: "individual" },
+        identity: { country: "us", entity_type: entity }, // Stripe's form collects the legal name + EIN for businesses
         configuration: {
           recipient: { capabilities: { stripe_balance: { stripe_transfers: { requested: true } } } },
         },
@@ -242,9 +247,9 @@ const ACTIONS = {
           currency: "usd",
           responsibilities: { fees_collector: "application", losses_collector: "application" },
         },
-        metadata: { driver_id: user.id },
+        metadata: { driver_id: user.id, paid_as: entity },
         include: ["configuration.recipient"],
-      }, { idempotencyKey: `acct-${user.id}` });
+      }, { idempotencyKey: `acct-${user.id}-${entity}` });
       accountId = acct.id;
       await updateProfile(user.id, { stripe_account_id: accountId });
     }

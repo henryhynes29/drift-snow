@@ -50,7 +50,7 @@ export const completeJobPaid = (jobId, photos) => pay("complete", { jobId, photo
 // Customer: tip after the job. 100% goes to the driver.
 export const tipJob = (jobId, amount) => pay("tip", { jobId, amount });
 // Driver: payouts setup (embedded Stripe onboarding) + status + Stripe dashboard link.
-export const connectSession = () => pay("connect-session").then((r) => r.clientSecret);
+export const connectSession = (opts) => pay("connect-session", opts || {}).then((r) => r.clientSecret);
 export const connectStatus = () => pay("connect-status");
 export const connectDashboard = () => pay("connect-dashboard");
 // Customer: saved cards (Account → Payment methods)

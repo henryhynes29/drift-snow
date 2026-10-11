@@ -58,7 +58,10 @@ const FORECAST = nextStorm();
 // basis: "area" (per sqft), "linear" (per ft of walk/curb), or "flat".
 const JOB_TYPES = {
   driveway: { id: "driveway", label: "Driveway plow", icon: "plowtruck", tool: "Plow truck",
-    basis: "area", base: 25, rate: 0.035, minsPer1000: 22, minMins: 18, blurb: "Clear your drive & apron" },
+    // Full rate until the plow price reaches $50, then HALF rate per sq ft above that,
+    // so big driveways don't get priced out.
+    basis: "area", base: 25, rate: 0.035, kneePrice: 50, rateAfterKnee: 0.0175,
+    minsPer1000: 22, minMins: 18, blurb: "Clear your drive & apron" },
   sidewalk: { id: "sidewalk", label: "Sidewalk clear", icon: "broom", tool: "Snowblower",
     basis: "linear", base: 15, rate: 0.35, minsPerFt: 0.5, minMins: 15, blurb: "Sidewalks and walkways" },
   digout: { id: "digout", label: "Car dig-out", icon: "car", tool: "Snowblower / shovel",
@@ -179,7 +182,7 @@ const SEED_DRIVER = {
 };
 
 const SEED_PROPERTIES = [
-  { id: "p1", label: "Home", addr: "1420 Woodland Ave", grade: "moderate", hazards: ["ice_prone"], shared: false,
+  { id: "p1", label: "Home", addr: "1420 Woodland Ave", center: { lng: -92.0905, lat: 46.8149 }, grade: "moderate", hazards: ["ice_prone"], shared: false,
     size: SIZES[1],
     zones: [
       { mode: "plow", pts: [{x:44,y:40},{x:56,y:40},{x:56,y:76},{x:44,y:76}] },
@@ -214,7 +217,9 @@ function quoteJob({ jobType = "driveway", sqft = 0, linearFt = 0, property = nul
   const jt = JOB_TYPES[jobType] || JOB_TYPES.driveway;
   let base, mins;
   if (jt.basis === "area") {
-    base = jt.base + sqft * jt.rate;
+    const kneeSqft = jt.kneePrice ? (jt.kneePrice - jt.base) / jt.rate : Infinity;
+    base = jt.base + Math.min(sqft, kneeSqft) * jt.rate
+      + Math.max(0, sqft - kneeSqft) * (jt.rateAfterKnee ?? jt.rate);
     mins = Math.max(jt.minMins, Math.round((sqft / 1000) * jt.minsPer1000));
   } else if (jt.basis === "linear") {
     base = jt.base + linearFt * jt.rate;
@@ -1725,7 +1730,8 @@ function RiderHome({ go }) {
   const linearFt = prop?.sidewalkFt || 80;
   // The customer names the price. DRIFT only recommends (by square footage).
   const [offer, setOffer] = useState(null);           // null = use the Recommended tier
-  useEffect(() => { setOffer(null); }, [jobType, prop?.id]);
+  const [typing, setTyping] = useState(null);         // text in the price box while typing
+  useEffect(() => { setOffer(null); setTyping(null); }, [jobType, prop?.id]);
   const qRec = quoteJob({ jobType, sqft, linearFt, property: prop, salt });
   const q = offer == null ? qRec : withOffer(qRec, offer);
   const tierId = (qRec.tiers.find(t => t.offer === q.offer) || {}).id || "custom";
@@ -1892,9 +1898,11 @@ function RiderHome({ go }) {
               <>
                 {/* name your price — tiers are recommendations, not the price */}
                 <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginTop: 18, gap: 10 }}>
-                  <div style={{ font: `600 15px ${FB}`, color: C.ice }}>What will you offer?</div>
+                  <div style={{ font: `600 15px ${FB}`, color: C.ice }}>Name your price</div>
                   <div style={{ font: `400 12.5px ${FB}`, color: C.mistDim, whiteSpace: "nowrap" }}>{basisLine.replace("per plow · ", "")}</div>
                 </div>
+                <div style={{ font: `400 13px/1.45 ${FB}`, color: C.mist, marginTop: 4 }}>
+                  <span style={{ color: C.ice, fontWeight: 600 }}>Suggested prices</span> for your {jt.basis === "area" ? "driveway size" : jt.basis === "linear" ? "walkway length" : "job"}. Pick one, or type any price you want.</div>
                 <div role="radiogroup" aria-label="Offer" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 10 }}>
                   {qRec.tiers.map(t => {
                     const on = tierId === t.id;
@@ -1915,11 +1923,31 @@ function RiderHome({ go }) {
                   background: C.night2, borderRadius: 13, padding: "6px 6px 6px 14px",
                   border: `1.5px solid ${tierId === "custom" ? C.amber : "transparent"}` }}>
                   <span style={{ font: `500 13px ${FB}`, color: tierId === "custom" ? C.ice : C.mist }}>
-                    {tierId === "custom" ? "Your offer" : "Or set your own"}</span>
+                    {tierId === "custom" ? "Your price" : "Or type your own price"}</span>
                   <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                     <button onClick={() => bump(-OFFER_STEP)} aria-label="Lower offer" disabled={q.offer <= OFFER_MIN}
                       style={{ ...miniBtn, width: 38, minHeight: 38, padding: 0, borderRadius: 10, opacity: q.offer <= OFFER_MIN ? .4 : 1 }}><Icon e="minus" s={16} /></button>
-                    <span style={{ minWidth: 56, textAlign: "center", font: `800 20px ${FD}`, textTransform: "uppercase", color: C.ice }} aria-live="polite">${q.offer}</span>
+                    <label style={{ display: "flex", alignItems: "center", justifyContent: "center", minWidth: 64, height: 38,
+                      borderRadius: 10, background: C.slate, border: `1px solid ${C.line}`, cursor: "text", padding: "0 6px" }}>
+                      <span style={{ font: `800 20px ${FD}`, color: C.mist }}>$</span>
+                      <input type="text" inputMode="numeric" pattern="[0-9]*" aria-label="Your price in dollars"
+                        value={typing ?? String(q.offer)}
+                        onFocus={(e) => { setTyping(String(q.offer)); e.target.select(); }}
+                        onChange={(e) => {
+                          const v = e.target.value.replace(/\D/g, "").slice(0, 3);
+                          setTyping(v);
+                          const n = parseInt(v, 10);
+                          if (n >= OFFER_MIN) setOffer(Math.min(OFFER_MAX, n));
+                        }}
+                        onBlur={() => {
+                          const n = parseInt(typing, 10);
+                          if (n) setOffer(Math.min(OFFER_MAX, Math.max(OFFER_MIN, n)));
+                          setTyping(null);
+                        }}
+                        onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                        style={{ width: `${Math.max(2, String(typing ?? q.offer).length)}ch`, border: "none", outline: "none",
+                          background: "transparent", padding: 0, font: `800 20px ${FD}`, color: C.ice, textAlign: "center" }} />
+                    </label>
                     <button onClick={() => bump(OFFER_STEP)} aria-label="Raise offer"
                       style={{ ...miniBtn, width: 38, minHeight: 38, padding: 0, borderRadius: 10 }}><Icon e="plus" s={16} /></button>
                   </div>
@@ -3998,9 +4026,9 @@ function DriverDrive() {
       )}
 
       {incoming && (LIVE
-        ? <IncomingJob key={liveOffer.jobId} order={liveOffer} busy={claiming}
+        ? <IncomingJob key={liveOffer.jobId} order={liveOffer} busy={claiming} here={here}
             onAccept={() => acceptLive(liveOffer)} onPass={(auto) => passLive(liveOffer, auto)} />
-        : <IncomingJob order={o} />)}
+        : <IncomingJob order={o} here={{ lng: state.driver.lng, lat: state.driver.lat }} />)}
       {gate && <ConsentGate role="driver" onClose={() => setGate(false)}
         onAgree={async (rec) => {
           setGate(false);
@@ -4016,12 +4044,34 @@ function DriverDrive() {
   );
 }
 
-function IncomingJob({ order, onAccept, onPass, busy }) {
+// Straight-line miles between two {lat, lng} points.
+function milesBetween(a, b) {
+  if (!a || !b || a.lat == null || b.lat == null) return null;
+  const R = 3958.8, rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+// Road distance is longer than a straight line (Duluth's hills + grid): ~1.3x.
+// Drive time assumes ~20 mph on snowy streets, plus a minute to get rolling.
+const ROAD_FACTOR = 1.3, SNOW_MPH = 20;
+function driveEstimate(from, to) {
+  const crow = milesBetween(from, to);
+  if (crow == null) return null;
+  const mi = crow * ROAD_FACTOR;
+  return { mi, mins: Math.max(2, Math.round(1 + (mi / SNOW_MPH) * 60)) };
+}
+
+function IncomingJob({ order, onAccept, onPass, busy, here }) {
   const { state, dispatch } = useStore();
   const q = order.quote;
   const prop = order.property;
   const dPay = driverNetPay(q, state.driver); // take-home
-  const dHourly = driverHourlyFor(dPay, order.size?.mins || q.mins);
+  const onSite = q.mins || order.size?.mins;  // measured from their outline when we have it
+  const jobAt = prop?.center?.lat != null ? prop.center : (prop?.lat != null ? { lat: prop.lat, lng: prop.lng } : null);
+  const drive = driveEstimate(here, jobAt);
+  // hourly counts the real drive there when we know it (otherwise a typical 12 min)
+  const dHourly = drive ? Math.round((dPay / ((onSite || 25) + drive.mins)) * 60) : driverHourlyFor(dPay, onSite);
   const jt = JOB_TYPES[order.jobType || "driveway"];
   const toolMatch = !state.driver.tools?.length || state.driver.tools.includes(order.tool || jt.tool);
   const hazards = (prop?.hazards || []).map(h => MODIFIERS.hazards[h]?.label).filter(Boolean);
@@ -4078,9 +4128,39 @@ function IncomingJob({ order, onAccept, onPass, busy }) {
         {/* pay — the number that matters */}
         <div style={{ font: `800 71px/1 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice, marginTop: 14 }}>${dPay}</div>
         <div style={{ font: `400 15px ${FB}`, color: C.mist, marginTop: 8 }}>
-          {jt.label} · ~{order.size?.mins || q.mins} min on site · ~${dHourly}/hr</div>
+          Your pay · {jt.label} · ~${dHourly}/hr{drive ? " incl. drive" : ""}</div>
+
+        {/* distance · area · time — everything needed to decide, before accepting */}
+        {(() => {
+          const sqft = prop?.sqft || q.sqft || 0;
+          const areaTile = jt.basis === "area"
+            ? { v: sqft ? `${sqft.toLocaleString()}` : "—", unit: sqft ? "sq ft" : "", l: `${plowN || 1} plow area${(plowN || 1) !== 1 ? "s" : ""}` }
+            : jt.basis === "linear"
+              ? { v: `~${q.linearFt || 80}`, unit: "ft", l: "of walkway" }
+              : { v: "Flat", unit: "", l: "one-time job" };
+          const tiles = [
+            { k: "dist", label: "Distance", v: drive ? (drive.mi < 10 ? drive.mi.toFixed(1) : Math.round(drive.mi)) : "—",
+              unit: drive ? "mi" : "", l: drive ? `~${drive.mins} min drive` : "turn on location" },
+            { k: "area", label: jt.basis === "linear" ? "Walkway" : "Area", ...areaTile },
+            { k: "time", label: "On site", v: `~${onSite || 25}`, unit: "min", l: "estimated" },
+          ];
+          return (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 16 }}>
+              {tiles.map(t => (
+                <div key={t.k} style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: "11px 12px 10px" }}>
+                  <div style={{ font: `500 10.5px ${FM}`, letterSpacing: ".08em", textTransform: "uppercase", color: C.mistDim }}>{t.label}</div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 4, marginTop: 5 }}>
+                    <span style={{ font: `800 26px/1 ${FD}`, textTransform: "uppercase", color: C.ice }}>{t.v}</span>
+                    {t.unit && <span style={{ font: `600 12px ${FB}`, color: C.mist }}>{t.unit}</span>}
+                  </div>
+                  <div style={{ font: `400 12px ${FB}`, color: C.mist, marginTop: 4 }}>{t.l}</div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
         {q.offer != null && (
-          <div style={{ font: `400 14px ${FB}`, color: C.mist, marginTop: 4 }}>
+          <div style={{ font: `400 14px ${FB}`, color: C.mist, marginTop: 10 }}>
             Customer offered ${q.offer} · you get 80% + the ${q.calloutFee || CALLOUT_FEE} call-out</div>
         )}
         <div style={{ display: "flex", alignItems: "center", gap: 6, font: `500 15px ${FB}`, color: C.ice, marginTop: 14 }}>
@@ -4528,15 +4608,57 @@ function PayoutsCard() {
       </div>
       <p style={{ font: `400 12px ${FB}`, color: C.mistDim, textAlign: "center", margin: "10px 0 0" }}>
         Secured by Stripe · DRIFT never sees your bank details</p>
-      {open && <PayoutSetupSheet onClose={() => { setOpen(false); refresh(); }} />}
+      {open && <PayoutSetupSheet askType={!st.hasAccount} onClose={() => { setOpen(false); refresh(); }} />}
     </div>
   );
 }
 
-function PayoutSetupSheet({ onClose }) {
+// First time only: are you getting paid as yourself or as a business?
+function PayoutTypeStep({ onPick }) {
+  const [type, setType] = useState("individual");
+  const [biz, setBiz] = useState("");
+  const opt = (id, icon, title, sub) => (
+    <button onClick={() => setType(id)} style={{ textAlign: "left", width: "100%", cursor: "pointer", display: "flex", gap: 12, alignItems: "flex-start",
+      padding: "14px 14px", borderRadius: 14, background: type === id ? C.amber + "14" : C.slate,
+      border: `1.5px solid ${type === id ? C.amber : C.line}`, color: C.ice, WebkitTapHighlightColor: "transparent" }}>
+      <span style={{ color: type === id ? C.amber : C.mist, display: "flex", marginTop: 2 }}><Icon e={icon} s={20} /></span>
+      <span><span style={{ display: "block", font: `600 15px ${FB}` }}>{title}</span>
+        <span style={{ display: "block", font: `400 13px/1.45 ${FB}`, color: C.mist, marginTop: 3 }}>{sub}</span></span>
+    </button>
+  );
+  return (
+    <div>
+      <p style={{ ...sub, margin: "0 0 14px" }}>Who should DRIFT pay?</p>
+      <div style={{ display: "grid", gap: 10 }}>
+        {opt("individual", "user", "Me", "Paid to your personal bank account. You'll use your SSN for tax forms.")}
+        {opt("company", "building", "My business", "Paid to your business bank account under its EIN. Great for plow or landscaping companies — you pay your own crew.")}
+      </div>
+      {type === "company" && (
+        <input value={biz} onChange={(e) => setBiz(e.target.value)} placeholder="Legal business name (e.g. North Shore Plowing LLC)"
+          style={{ ...inp, marginTop: 12 }} />
+      )}
+      <div style={{ marginTop: 16 }}>
+        <Btn full disabled={type === "company" && biz.trim().length < 2} onClick={() => onPick({ entityType: type, businessName: biz.trim() })}>Continue</Btn>
+      </div>
+      <p style={{ font: `400 12px ${FB}`, color: C.mistDim, textAlign: "center", margin: "10px 0 0" }}>This can't be switched later, so pick the one your taxes go under.</p>
+    </div>
+  );
+}
+
+function PayoutSetupSheet({ onClose, askType }) {
+  const [choice, setChoice] = useState(askType ? null : {});
+  return (
+    <Sheet onClose={onClose}>
+      <h3 style={{ font: `800 26px ${FD}`, textTransform: "uppercase", margin: "0 0 12px" }}>Set up payouts</h3>
+      {choice ? <PayoutOnboarding choice={choice} onClose={onClose} /> : <PayoutTypeStep onPick={setChoice} />}
+    </Sheet>
+  );
+}
+
+function PayoutOnboarding({ choice, onClose }) {
   const [instance] = useState(() => loadConnectAndInitialize({
     publishableKey: STRIPE_PK,
-    fetchClientSecret: connectSession,
+    fetchClientSecret: () => connectSession(choice),
     appearance: {
       overlays: "dialog",
       variables: { colorPrimary: C.amber, colorBackground: C.night2, colorText: C.ice,
@@ -4545,13 +4667,10 @@ function PayoutSetupSheet({ onClose }) {
     },
   }));
   return (
-    <Sheet onClose={onClose}>
-      <h3 style={{ font: `800 26px ${FD}`, textTransform: "uppercase", margin: "0 0 12px" }}>Set up payouts</h3>
-      <ConnectComponentsProvider connectInstance={instance}>
-        <ConnectNotificationBanner />
-        <ConnectAccountOnboarding onExit={onClose} />
-      </ConnectComponentsProvider>
-    </Sheet>
+    <ConnectComponentsProvider connectInstance={instance}>
+      <ConnectNotificationBanner />
+      <ConnectAccountOnboarding onExit={onClose} />
+    </ConnectComponentsProvider>
   );
 }
 
