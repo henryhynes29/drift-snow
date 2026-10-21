@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, createContext, useContext, useReducer } from "react";
-import { staticMapUrl, MAP_ENABLED } from "./mapConfig.js";
+import { staticMapUrl, MAP_ENABLED, hazardsChecked, hazardLabels } from "./mapConfig.js";
 // The map library is big (~1.6 MB) — load it only when a map is actually on screen.
 const MapDesignerLazy = React.lazy(() => import("./PropertyMap.jsx"));
 const LiveMapLazy = React.lazy(() => import("./PropertyMap.jsx").then((m) => ({ default: m.LiveMap })));
@@ -70,6 +70,18 @@ const JOB_TYPES = {
   jumpstart: { id: "jumpstart", label: "Jump-start", icon: "battery", tool: "Roadside kit",
     basis: "flat", base: 40, mins: 15, blurb: "Dead battery in the cold — back on the road" },
 };
+
+// ---- Snow depth (deep snow is a bigger, slower job → higher suggested price) ----
+// Pre-filled from the weather service; the customer taps a different one if it's wrong.
+const DEPTHS = [
+  { id: "light", label: 'Up to 4"', mult: 1.00 },
+  { id: "mid",   label: '4–8"',     mult: 1.15 },
+  { id: "deep",  label: '8–12"',    mult: 1.30 },
+  { id: "heavy", label: '12"+',     mult: 1.50 },
+];
+const depthById = (id) => DEPTHS.find((d) => d.id === id) || DEPTHS[0];
+const depthForInches = (inches) => DEPTHS[inches >= 12 ? 3 : inches >= 8 ? 2 : inches >= 4 ? 1 : 0];
+const NO_DEPTH = ["jumpstart"]; // snow depth doesn't change a jump-start
 
 // Roadside jobs live in their own section, not the snow-clearing picker.
 const ROADSIDE = ["jumpstart"];
@@ -182,7 +194,7 @@ const SEED_DRIVER = {
 };
 
 const SEED_PROPERTIES = [
-  { id: "p1", label: "Home", addr: "1420 Woodland Ave", center: { lng: -92.0905, lat: 46.8149 }, grade: "moderate", hazards: ["ice_prone"], shared: false,
+  { id: "p1", label: "Home", addr: "1420 Woodland Ave", center: { lng: -92.0905, lat: 46.8149 }, hazardsChecked: true, grade: "moderate", hazards: ["ice_prone"], shared: false,
     size: SIZES[1],
     zones: [
       { mode: "plow", pts: [{x:44,y:40},{x:56,y:40},{x:56,y:76},{x:44,y:76}] },
@@ -213,7 +225,7 @@ const driverHourlyFor = (dPay, mins) => Math.round((dPay / ((mins || 25) + DRIVE
 // ---- Unified quote: honest, transparent pricing ---------------------------
 // riderTotal = base + area/linear (× site factors) + optional salt. That's it —
 // what the customer sees is what they pay, and the breakdown adds up to it.
-function quoteJob({ jobType = "driveway", sqft = 0, linearFt = 0, property = null, salt = false }) {
+function quoteJob({ jobType = "driveway", sqft = 0, linearFt = 0, property = null, salt = false, depth = "light" }) {
   const jt = JOB_TYPES[jobType] || JOB_TYPES.driveway;
   let base, mins;
   if (jt.basis === "area") {
@@ -229,7 +241,9 @@ function quoteJob({ jobType = "driveway", sqft = 0, linearFt = 0, property = nul
     mins = jt.mins;
   }
   const mod = modifierMultiplier(property);
-  const coreBase = Math.max(PRICING.minTotal, base * mod); // the plow price
+  const dep = NO_DEPTH.includes(jobType) ? DEPTHS[0] : depthById(depth);
+  mins = Math.round(mins * dep.mult);
+  const coreBase = Math.max(PRICING.minTotal, base * mod * dep.mult); // the plow price
   // Demand surcharge removed from the marketplace — the customer's price is the price.
   const surgePct = 0;
   const surgeFee = 0;
@@ -244,6 +258,7 @@ function quoteJob({ jobType = "driveway", sqft = 0, linearFt = 0, property = nul
   const tiers = OFFER_TIERS.map(t => ({ ...t, offer: Math.max(OFFER_MIN, Math.round(standard * t.mult)) }));
   const q = {
     jobType, jt, sqft, linearFt, mod,
+    depth: dep.id, depthLabel: dep.label, depthMult: dep.mult,
     salt: !!saltFee, saltFee, saltable,
     surge: false, surgeFee, surgePct, surgeLabel: "",
     preSurge: Math.round(coreBase),
@@ -286,7 +301,7 @@ function loadLegal() {
 function saveLegal(legal) { try { localStorage.setItem("drift-legal", JSON.stringify(legal)); } catch (e) { /* private mode */ } }
 
 const AdminApp = React.lazy(() => import("./Admin.jsx"));
-const ADMIN_ROUTE = typeof window !== "undefined" && ["admin", "ops"].some((k) => new URLSearchParams(window.location.search).get(k) === "1");
+const ADMIN_ROUTE = typeof window !== "undefined" && ["admin", "ops"].some((k) => new URLSearchParams(window.location.search).has(k));
 
 // Came from the "Drive with DRIFT" page (/?drive=1): open straight into driver sign-up.
 const DRIVE_INTENT = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("drive") === "1";
@@ -1545,7 +1560,7 @@ function RiderApp() {
         {sub === "referral" ? <RiderReferral onBack={() => setSub(null)} />
           : <>
             {tab === "home" && (order && order.state !== "done" ? <RiderTracking /> : <RiderHome go={openTab} />)}
-            {tab === "props" && <RiderProperties />}
+            {tab === "props" && <RiderProperties onBackToBook={() => openTab("home")} />}
             {tab === "trips" && <RiderHistory />}
             {tab === "account" && <RiderAccount onReferral={() => setSub("referral")} />}
           </>}
@@ -1732,17 +1747,34 @@ function RiderHome({ go }) {
   const [offer, setOffer] = useState(null);           // null = use the Recommended tier
   const [typing, setTyping] = useState(null);         // text in the price box while typing
   useEffect(() => { setOffer(null); setTyping(null); }, [jobType, prop?.id]);
-  const qRec = quoteJob({ jobType, sqft, linearFt, property: prop, salt });
+  // Snow on the ground — pre-filled from the weather service until the customer picks one.
+  const [depth, setDepthState] = useState("light");
+  const [depthNote, setDepthNote] = useState(null);
+  const depthTouched = useRef(false);
+  const setDepth = (id) => { depthTouched.current = true; setDepthState(id); setOffer(null); setTyping(null); };
+  useEffect(() => {
+    let on = true;
+    fetchSnowForecast().then((f) => {
+      if (!on || !f || depthTouched.current) return;
+      const est = Math.max(f.last24 || 0, f.next12 || 0);
+      if (est >= 1) { setDepthState(depthForInches(est).id); setDepthNote(`Weather service: about ${Math.round(est)}"`); }
+    });
+    return () => { on = false; };
+  }, []);
+  const qRec = quoteJob({ jobType, sqft, linearFt, property: prop, salt, depth });
   const q = offer == null ? qRec : withOffer(qRec, offer);
   const tierId = (qRec.tiers.find(t => t.offer === q.offer) || {}).id || "custom";
   // One-tap extras (dig-out, jump-start, quick sidewalk) book at the Standard
   // suggestion so their totals match what they used to cost. Price shown on the button.
-  const quickQuote = (type) => { const qq = quoteJob({ jobType: type, linearFt, property: prop }); return withOffer(qq, qq.standardOffer); };
+  const quickQuote = (type) => { const qq = quoteJob({ jobType: type, linearFt, property: prop, depth }); return withOffer(qq, qq.standardOffer); };
   const bump = (d) => setOffer(Math.min(OFFER_MAX, Math.max(OFFER_MIN, q.offer + d)));
   const animPrice = useCountUp(q.riderTotal);
   const first = state.profile.name ? state.profile.name.split(" ")[0] : null;
   const jt = JOB_TYPES[jobType];
   const needsOutline = (jt.basis === "area") && sqft === 0;
+  // One-time hazard check before the first plow (existing customers included).
+  const needsHazards = !!prop && jt.basis !== "flat" && !hazardsChecked(prop);
+  const markHazards = () => { editPropertyOnOpen = prop.id; go("props"); };
   const modActive = q.mod !== 1;
   const canSalt = SALT.appliesTo.includes(jobType);
 
@@ -1837,7 +1869,19 @@ function RiderHome({ go }) {
       {/* storm banner + sidewalk countdown run on sample weather — demo only until a real weather feed is connected */}
       {!LIVE && <StormBanner />}
       {LIVE && <LiveSnowBanner />}
-      {LIVE && <SnowAlertNudge />}
+      <AppSetupCard role="rider" />
+      {prop && !hazardsChecked(prop) && (
+        <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "12px 12px 12px 14px", borderRadius: 14, marginBottom: 12,
+          background: C.slate, border: `1px solid ${C.danger}55` }}>
+          <div style={{ width: 36, height: 36, borderRadius: 10, background: C.danger + "1F", color: C.danger,
+            display: "grid", placeItems: "center", flexShrink: 0 }}><Icon e="cone" s={17} /></div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ font: `600 14px ${FB}`, color: C.ice }}>New: mark your hazards</div>
+            <div style={{ font: `400 13px/1.35 ${FB}`, color: C.mist, marginTop: 2 }}>Curbs, raised concrete, well caps, septic. One time, about a minute — needed before your next plow.</div>
+          </div>
+          <Btn sm onClick={markHazards} style={{ padding: "0 12px" }}>Mark</Btn>
+        </div>
+      )}
       {!LIVE && SNOW_DEPTH_IN >= 2 && prop && <OrdinanceCountdown price={quickQuote("sidewalk").riderTotal} onBook={guard(bookSidewalk)} />}
 
       {/* ---- THE primary action: your saved place + one button (Uber "Home" / DoorDash reorder) ---- */}
@@ -1896,6 +1940,26 @@ function RiderHome({ go }) {
               </div>
             ) : (
               <>
+                {/* snow on the ground — deeper snow suggests a higher price */}
+                {!NO_DEPTH.includes(jobType) && (
+                  <div style={{ marginTop: 18 }}>
+                    <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
+                      <div style={{ font: `600 15px ${FB}`, color: C.ice }}>How much snow?</div>
+                      {depthNote && !depthTouched.current && <div style={{ font: `400 12px ${FB}`, color: C.mistDim }}>{depthNote}</div>}
+                    </div>
+                    <div role="radiogroup" aria-label="Snow depth" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, marginTop: 8 }}>
+                      {DEPTHS.map(d => {
+                        const on = depth === d.id;
+                        return (
+                          <button key={d.id} role="radio" aria-checked={on} onClick={() => setDepth(d.id)}
+                            style={{ minHeight: 40, borderRadius: 11, cursor: "pointer", font: `600 13px ${FB}`,
+                              color: on ? C.amber : C.mist, background: on ? C.amber + "16" : C.night2,
+                              border: `1.5px solid ${on ? C.amber : "transparent"}`, WebkitTapHighlightColor: "transparent" }}>{d.label}</button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
                 {/* name your price — tiers are recommendations, not the price */}
                 <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginTop: 18, gap: 10 }}>
                   <div style={{ font: `600 15px ${FB}`, color: C.ice }}>Name your price</div>
@@ -1985,13 +2049,23 @@ function RiderHome({ go }) {
                     <div style={{ height: 1, background: C.line, margin: "8px 0" }} />
                     <Row label="Total" value={`$${q.riderTotal}`} big />
                     <div style={{ font: `400 12px/1.45 ${FB}`, color: C.mistDim, marginTop: 6 }}>
-                      Suggested offers are based on {jt.basis === "area" ? `${sqft.toLocaleString()} sq ft` : jt.basis === "linear" ? `~${linearFt} ft of walk` : "the job"}{modActive ? " and your property's slope and hazards" : ""}. Tips are optional and go 100% to your driver.</div>
+                      Suggested offers are based on {jt.basis === "area" ? `${sqft.toLocaleString()} sq ft` : jt.basis === "linear" ? `~${linearFt} ft of walk` : "the job"}{q.depthMult > 1 ? `, ${q.depthLabel} of snow` : ""}{modActive ? " and your property's slope and hazards" : ""}. Tips are optional and go 100% to your driver.</div>
                   </div>
                 )}
 
+                {needsHazards && (
+                  <div role="note" style={{ display: "flex", gap: 9, alignItems: "flex-start", marginTop: 14, padding: "11px 13px",
+                    borderRadius: 12, background: C.danger + "10", border: `1px solid ${C.danger}40` }}>
+                    <span style={{ color: C.danger, display: "flex", marginTop: 1 }}><Icon e="cone" s={15} /></span>
+                    <span style={{ font: `400 13px/1.45 ${FB}`, color: C.mist }}>
+                      <span style={{ color: C.ice, fontWeight: 600 }}>One-time step:</span> mark curbs, raised concrete, well caps and septic on your map so your driver knows what's under the snow.</span>
+                  </div>
+                )}
                 {/* the one button */}
                 <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-                  <Btn full onClick={guard(startRequest)}>Send offer · ${animPrice}</Btn>
+                  {needsHazards
+                    ? <Btn full onClick={markHazards}>Mark hazards to book · 1 min</Btn>
+                    : <Btn full onClick={guard(startRequest)}>Send offer · ${animPrice}</Btn>}
                   {!LIVE && <button onClick={guard(() => setShowSched(true))} aria-label="Schedule for later"
                     style={{ ...miniBtn, minHeight: TAP, width: TAP, padding: 0, borderRadius: 14 }}><Icon e="calendar" s={19} /></button>}
                 </div>
@@ -2764,13 +2838,22 @@ function SiteDetails({ grade, setGrade, hazards, setHazards, shared, setShared }
   );
 }
 
-function RiderProperties() {
+// Set by the booking screen when a property still needs its one-time hazard check.
+let editPropertyOnOpen = null;
+
+function RiderProperties({ onBackToBook }) {
   const { state, dispatch } = useStore();
-  const [editing, setEditing] = useState(null); // property being edited or "new"
+  // Opened from "Mark hazards" on the booking screen → jump straight into that property's map.
+  const [fromBooking] = useState(() => !!editPropertyOnOpen);
+  const [editing, setEditing] = useState(() => {
+    const p = editPropertyOnOpen && state.properties.find((x) => x.id === editPropertyOnOpen);
+    editPropertyOnOpen = null;
+    return p || null;
+  }); // property being edited or "new"
   const [label, setLabel] = useState(""); const [addr, setAddr] = useState("");
-  const [grade, setGrade] = useState("flat");
-  const [hazards, setHazards] = useState([]);
-  const [shared, setShared] = useState(false);
+  const [grade, setGrade] = useState(() => (editing && editing !== "new" ? editing.grade || "flat" : "flat"));
+  const [hazards, setHazards] = useState(() => (editing && editing !== "new" ? editing.hazards || [] : []));
+  const [shared, setShared] = useState(() => !!(editing && editing !== "new" && editing.shared));
 
   const startEdit = (p) => {
     setGrade(p.grade || "flat"); setHazards(p.hazards || []); setShared(!!p.shared);
@@ -2811,6 +2894,7 @@ function RiderProperties() {
               }
               dispatch({ type: "TOAST", msg: "Property saved" });
               setEditing(null);
+              if (fromBooking && onBackToBook) onBackToBook();
             }} />
         </div>
       </section></Fade>
@@ -3788,8 +3872,12 @@ function DriverApp() {
 }
 
 // ---- Job alerts + "Add to Home Screen" --------------------------------------
+// Facebook / Instagram open links in their own browser, which can't add to the Home Screen.
+const inAppBrowser = () => typeof navigator !== "undefined" && /FBAN|FBAV|FB_IAB|Instagram|Messenger/i.test(navigator.userAgent);
+
 function InstallSheet({ onClose }) {
-  const ios = isIOS();
+  const ios = isIOS(), inApp = inAppBrowser();
+  const [copied, setCopied] = useState(false);
   const step = (n, text) => (
     <div style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "10px 0" }}>
       <div style={{ width: 26, height: 26, borderRadius: 8, background: C.slate, border: `1px solid ${C.line}`, flexShrink: 0,
@@ -3797,22 +3885,90 @@ function InstallSheet({ onClose }) {
       <div style={{ font: `400 15px/1.45 ${FB}`, color: C.ice, paddingTop: 2 }}>{text}</div>
     </div>
   );
+  const copyLink = async () => {
+    try { await navigator.clipboard.writeText("https://driftplowing.com"); setCopied(true); } catch { /* ignore */ }
+  };
   return (
     <Sheet onClose={onClose}>
       <h3 style={{ font: `800 26px ${FD}`, textTransform: "uppercase", margin: "0 0 4px" }}>Add DRIFT to your Home Screen</h3>
-      <p style={{ ...sub, marginBottom: 8 }}>It opens full screen like a normal app{ios ? ", and it's required on iPhone for job alerts when DRIFT is closed" : ""}.</p>
-      {ios ? <>
-        {step(1, <>Open this page in <b>Safari</b>.</>)}
-        {step(2, <>Tap the <b>Share</b> button <span style={{ display: "inline-flex", verticalAlign: "-3px", color: C.plow }}><Icon e="share" s={17} /></span> at the bottom of the screen.</>)}
-        {step(3, <>Scroll down and tap <b>Add to Home Screen</b>, then <b>Add</b>.</>)}
-        {step(4, <>Open DRIFT from the new icon on your Home Screen.</>)}
+      <p style={{ ...sub, marginBottom: 8 }}>It opens full screen like a normal app, one tap away{ios ? ", and on iPhone it's needed for notifications" : ""}. Takes 20 seconds.</p>
+      {inApp ? <>
+        {step(1, <>You're in the Facebook browser, which can't do this. Tap <b>{ios ? "⋯" : "⋮"}</b> at the top and choose <b>{ios ? "Open in Safari" : "Open in Chrome"}</b>.</>)}
+        {step(2, <>Then come back to this button and follow the steps.</>)}
+        <button onClick={copyLink} style={{ ...miniBtn, width: "100%", minHeight: 44, marginTop: 4 }}>
+          <Icon e="link" s={15} /> {copied ? "Link copied — paste it in " + (ios ? "Safari" : "Chrome") : "Or copy the link"}</button>
+      </> : ios ? <>
+        {step(1, <>Tap the <b>Share</b> button <span style={{ display: "inline-flex", verticalAlign: "-3px", color: C.plow }}><Icon e="share" s={17} /></span> {/CriOS/.test(navigator.userAgent) ? "at the top right" : "at the bottom of Safari"}.</>)}
+        {step(2, <>Scroll down and tap <b>Add to Home Screen</b>.</>)}
+        {step(3, <>Tap <b>Add</b>, then open DRIFT from the new snowflake icon.</>)}
+        {step(4, <>In the app, tap <b>Turn on notifications</b> and allow them.</>)}
       </> : <>
         {step(1, <>Tap the <b>⋮</b> menu at the top right of Chrome.</>)}
-        {step(2, <>Tap <b>Install app</b> or <b>Add to Home screen</b>.</>)}
-        {step(3, <>Open DRIFT from the new icon.</>)}
+        {step(2, <>Tap <b>Install app</b> or <b>Add to Home screen</b>, then <b>Install</b>.</>)}
+        {step(3, <>Open DRIFT from the new icon and tap <b>Turn on notifications</b>.</>)}
       </>}
       <div style={{ marginTop: 12 }}><Btn full kind="dark" onClick={onClose}>Got it</Btn></div>
     </Sheet>
+  );
+}
+
+// "Get the app" card: 1) add to Home Screen  2) turn on notifications.
+// Shows until both are done (or they tap Later — then it comes back in a few days).
+function AppSetupCard({ role = "rider" }) {
+  const { state, dispatch } = useStore();
+  const [, bump] = useState(0);
+  const [pushOn, setPushOn] = useState(null); // null = still checking
+  const [howTo, setHowTo] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [later, setLater] = useState(() => {
+    try { return Number(localStorage.getItem("drift.setupLater") || 0) > Date.now(); } catch { return false; }
+  });
+  useEffect(() => onInstallChange(() => bump((x) => x + 1)), []);
+  useEffect(() => { pushEnabled().then(setPushOn).catch(() => setPushOn(false)); }, []);
+  const installed = isStandalone();
+  const needsInstallFirst = isIOS() && !installed;           // iPhone: notifications only work from the Home Screen app
+  const canPush = pushSupported() && !needsInstallFirst;
+  if (later || pushOn === null || (installed && pushOn) || (installed && !pushSupported())) return null;
+
+  const install = async () => { if (canPromptInstall()) await promptInstall(); else setHowTo(true); };
+  const turnOn = async () => {
+    if (!canPush) { setHowTo(true); return; }
+    setBusy(true);
+    try { await enablePush(state.userId); setPushOn(true);
+      dispatch({ type: "TOAST", msg: role === "driver" ? "Job alerts are on for this phone" : "Notifications on — we'll tell you when your plow is coming" }); }
+    catch (e) { dispatch({ type: "TOAST", msg: e.message }); }
+    setBusy(false);
+  };
+  const snooze = () => { setLater(true); try { localStorage.setItem("drift.setupLater", String(Date.now() + 3 * 864e5)); } catch { /* ignore */ } };
+
+  const item = (n, done, title, body, action) => (
+    <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "11px 0", borderTop: n > 1 ? `1px solid ${C.lineSoft}` : "none" }}>
+      <div style={{ width: 28, height: 28, borderRadius: 9, flexShrink: 0, display: "grid", placeItems: "center",
+        background: done ? C.push + "22" : C.night2, color: done ? C.push : C.ice, font: `700 13px ${FB}` }}>
+        {done ? <Icon e="check" s={15} strokeWidth={2.4} /> : n}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ font: `600 14px ${FB}`, color: done ? C.mist : C.ice, textDecoration: done ? "line-through" : "none" }}>{title}</div>
+        {!done && <div style={{ font: `400 12.5px/1.35 ${FB}`, color: C.mist, marginTop: 2 }}>{body}</div>}
+      </div>
+      {!done && action}
+    </div>
+  );
+  const small = { ...miniBtn, minHeight: 38, padding: "0 13px", fontSize: 13, flexShrink: 0 };
+  return (
+    <div style={{ marginBottom: 12, background: C.slate, border: `1px solid ${C.amber}55`, borderRadius: 16, padding: "13px 14px 4px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, font: `600 15px ${FB}`, color: C.ice }}>
+          <span style={{ color: C.amber, display: "flex" }}><Icon e="mobile" s={17} /></span> Get the DRIFT app</div>
+        <button onClick={snooze} style={{ background: "none", border: "none", color: C.mistDim, cursor: "pointer", font: `500 12.5px ${FB}`, padding: 4 }}>Later</button>
+      </div>
+      {item(1, installed, "Add to your Home Screen", "Opens like a real app, one tap away.",
+        <button onClick={install} style={{ ...small, background: C.amber, color: C.onAmber, border: "none" }}>{canPromptInstall() ? "Install" : "Show me"}</button>)}
+      {item(2, !!pushOn, "Turn on notifications",
+        needsInstallFirst ? "On iPhone, do step 1 first, then open DRIFT from your Home Screen."
+          : role === "driver" ? "Get new jobs even when DRIFT is closed." : "Know when your plow is on the way, plus snow alerts.",
+        <button onClick={turnOn} disabled={busy} style={small}>{busy ? "…" : needsInstallFirst ? "How" : "Turn on"}</button>)}
+      {howTo && <InstallSheet onClose={() => setHowTo(false)} />}
+    </div>
   );
 }
 
@@ -3994,6 +4150,7 @@ function DriverDrive() {
         ))}
       </div>
 
+      <AppSetupCard role="driver" />
       <DriverAlertsCard />
 
       {/* waiting state — calm, not empty */}
@@ -4076,9 +4233,9 @@ function IncomingJob({ order, onAccept, onPass, busy, here }) {
   const toolMatch = !state.driver.tools?.length || state.driver.tools.includes(order.tool || jt.tool);
   const hazards = (prop?.hazards || []).map(h => MODIFIERS.hazards[h]?.label).filter(Boolean);
   const steep = prop?.grade === "steep";
-  const markedHazards = (prop?.features || []).filter(f => f.geometry?.type === "Point").map(f => f.properties?.label).filter(Boolean);
+  const markedHazards = hazardLabels(prop);
   const headsUp = [...(steep ? ["Steep hillside"] : []), ...hazards, ...markedHazards];
-  const plowN = prop?.zones?.filter(z => z.mode === "plow").length || (prop?.features || []).filter(f => f.geometry?.type === "Polygon" && f.properties?.mode !== "push").length;
+  const plowN = prop?.zones?.filter(z => z.mode === "plow").length || (prop?.features || []).filter(f => f.geometry?.type === "Polygon" && f.properties?.mode !== "push" && f.properties?.mode !== "hazard").length;
   const pushN = prop?.zones?.filter(z => z.mode === "push").length || (prop?.features || []).filter(f => f.properties?.mode === "push").length;
 
   // Ring loudly (and buzz) until the driver accepts or passes.
@@ -4128,7 +4285,7 @@ function IncomingJob({ order, onAccept, onPass, busy, here }) {
         {/* pay — the number that matters */}
         <div style={{ font: `800 71px/1 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice, marginTop: 14 }}>${dPay}</div>
         <div style={{ font: `400 15px ${FB}`, color: C.mist, marginTop: 8 }}>
-          Your pay · {jt.label} · ~${dHourly}/hr{drive ? " incl. drive" : ""}</div>
+          Your pay · {jt.label}{q.depthLabel && !NO_DEPTH.includes(order.jobType) ? ` · ${q.depthLabel} snow` : ""} · ~${dHourly}/hr{drive ? " incl. drive" : ""}</div>
 
         {/* distance · area · time — everything needed to decide, before accepting */}
         {(() => {
@@ -4461,7 +4618,17 @@ function DriverActiveJob() {
         )}
         <div style={{ display: "flex", gap: 12, marginTop: 8, font: `600 11px ${FB}` }}>
           <span style={{ color: C.plow }}>■ Plow these</span><span style={{ color: C.push }}>■ Push snow here</span>
+          {hazardLabels(o.property).length > 0 && <span style={{ color: C.danger }}>■ Hazards</span>}
         </div>
+        {hazardLabels(o.property).length > 0 && (
+          <div style={{ marginTop: 10, padding: "11px 13px", borderRadius: 12, background: C.danger + "12", border: `1px solid ${C.danger}40` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 7, font: `600 13px ${FB}`, color: C.danger, marginBottom: 7 }}>
+              <Icon e="warning" s={14} /> Watch for</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {hazardLabels(o.property).map((h, i) => <Chip key={i} color={C.danger}>{h}</Chip>)}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* arrival -> before photo -> plow -> checklist + after photo -> complete */}
@@ -4982,7 +5149,7 @@ function DriverReferral({ onBack }) {
 // AUTH SCREEN — real sign up / log in (Supabase)
 // ============================================================
 function AuthScreen({ auth, onDemo, initialRole, signInOnly, title }) {
-  const [mode, setMode] = useState(signInOnly ? "signin" : "signup"); // signup | signin
+  const [mode, setMode] = useState(signInOnly ? "signin" : "signup"); // signup | signin | forgot
   const [role, setRole] = useState(initialRole || "customer"); // customer | driver
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -4993,6 +5160,15 @@ function AuthScreen({ auth, onDemo, initialRole, signInOnly, title }) {
 
   const submit = async () => {
     setErr(""); setInfo("");
+    if (mode === "forgot") {
+      if (!/.+@.+\..+/.test(email.trim())) { setErr("Enter the email you signed up with."); return; }
+      setBusy(true);
+      const r = await auth.resetPassword(email.trim());
+      setBusy(false);
+      if (r?.error) { setErr(r.error.message || "Couldn't send the email. Try again."); return; }
+      setInfo("Check your email for a link to reset your password. It can take a minute — check spam too.");
+      return;
+    }
     if (!email || !password) { setErr("Enter your email and a password."); return; }
     if (mode === "signup" && password.length < 6) { setErr("Password must be at least 6 characters."); return; }
     setBusy(true);
@@ -5024,9 +5200,11 @@ function AuthScreen({ auth, onDemo, initialRole, signInOnly, title }) {
             <span style={{ font: `900 28px/1 ${FD}`, textTransform: "uppercase", letterSpacing: ".06em" }}>DRIFT</span>
           </div>
           <h1 style={{ font: `900 52px/.9 ${FD}`, textTransform: "uppercase", margin: "26px 0 10px", color: C.ice }}>
-            {title ? title : mode === "signup" ? <>Let's get you<br /><span style={{ color: C.amber }}>plowed.</span></> : <>Welcome<br /><span style={{ color: C.amber }}>back.</span></>}</h1>
+            {mode === "forgot" ? <>Reset your<br /><span style={{ color: C.amber }}>password.</span></>
+              : title ? title : mode === "signup" ? <>Let's get you<br /><span style={{ color: C.amber }}>plowed.</span></> : <>Welcome<br /><span style={{ color: C.amber }}>back.</span></>}</h1>
           <div style={{ font: `400 15px/1.5 ${FB}`, color: C.mist }}>
-            {mode === "signup" ? "Create your account — it takes about a minute." : "Sign in to your DRIFT account."}</div>
+            {mode === "forgot" ? "Enter your email and we'll send you a link to set a new one."
+              : mode === "signup" ? "Create your account — it takes about a minute." : "Sign in to your DRIFT account."}</div>
         </div>
 
         {mode === "signup" && (
@@ -5045,20 +5223,28 @@ function AuthScreen({ auth, onDemo, initialRole, signInOnly, title }) {
         <div style={{ display: "grid", gap: 11 }}>
           {mode === "signup" && field({ value: name, onChange: (e) => setName(e.target.value), placeholder: "Full name" })}
           {field({ value: email, onChange: (e) => setEmail(e.target.value), placeholder: "Email", type: "email", inputMode: "email", autoComplete: "email" })}
-          {field({ value: password, onChange: (e) => setPassword(e.target.value), placeholder: "Password", type: "password",
+          {mode !== "forgot" && field({ value: password, onChange: (e) => setPassword(e.target.value), placeholder: "Password", type: "password",
             autoComplete: mode === "signup" ? "new-password" : "current-password",
             onKeyDown: (e) => { if (e.key === "Enter") submit(); } })}
         </div>
+        {mode === "signin" && (
+          <button onClick={() => { setErr(""); setInfo(""); setMode("forgot"); }}
+            style={{ alignSelf: "flex-end", marginTop: 8, background: "none", border: "none", cursor: "pointer",
+              color: C.amber, font: `600 13px ${FB}`, padding: "6px 2px" }}>Forgot password?</button>
+        )}
 
         {err && <div style={{ marginTop: 12, font: `600 12px ${FB}`, color: C.danger }}>{err}</div>}
         {info && <div style={{ marginTop: 12, font: `600 12px ${FB}`, color: C.push }}>{info}</div>}
 
         <div style={{ marginTop: 16 }}>
           <Btn full onClick={submit} disabled={busy}>
-            {busy ? "One moment…" : mode === "signup" ? "Create account" : "Sign in"}</Btn>
+            {busy ? "One moment…" : mode === "forgot" ? "Email me a reset link" : mode === "signup" ? "Create account" : "Sign in"}</Btn>
         </div>
 
-        {!signInOnly && <button onClick={() => { setErr(""); setInfo(""); setMode(mode === "signup" ? "signin" : "signup"); }}
+        {mode === "forgot" ? <button onClick={() => { setErr(""); setInfo(""); setMode("signin"); }}
+          style={{ width: "100%", marginTop: 14, background: "transparent", border: "none", cursor: "pointer",
+            color: C.mist, font: `600 13px ${FB}`, padding: 8 }}>Back to sign in</button>
+        : !signInOnly && <button onClick={() => { setErr(""); setInfo(""); setMode(mode === "signup" ? "signin" : "signup"); }}
           style={{ width: "100%", marginTop: 14, background: "transparent", border: "none", cursor: "pointer",
             color: C.mist, font: `600 13px ${FB}`, padding: 8 }}>
           {mode === "signup" ? "Already have an account? Sign in" : "New here? Create an account"}
@@ -5074,6 +5260,42 @@ function AuthScreen({ auth, onDemo, initialRole, signInOnly, title }) {
   );
 }
 
+
+// Shown after someone opens the reset link from their email.
+function ResetPasswordScreen({ auth }) {
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const save = async () => {
+    setErr("");
+    if (pw.length < 6) { setErr("Use at least 6 characters."); return; }
+    if (pw !== pw2) { setErr("Those passwords don't match."); return; }
+    setBusy(true);
+    const r = await auth.updatePassword(pw);
+    setBusy(false);
+    if (r?.error) setErr(r.error.message || "Couldn't save it. Try again.");
+  };
+  const box = { width: "100%", background: C.slate, color: C.ice, font: `500 15px ${FB}`, outline: "none",
+    padding: "13px 14px", borderRadius: 11, border: `1px solid ${C.line}` };
+  return (
+    <div style={{ minHeight: "100vh", background: C.night, color: C.ice, fontFamily: FB, display: "flex", justifyContent: "center" }}>
+      <div style={{ width: "100%", maxWidth: 440, minHeight: "100vh", display: "flex", flexDirection: "column", justifyContent: "center", padding: "0 24px" }}>
+        <h1 style={{ font: `900 52px/.9 ${FD}`, textTransform: "uppercase", margin: "0 0 10px" }}>
+          New<br /><span style={{ color: C.amber }}>password.</span></h1>
+        <div style={{ font: `400 15px/1.5 ${FB}`, color: C.mist, marginBottom: 22 }}>
+          Pick a new password for {auth.user?.email || "your account"}.</div>
+        <div style={{ display: "grid", gap: 11 }}>
+          <input type="password" autoComplete="new-password" placeholder="New password" value={pw} onChange={(e) => setPw(e.target.value)} style={box} />
+          <input type="password" autoComplete="new-password" placeholder="Type it again" value={pw2} onChange={(e) => setPw2(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") save(); }} style={box} />
+        </div>
+        {err && <div style={{ marginTop: 12, font: `600 12px ${FB}`, color: C.danger }}>{err}</div>}
+        <div style={{ marginTop: 16 }}><Btn full onClick={save} disabled={busy}>{busy ? "Saving…" : "Save new password"}</Btn></div>
+      </div>
+    </div>
+  );
+}
 
 function restyleStatics() {
   Object.assign(sub, { color: C.mist });
@@ -5179,6 +5401,9 @@ function Shell({ startEntered = false }) {
       Skip <Icon e="skipnext" s={11} />
     </button>
   );
+
+  // Opened the "reset your password" email link → set a new one first.
+  if (supabaseEnabled && auth.recovering) return <ResetPasswordScreen auth={auth} />;
 
   // Owner dashboard at ?admin=1 (or ?ops=1). Sign in with an owner account;
   // the server refuses everyone else.

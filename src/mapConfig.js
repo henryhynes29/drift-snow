@@ -18,6 +18,11 @@ export function staticMapUrl(features, center, w = 320, h = 190) {
         if (f.geometry?.type === "Point") {
           return { type: "Feature", geometry: f.geometry, properties: { "marker-color": HAZARD_FILL, "marker-symbol": "danger", "marker-size": "small" } };
         }
+        if (f.properties?.mode === "hazard") {
+          return { type: "Feature", geometry: f.geometry, properties: f.geometry?.type === "LineString"
+            ? { stroke: HAZARD_FILL, "stroke-width": 4 }
+            : { fill: HAZARD_FILL, "fill-opacity": 0.3, stroke: HAZARD_FILL, "stroke-width": 2 } };
+        }
         const isPush = f.properties?.mode === "push";
         return { type: "Feature", geometry: f.geometry, properties: {
           fill: isPush ? C.push : C.plow, "fill-opacity": 0.35, stroke: isPush ? C.push : C.plow, "stroke-width": 2 } };
@@ -30,3 +35,11 @@ export function staticMapUrl(features, center, w = 320, h = 190) {
   return null;
 }
 
+
+// A property's hazards have been marked (or confirmed none) — stored on its plow outlines.
+export const hazardsChecked = (p) => !!p && (!!p.hazardsChecked || (p.features || []).some((f) => f.properties?.hazardsChecked));
+
+// Plain list of what the customer marked, for drivers: ["Curb / edge", "Well cap", ...]
+export const hazardLabels = (p) => (p?.features || [])
+  .filter((f) => f.properties?.mode === "hazard" || (f.geometry?.type === "Point" && f.properties?.mode !== "push"))
+  .map((f) => f.properties?.label || "Hazard");

@@ -26,7 +26,9 @@ function hasSession() {
   return false
 }
 const q = new URLSearchParams(window.location.search)
-const appRoute = window.location.pathname !== '/' || ['drive', 'admin', 'ops', 'demo'].some((k) => q.has(k))
+// A link from a sign-in / password-reset email carries tokens in the URL — open the app for those too.
+const authLink = /access_token=|type=recovery|error_description=/.test(window.location.hash) || q.has('code')
+const appRoute = window.location.pathname !== '/' || authLink || ['drive', 'admin', 'ops', 'demo', 'reset'].some((k) => q.has(k))
 const startInApp = appRoute || hasSession()
 
 const Blank = () => <div style={{ minHeight: '100vh', background: '#07090D' }} />

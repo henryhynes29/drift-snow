@@ -16,7 +16,7 @@ import "@mapbox/mapbox-gl-geocoder/dist/mapbox-gl-geocoder.css";
 import { C, FD, FB } from "./theme.js";
 import Icon from "./Icon.jsx";
 
-import { MAPBOX_TOKEN as TOKEN, MAP_ENABLED, staticMapUrl } from "./mapConfig.js";
+import { MAPBOX_TOKEN as TOKEN, MAP_ENABLED, staticMapUrl, hazardsChecked } from "./mapConfig.js";
 if (TOKEN) mapboxgl.accessToken = TOKEN;
 export { MAP_ENABLED, staticMapUrl };
 
@@ -109,12 +109,42 @@ function makeMarkerEl(mk) {
   return wrap;
 }
 
-function makeHazardEl() {
-  const glyph =
-    `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round">` +
-    `<path d="M12 5.5v8"/><circle cx="12" cy="18.5" r="1.4" fill="#fff" stroke="none"/></svg>`;
-  return circleEl(26, HAZARD_FILL, glyph);
+// Small, precise hazard markers: a shape that fits the hazard type, centered
+// exactly on the spot, with its name next to it. Kept small so the pin sits
+// right on the thing (a 16px mark on a 19-zoom satellite view ≈ a foot or two).
+const HAZ_SHAPES = {
+  well:   `<circle cx="9" cy="9" r="6" fill="none" stroke="${HAZARD_FILL}" stroke-width="3"/><circle cx="9" cy="9" r="1.6" fill="${HAZARD_FILL}"/>`,
+  uneven: `<path d="M9 2.5L16 15H2z" fill="${HAZARD_FILL}" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/>`,
+  drain:  `<rect x="3" y="3" width="12" height="12" rx="1.5" fill="${HAZARD_FILL}" stroke="#fff" stroke-width="1.6"/><path d="M6.5 6.5v5M9 6.5v5M11.5 6.5v5" stroke="#fff" stroke-width="1.3"/>`,
+  post:   `<circle cx="9" cy="9" r="5.5" fill="${HAZARD_FILL}" stroke="#fff" stroke-width="2"/>`,
+  other:  `<path d="M9 2l7 7-7 7-7-7z" fill="${HAZARD_FILL}" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/>`,
+};
+function labelPill(text) {
+  const pill = document.createElement("div");
+  pill.textContent = text;
+  pill.style.cssText = "position:absolute;white-space:nowrap;pointer-events:none;font:700 11px/1 system-ui,sans-serif;color:#fff;" +
+    "background:rgba(10,12,16,.82);border:1px solid rgba(255,69,58,.7);border-radius:6px;padding:3px 6px;";
+  return pill;
 }
+function makeHazardEl(kind, label) {
+  const wrap = document.createElement("div");
+  wrap.style.cssText = "position:relative;width:18px;height:18px;pointer-events:none;";
+  wrap.innerHTML = `<svg width="18" height="18" viewBox="0 0 18 18" style="filter:drop-shadow(0 1px 2px rgba(0,0,0,.6))">${HAZ_SHAPES[kind] || HAZ_SHAPES.other}</svg>`;
+  if (label) { const pill = labelPill(label); pill.style.left = "22px"; pill.style.top = "1px"; wrap.appendChild(pill); }
+  return wrap;
+}
+// Name tag for a curb line or a septic / garden area, placed in its middle.
+function makeHazardTag(label) {
+  const wrap = document.createElement("div");
+  wrap.style.cssText = "position:relative;width:0;height:0;pointer-events:none;";
+  const pill = labelPill(label); pill.style.transform = "translate(-50%,-50%)";
+  wrap.appendChild(pill);
+  return wrap;
+}
+const midpointOf = (coords, shape) => {
+  if (shape === "line") { const a = coords[Math.floor((coords.length - 1) / 2)], b = coords[Math.ceil((coords.length - 1) / 2)]; return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; }
+  const n = coords.length; return [coords.reduce((s, c) => s + c[0], 0) / n, coords.reduce((s, c) => s + c[1], 0) / n];
+};
 
 // ============================================================
 // LiveMap — read-only satellite map w/ markers + optional route
@@ -171,7 +201,21 @@ function TokenMissing() {
   );
 }
 
-const HAZARD_TYPES = ["Well", "Flower bed", "Rocks / edging", "Septic cover", "Steps", "Other"];
+// Things a plow can hit. Each is a pin (tap once), a line (tap along it) or an
+// area (tap around it). Drivers see every one before they accept a job.
+export const HAZARD_TYPES = [
+  { id: "curb", label: "Curb / edge", shape: "line" },
+  { id: "uneven", label: "Raised concrete / ledge", shape: "point" },
+  { id: "well", label: "Well cap", shape: "point" },
+  { id: "septic", label: "Septic area", shape: "area" },
+  { id: "garden", label: "Garden / landscaping", shape: "area" },
+  { id: "drain", label: "Drain / grate", shape: "point" },
+  { id: "post", label: "Post / mailbox", shape: "point" },
+  { id: "other", label: "Something else", shape: "point" },
+];
+const SHAPE_WORD = { point: "pin", line: "line", area: "area" };
+const hazardType = (id) => HAZARD_TYPES.find((t) => t.id === id) || HAZARD_TYPES[HAZARD_TYPES.length - 1];
+
 
 // ============================================================
 // MapPropertyDesigner — starting outline + tap-to-outline
@@ -180,17 +224,21 @@ export default function MapPropertyDesigner({ existing, onDone, onQuote, saveLab
   const el = useRef(null), mapRef = useRef(null), modeRef = useRef("idle"), hazMarkers = useRef([]), centerRef = useRef(existing?.center || null);
   const zonesRef = useRef([]), pendingRef = useRef(null), autoPlacedRef = useRef(false);
   const [ready, setReady] = useState(false);
-  const [mode, setMode] = useState("idle"); // idle | plow | push | hazard
+  const [mode, setMode] = useState("idle"); // idle | plow | push | hazpick | hazard
+  const [hazKind, setHazKind] = useState(null); // which hazard type is being placed
+  const hazKindRef = useRef(null);
+  const [checked, setChecked] = useState(() => hazardsChecked(existing));
   const [draft, setDraft] = useState([]);    // [[lng,lat],...] current shape
   const [pending, setPending] = useState(null); // { mode, coords } closed, awaiting Confirm
   const [autoPlaced, setAutoPlaced] = useState(false); // pending is our starting outline, not user-drawn
   const [zones, setZones] = useState([]);    // [{ mode, coords }]
-  const [hazards, setHazards] = useState([]); // [{ lng, lat, label }]
+  const [hazards, setHazards] = useState([]); // [{ kind, label, shape: point|line|area, coords }]
   const [labelIdx, setLabelIdx] = useState(null); // hazard index awaiting a label
   const [address, setAddress] = useState(existing?.address || "");
   const [located, setLocated] = useState(!!existing?.center);
 
   useEffect(() => { modeRef.current = mode; }, [mode]);
+  useEffect(() => { hazKindRef.current = hazKind; }, [hazKind]);
   useEffect(() => { zonesRef.current = zones; }, [zones]);
   useEffect(() => { pendingRef.current = pending; }, [pending]);
   useEffect(() => { autoPlacedRef.current = autoPlaced; }, [autoPlaced]);
@@ -200,8 +248,12 @@ export default function MapPropertyDesigner({ existing, onDone, onQuote, saveLab
     if (!existing?.features?.length || zones.length || hazards.length) return;
     const zs = [], hz = [];
     existing.features.forEach((f) => {
-      if (f.geometry?.type === "Polygon") zs.push({ mode: f.properties?.mode === "push" ? "push" : "plow", coords: ringToCoords(f.geometry.coordinates[0]) });
-      else if (f.geometry?.type === "Point") hz.push({ lng: f.geometry.coordinates[0], lat: f.geometry.coordinates[1], label: f.properties?.label || "" });
+      const t = f.geometry?.type, pr = f.properties || {};
+      const kind = pr.kind || "other", label = pr.label || hazardType(kind).label;
+      if (t === "Polygon" && pr.mode === "hazard") hz.push({ kind, label, shape: "area", coords: ringToCoords(f.geometry.coordinates[0]) });
+      else if (t === "Polygon") zs.push({ mode: pr.mode === "push" ? "push" : "plow", coords: ringToCoords(f.geometry.coordinates[0]) });
+      else if (t === "LineString") hz.push({ kind, label, shape: "line", coords: f.geometry.coordinates });
+      else if (t === "Point") hz.push({ kind: pr.kind || "other", label: pr.label || "Hazard", shape: "point", coords: [f.geometry.coordinates] });
     });
     zonesRef.current = zs;
     setZones(zs); setHazards(hz);
@@ -240,8 +292,11 @@ export default function MapPropertyDesigner({ existing, onDone, onQuote, saveLab
       const pt = [e.lngLat.lng, e.lngLat.lat];
       if (m === "plow" || m === "push") setDraft((d) => [...d, pt]);
       else if (m === "hazard") {
-        setHazards((h) => { setLabelIdx(h.length); return [...h, { lng: pt[0], lat: pt[1], label: "" }]; });
-        setMode("idle");
+        const t = hazardType(hazKindRef.current);
+        if (t.shape === "point") {
+          setHazards((h) => { if (t.id === "other") setLabelIdx(h.length); return [...h, { kind: t.id, label: t.label, shape: "point", coords: [pt] }]; });
+          setMode("idle"); setHazKind(null);
+        } else setDraft((d) => [...d, pt]);
       }
     });
 
@@ -254,10 +309,14 @@ export default function MapPropertyDesigner({ existing, onDone, onQuote, saveLab
       map.addLayer({ id: "zone-line", type: "line", source: "work", filter: ["in", ["get", "kind"], ["literal", ["zone", "pending"]]],
         layout: { "line-cap": "round", "line-join": "round" },
         paint: { "line-color": ["case", ["==", ["get", "kind"], "pending"], C.amber, ["case", ["==", ["get", "mode"], "push"], C.push, C.plow]], "line-width": 3 } });
+      map.addLayer({ id: "haz-fill", type: "fill", source: "work", filter: ["==", ["get", "kind"], "hazarea"],
+        paint: { "fill-color": HAZARD_FILL, "fill-opacity": 0.28 } });
+      map.addLayer({ id: "haz-line", type: "line", source: "work", filter: ["in", ["get", "kind"], ["literal", ["hazarea", "hazline"]]],
+        layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": HAZARD_FILL, "line-width": 3 } });
       map.addLayer({ id: "draft-line", type: "line", source: "work", filter: ["==", ["get", "kind"], "draftline"],
-        layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": C.amber, "line-width": 3, "line-dasharray": [1.5, 1] } });
+        layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": ["case", ["==", ["get", "haz"], true], HAZARD_FILL, C.amber], "line-width": 3, "line-dasharray": [1.5, 1] } });
       map.addLayer({ id: "verts", type: "circle", source: "work", filter: ["==", ["get", "kind"], "vert"],
-        paint: { "circle-radius": 6, "circle-color": C.amber, "circle-stroke-color": "#fff", "circle-stroke-width": 2 } });
+        paint: { "circle-radius": ["case", ["==", ["get", "haz"], true], 4, 6], "circle-color": ["case", ["==", ["get", "haz"], true], HAZARD_FILL, C.amber], "circle-stroke-color": "#fff", "circle-stroke-width": 2 } });
       setReady(true);
     });
 
@@ -272,17 +331,23 @@ export default function MapPropertyDesigner({ existing, onDone, onQuote, saveLab
     const feats = [];
     zones.forEach((z) => feats.push(polyFeature(z.coords, { kind: "zone", mode: z.mode })));
     if (pending) feats.push(polyFeature(pending.coords, { kind: "pending", mode: pending.mode }));
-    if (draft.length >= 2) feats.push({ type: "Feature", properties: { kind: "draftline" }, geometry: { type: "LineString", coordinates: draft } });
-    draft.forEach((p) => feats.push({ type: "Feature", properties: { kind: "vert" }, geometry: { type: "Point", coordinates: p } }));
+    hazards.forEach((h) => {
+      if (h.shape === "area" && h.coords.length >= 3) feats.push(polyFeature(h.coords, { kind: "hazarea" }));
+      if (h.shape === "line" && h.coords.length >= 2) feats.push({ type: "Feature", properties: { kind: "hazline" }, geometry: { type: "LineString", coordinates: h.coords } });
+    });
+    const haz = mode === "hazard";
+    if (draft.length >= 2) feats.push({ type: "Feature", properties: { kind: "draftline", haz }, geometry: { type: "LineString", coordinates: draft } });
+    draft.forEach((p) => feats.push({ type: "Feature", properties: { kind: "vert", haz }, geometry: { type: "Point", coordinates: p } }));
     src.setData({ type: "FeatureCollection", features: feats });
-  }, [zones, pending, draft, ready]);
+  }, [zones, pending, draft, hazards, mode, ready]);
 
   // hazard markers (DOM + inline SVG)
   useEffect(() => {
     const m = mapRef.current; if (!m) return;
     hazMarkers.current.forEach((o) => o.remove());
-    hazMarkers.current = hazards.map((h) =>
-      new mapboxgl.Marker({ element: makeHazardEl(), anchor: "center" }).setLngLat([h.lng, h.lat]).addTo(m));
+    hazMarkers.current = hazards.map((h) => h.shape === "point"
+      ? new mapboxgl.Marker({ element: makeHazardEl(h.kind, h.label), anchor: "center" }).setLngLat(h.coords[0]).addTo(m)
+      : new mapboxgl.Marker({ element: makeHazardTag(h.label), anchor: "center" }).setLngLat(midpointOf(h.coords, h.shape)).addTo(m));
   }, [hazards]);
 
   // area / price
@@ -299,17 +364,33 @@ export default function MapPropertyDesigner({ existing, onDone, onQuote, saveLab
   const confirmShape = () => { setZones((z) => [...z, pending]); setPending(null); setAutoPlaced(false); };
   const redoShape = () => { setPending(null); };
   const redrawStart = () => { setPending(null); setAutoPlaced(false); setDraft([]); setMode("plow"); };
-  const cancelDraw = () => { setDraft([]); setMode("idle"); };
+  const cancelDraw = () => { setDraft([]); setMode("idle"); setHazKind(null); };
+  const pickHazard = (id) => {
+    setHazKind(id); setDraft([]); setMode("hazard");
+    const m = mapRef.current; if (m && m.getZoom() < 19.5) m.easeTo({ zoom: 20, duration: 400 }); // closer in = more accurate taps
+  };
+  const finishHazardShape = () => {
+    const t = hazardType(hazKind);
+    if (draft.length < (t.shape === "area" ? 3 : 2)) return;
+    setHazards((h) => [...h, { kind: t.id, label: t.label, shape: t.shape, coords: draft }]);
+    setDraft([]); setMode("idle"); setHazKind(null);
+  };
   const undoPoint = () => setDraft((d) => d.slice(0, -1));
   const removeLastZone = () => setZones((z) => z.slice(0, -1));
-  const labelHazard = (lbl) => { setHazards((h) => h.map((x, i) => (i === labelIdx ? { ...x, label: lbl } : x))); setLabelIdx(null); };
+  const [otherText, setOtherText] = useState("");
+  const labelHazard = (lbl) => { setHazards((h) => h.map((x, i) => (i === labelIdx ? { ...x, label: lbl.trim() || "Hazard" } : x))); setLabelIdx(null); setOtherText(""); };
   const removeHazard = (i) => setHazards((h) => h.filter((_, k) => k !== i));
 
   const done = () => {
     const zs = pending ? [...zones, pending] : zones;
     const features = [
-      ...zs.map((z) => polyFeature(z.coords, { mode: z.mode })),
-      ...hazards.map((h) => ({ type: "Feature", properties: { mode: "hazard", label: h.label || "Hazard" }, geometry: { type: "Point", coordinates: [h.lng, h.lat] } })),
+      ...zs.map((z) => polyFeature(z.coords, z.mode === "plow" ? { mode: "plow", hazardsChecked: true } : { mode: z.mode })),
+      ...hazards.map((h) => {
+        const props = { mode: "hazard", kind: h.kind, label: h.label || "Hazard" };
+        if (h.shape === "area") return polyFeature(h.coords, props);
+        if (h.shape === "line") return { type: "Feature", properties: props, geometry: { type: "LineString", coordinates: h.coords } };
+        return { type: "Feature", properties: props, geometry: { type: "Point", coordinates: h.coords[0] } };
+      }),
     ];
     onDone({ address, center: centerRef.current, features, sqft, mapImg: staticMapUrl(features, centerRef.current) });
   };
@@ -331,7 +412,10 @@ export default function MapPropertyDesigner({ existing, onDone, onQuote, saveLab
     !located ? "Start by typing your address in the box on the map, then pick it from the list."
     : mode === "plow" ? "Tap each corner of your driveway. Then tap “Close shape”."
     : mode === "push" ? "Tap three or more points around where the snow should go. Then tap “Close shape”."
-    : mode === "hazard" ? "Tap the map right on the hazard, like a well or flower bed."
+    : mode === "hazpick" ? "What could a plow hit? Pick one."
+    : mode === "hazard" ? (hazardType(hazKind).shape === "point" ? `Tap the map right on the ${hazardType(hazKind).label.toLowerCase()}.`
+      : hazardType(hazKind).shape === "line" ? `Tap along the ${hazardType(hazKind).label.toLowerCase()}, end to end. Then tap “Done”.`
+      : `Tap around the ${hazardType(hazKind).label.toLowerCase()}. Then tap “Done”.`)
     : pending && autoPlaced ? "We placed a starting outline for a typical driveway. If it's close, confirm it — or redraw it to match yours."
     : pending ? "Does this look right?"
     : zones.length ? "Add another area, or save when you're done."
@@ -346,7 +430,8 @@ export default function MapPropertyDesigner({ existing, onDone, onQuote, saveLab
         <div style={{ font: `400 13px/1.6 ${FB}`, color: C.mist }}>
           1. Search your address above the map.<br />
           2. Check the outline we place — confirm it, or redraw it to fit.<br />
-          3. Mark where the snow should go and anything the driver should avoid.
+          3. Mark where the snow should go.<br />
+          4. Mark anything a plow could hit — curbs, raised concrete, well caps, septic. You only do this once.
         </div>
       </div>
 
@@ -360,12 +445,13 @@ export default function MapPropertyDesigner({ existing, onDone, onQuote, saveLab
       {labelIdx !== null ? (
         // labeling a just-dropped hazard
         <div style={{ marginTop: 10 }}>
-          <div style={{ font: `600 13px ${FB}`, color: C.ice, marginBottom: 8 }}>What is it?</div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {HAZARD_TYPES.map((t) => (
-              <button key={t} onClick={() => labelHazard(t)}
-                style={secondary({ flex: "0 0 auto", minHeight: 44, padding: "0 16px", font: `600 14px ${FB}` })}>{t}</button>
-            ))}
+          <div style={{ font: `600 13px ${FB}`, color: C.ice, marginBottom: 8 }}>What is it? (so the driver knows)</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input autoFocus value={otherText} onChange={(e) => setOtherText(e.target.value)} placeholder="e.g. sprinkler head, big rock"
+              onKeyDown={(e) => { if (e.key === "Enter") labelHazard(otherText); }}
+              style={{ flex: 1, minWidth: 0, background: C.slate, color: C.ice, border: `1px solid ${C.line}`, borderRadius: 12,
+                padding: "0 14px", minHeight: 48, font: `500 15px ${FB}`, outline: "none" }} />
+            <button onClick={() => labelHazard(otherText)} style={primary({ flex: "0 0 auto", minHeight: 48 })}>Save</button>
           </div>
         </div>
       ) : pending && autoPlaced ? (
@@ -394,9 +480,34 @@ export default function MapPropertyDesigner({ existing, onDone, onQuote, saveLab
             <button onClick={cancelDraw} style={dangerOutline(small)}><XMark s={14} /> Cancel</button>
           </div>
         </div>
-      ) : mode === "hazard" ? (
+      ) : mode === "hazpick" ? (
         <div style={{ marginTop: 10 }}>
-          <button onClick={() => setMode("idle")} style={secondary({ width: "100%" })}><XMark s={14} /> Cancel</button>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            {HAZARD_TYPES.map((t) => (
+              <button key={t.id} onClick={() => pickHazard(t.id)}
+                style={secondary({ flex: "none", minHeight: 54, justifyContent: "space-between", textAlign: "left", font: `600 14px/1.2 ${FB}`, padding: "0 12px" })}>
+                <span>{t.label}</span>
+                <span style={{ font: `500 11px ${FB}`, color: C.mistDim, flexShrink: 0, marginLeft: 6 }}>{SHAPE_WORD[t.shape]}</span>
+              </button>
+            ))}
+          </div>
+          <button onClick={cancelDraw} style={secondary({ width: "100%", marginTop: 8, ...small, color: C.mist })}><XMark s={14} /> Cancel</button>
+        </div>
+      ) : mode === "hazard" ? (
+        <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+          {hazardType(hazKind).shape !== "point" && (() => {
+            const need = (hazardType(hazKind).shape === "area" ? 3 : 2) - draft.length;
+            return need <= 0
+              ? <button onClick={finishHazardShape} style={primary()}><Icon e="check" s={18} strokeWidth={2.2} /> Done</button>
+              : <button disabled style={disabledBtn()}>{`Tap ${need} more point${need > 1 ? "s" : ""}`}</button>;
+          })()}
+          <div style={{ display: "flex", gap: 8 }}>
+            {hazardType(hazKind).shape !== "point" && (
+              <button onClick={undoPoint} disabled={!draft.length}
+                style={draft.length ? secondary(small) : disabledBtn(small)}><Icon e="undo" s={16} /> Undo last tap</button>
+            )}
+            <button onClick={cancelDraw} style={dangerOutline(small)}><XMark s={14} /> Cancel</button>
+          </div>
         </div>
       ) : (
         // idle — the three main actions
@@ -409,7 +520,7 @@ export default function MapPropertyDesigner({ existing, onDone, onQuote, saveLab
               <Icon e="pin" s={18} color={located ? C.push : undefined} /> Snow goes here
             </button>
           </div>
-          <button onClick={() => setMode("hazard")} disabled={!located} style={located ? secondary() : disabledBtn()}>
+          <button onClick={() => setMode("hazpick")} disabled={!located} style={located ? secondary() : disabledBtn()}>
             <Icon e="cone" s={16} color={located ? C.danger : undefined} /> Mark a hazard
           </button>
           {zones.length > 0 && (
@@ -431,6 +542,7 @@ export default function MapPropertyDesigner({ existing, onDone, onQuote, saveLab
                 <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ width: 8, height: 8, borderRadius: "50%", background: HAZARD_FILL, flexShrink: 0 }} />
                   {h.label || "Hazard"}
+                  <span style={{ font: `500 11px ${FB}`, color: C.mistDim }}>{SHAPE_WORD[h.shape] || "pin"}</span>
                 </span>
                 <button onClick={() => removeHazard(i)} style={{ background: "transparent", border: "none", color: C.danger, cursor: "pointer",
                   font: `500 13px ${FB}`, padding: "8px 0 8px 12px" }}>Remove</button>
@@ -440,11 +552,16 @@ export default function MapPropertyDesigner({ existing, onDone, onQuote, saveLab
         </div>
       )}
 
-      {/* liability note */}
-      <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "flex-start", font: `400 12px/1.5 ${FB}`, color: C.mistDim }}>
-        <Icon e="warning" s={14} style={{ marginTop: 2 }} />
-        <span>Mark wells, septic covers, flower beds and anything else fragile. If it isn't marked, the driver can't know it's there, and damage to unmarked items is not our responsibility.</span>
-      </div>
+      {/* one-time hazard confirmation — required to save */}
+      <label style={{ marginTop: 12, display: "flex", gap: 11, alignItems: "flex-start", cursor: "pointer", padding: "12px 14px",
+        borderRadius: 12, background: checked ? C.push + "12" : C.slate, border: `1.5px solid ${checked ? C.push + "80" : C.line}` }}>
+        <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)}
+          style={{ width: 20, height: 20, marginTop: 1, accentColor: C.push, flexShrink: 0 }} />
+        <span style={{ font: `400 13px/1.5 ${FB}`, color: C.mist }}>
+          <span style={{ color: C.ice, fontWeight: 600 }}>{hazards.length ? "I've marked everything a plow could hit." : "There's nothing here a plow could hit."}</span>{" "}
+          Curbs, raised concrete, well caps, septic, gardens. Drivers can't see what's under the snow, so anything not marked is my responsibility.
+        </span>
+      </label>
 
       {/* measurement + price */}
       <div style={{ marginTop: 12, background: C.night2, border: `1px solid ${hasPlow ? C.amber : C.line}`, borderRadius: 14,
@@ -459,9 +576,9 @@ export default function MapPropertyDesigner({ existing, onDone, onQuote, saveLab
         </div>
       </div>
 
-      <button onClick={done} disabled={!hasPlow || !!pending}
-        style={(hasPlow && !pending ? primary : disabledBtn)({ width: "100%", marginTop: 12, minHeight: 54, font: `600 16px ${FB}` })}>
-        {pending ? "Confirm the area above first" : hasPlow ? saveLabel : "Outline a plow area first"}
+      <button onClick={done} disabled={!hasPlow || !!pending || !checked || mode !== "idle"}
+        style={(hasPlow && !pending && checked && mode === "idle" ? primary : disabledBtn)({ width: "100%", marginTop: 12, minHeight: 54, font: `600 16px ${FB}` })}>
+        {pending ? "Confirm the area above first" : !hasPlow ? "Outline a plow area first" : !checked ? "Check the hazard box above" : saveLabel}
       </button>
     </div>
   );

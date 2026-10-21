@@ -13,6 +13,10 @@ export function AuthProvider({ children }) {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(supabaseEnabled);
   const [profileFor, setProfileFor] = useState(null); // which user's profile lookup has finished
+  // true after someone opens the "reset your password" email link — the app shows
+  // the set-a-new-password screen until they save one.
+  const [recovering, setRecovering] = useState(() =>
+    typeof window !== "undefined" && /type=recovery/.test(window.location.hash));
 
   const loadProfile = useCallback(async (userId) => {
     if (!supabaseEnabled || !userId) { setProfile(null); setProfileFor(null); return; }
@@ -28,7 +32,8 @@ export function AuthProvider({ children }) {
       await loadProfile(data.session?.user?.id);
       setLoading(false);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
+      if (event === "PASSWORD_RECOVERY") setRecovering(true);
       setSession(s);
       loadProfile(s?.user?.id);
     });
@@ -59,6 +64,20 @@ export function AuthProvider({ children }) {
     setProfile(null);
   };
   const refreshProfile = () => loadProfile(session?.user?.id);
+  // Forgot password: email a reset link that comes back to this site.
+  const resetPassword = async (email) => {
+    if (!supabaseEnabled) return { error: notConfigured() };
+    return supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/?reset=1` });
+  };
+  const updatePassword = async (password) => {
+    if (!supabaseEnabled) return { error: notConfigured() };
+    const res = await supabase.auth.updateUser({ password });
+    if (!res.error) {
+      setRecovering(false);
+      try { window.history.replaceState(null, "", window.location.pathname); } catch { /* ignore */ }
+    }
+    return res;
+  };
 
   const value = {
     isConfigured: supabaseEnabled,
@@ -68,7 +87,8 @@ export function AuthProvider({ children }) {
     profile,
     profileReady: !!session && profileFor === session.user.id,
     role: profile?.role || null,
-    signUp, signIn, sendPhoneOtp, verifyPhoneOtp, signOut, refreshProfile,
+    recovering: recovering && !!session,
+    signUp, signIn, sendPhoneOtp, verifyPhoneOtp, signOut, refreshProfile, resetPassword, updatePassword,
   };
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
 }

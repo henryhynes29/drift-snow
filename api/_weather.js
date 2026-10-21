@@ -49,6 +49,7 @@ export async function forecastSnow({ fresh = false } = {}) {
     next12: sumSnow(snow.values, now, now + 12 * h, snow.uom),
     next24: sumSnow(snow.values, now, now + 24 * h, snow.uom),
     next36: sumSnow(snow.values, now, now + 36 * h, snow.uom),
+    last24: sumSnow(snow.values, now - 24 * h, now, snow.uom), // what the forecast grid still holds for the past day (may be partial)
     updatedAt: new Date().toISOString(),
   };
   cache = { at: now, data };
