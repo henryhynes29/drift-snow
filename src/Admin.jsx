@@ -1,10 +1,11 @@
 // DRIFT owner dashboard — open with  ?admin=1  (also ?ops=1).
 // Only accounts whose email is in the OWNER_EMAILS Vercel variable can load
 // any data; the server checks every request.
-import React, { useEffect, useState } from "react";
-import { C, FD, FB } from "./theme.js";
+import React, { Suspense, lazy, useEffect, useState } from "react";
+import { C, FD, FB, FM } from "./theme.js";
 import Icon from "./Icon.jsx";
 import { authedFetch } from "./lib/payments.js";
+const LiveMap = lazy(() => import("./PropertyMap.jsx").then((m) => ({ default: m.LiveMap })));
 
 async function api(action, body) {
   const res = await authedFetch(`/api/admin?action=${action}`, body
@@ -123,6 +124,7 @@ function Overview() {
             sub={`${money(d.stripeBalance.pending)} pending`} />}
         </div>
       </section>
+      <Trends />
       <section>
         <h2 style={{ font: `700 20px ${FD}`, margin: "0 0 12px", color: C.ice }}>People</h2>
         <div style={grid}>
@@ -144,6 +146,152 @@ function Overview() {
         </div>
       </section>
       <SnowAlerts />
+    </div>
+  );
+}
+
+// ---------- trend charts: one bar per day, hover/tap a bar for its value ----------
+function DayBars({ title, days, field, fmt = (v) => v, color = C.amber }) {
+  const [hover, setHover] = useState(null);
+  const vals = days.map((d) => d[field] || 0);
+  const total = vals.reduce((a, b) => a + b, 0);
+  const max = Math.max(1, ...vals);
+  const W = 100 / days.length;
+  const H = 120;
+  const label = (k) => new Date(k + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const h = hover != null ? days[hover] : null;
+  return (
+    <div style={card()}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+        <div style={{ font: `500 13px ${FB}`, color: C.mist }}>{title}</div>
+        <div style={{ font: `500 12px ${FM}`, color: C.mistDim }}>{h ? label(h.day) : `last ${days.length} days`}</div>
+      </div>
+      <div style={{ font: `700 26px/1.1 ${FD}`, color: C.ice, marginTop: 6 }}>{h ? fmt(h[field] || 0) : fmt(total)}</div>
+      <div style={{ position: "relative", height: H, marginTop: 10 }} onMouseLeave={() => setHover(null)}>
+        <div style={{ position: "absolute", left: 0, right: 0, top: 0, borderTop: `1px dashed ${C.lineSoft}` }} />
+        <div style={{ position: "absolute", right: 0, top: -2, transform: "translateY(-100%)", font: `500 11px ${FM}`, color: C.mistDim }}>{fmt(max)}</div>
+        <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, borderTop: `1px solid ${C.line}` }} />
+        {days.map((d, i) => {
+          const v = d[field] || 0;
+          return (
+            <div key={d.day} onMouseEnter={() => setHover(i)} onClick={() => setHover(hover === i ? null : i)} title={`${label(d.day)}: ${fmt(v)}`}
+              style={{ position: "absolute", left: `${i * W}%`, width: `${W}%`, top: 0, bottom: 0, cursor: "default" }}>
+              <div style={{ position: "absolute", left: 1, right: 1, bottom: 0, height: v ? Math.max(3, (v / max) * H) : 0,
+                background: color, opacity: hover == null || hover === i ? 1 : .45, borderRadius: "4px 4px 0 0", transition: "opacity .15s" }} />
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", font: `500 11px ${FM}`, color: C.mistDim, marginTop: 6 }}>
+        <span>{label(days[0].day)}</span><span>Today</span></div>
+    </div>
+  );
+}
+
+function Trends() {
+  const [d, setD] = useState(null);
+  const [n, setN] = useState(30);
+  const [err, setErr] = useState(null);
+  useEffect(() => { setD(null); api("trends", { days: n }).then(setD).catch((e) => setErr(e.message)); }, [n]);
+  return (
+    <section>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+        <h2 style={{ font: `700 20px ${FD}`, margin: 0, color: C.ice }}>Over time</h2>
+        <div style={{ display: "flex", gap: 6 }}>
+          {[[14, "14 days"], [30, "30 days"], [90, "90 days"]].map(([k, l]) => (
+            <button key={k} onClick={() => setN(k)} style={{ ...btn(), background: n === k ? C.amber : C.night2, color: n === k ? C.onAmber : C.ice }}>{l}</button>
+          ))}
+        </div>
+      </div>
+      {err ? <p style={{ color: C.danger, font: `500 14px ${FB}` }}>{err}</p> : !d ? <p style={{ color: C.mist }}>Loading…</p> : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 12 }}>
+          <DayBars title="Customer sign-ups" days={d.days} field="customers" />
+          <DayBars title="Driver sign-ups" days={d.days} field="drivers" color={C.plow} />
+          <DayBars title="Jobs completed" days={d.days} field="completed" color={C.push} />
+          <DayBars title="Customers paid (incl. tips)" days={d.days} field="gross" fmt={money} />
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ---------- storm-day map: who's online, which jobs are waiting, what's in progress ----------
+const LIVE_STATUS = {
+  requested: { label: "Waiting for a driver", color: "#FFB020" },
+  scheduled: { label: "Scheduled (next 12h)", color: "#4C9BFF" },
+  accepted: { label: "Driver on the way", color: "#3DDC84" },
+  enroute: { label: "Driver on the way", color: "#3DDC84" },
+  plowing: { label: "Plowing now", color: "#3DDC84" },
+};
+function LiveBoard() {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () => api("live").then((x) => alive && setD(x)).catch((e) => alive && setErr(e.message));
+    load(); const iv = setInterval(load, 20000);
+    return () => { alive = false; clearInterval(iv); };
+  }, []);
+  if (err) return <p style={{ color: C.danger, font: `500 14px ${FB}` }}>{err}</p>;
+  if (!d) return <p style={{ color: C.mist }}>Loading…</p>;
+  const fresh = (t) => t && Date.now() - new Date(t).getTime() < 15 * 60e3;
+  const markers = [
+    ...d.jobs.filter((j) => j.lat != null).map((j) => ({ lat: j.lat, lng: j.lng, label: `$${Math.round(j.price)}`, color: LIVE_STATUS[j.status]?.color })),
+    ...d.drivers.filter((x) => x.lat != null && fresh(x.seenAt)).map((x) => ({ lat: x.lat, lng: x.lng, kind: "truck", pulse: x.busy > 0 })),
+  ];
+  const waiting = d.jobs.filter((j) => j.status === "requested").length;
+  const active = d.jobs.filter((j) => ["accepted", "enroute", "plowing"].includes(j.status)).length;
+  const sched = d.jobs.filter((j) => j.status === "scheduled").length;
+  const online = d.drivers.filter((x) => x.online).length;
+  const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 12 };
+  const legend = [["Waiting", "#FFB020"], ["Scheduled", "#4C9BFF"], ["In progress", "#3DDC84"]];
+  return (
+    <div style={{ display: "grid", gap: 18 }}>
+      <div style={grid}>
+        <Tile label="Drivers online" value={online} sub={`${d.drivers.filter((x) => x.busy).length} on a job`} tone="info" />
+        <Tile label="Waiting for a driver" value={waiting} tone={waiting ? "amber" : undefined} sub={waiting > online ? "More jobs than drivers — send a driver alert" : undefined} />
+        <Tile label="In progress" value={active} tone="good" />
+        <Tile label="Scheduled, next 12h" value={sched} />
+      </div>
+      <div style={card()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+            {legend.map(([l, c]) => <span key={l} style={{ display: "inline-flex", alignItems: "center", gap: 6, font: `500 13px ${FB}`, color: C.mist }}>
+              <span style={{ width: 10, height: 10, borderRadius: 99, background: c }} />{l}</span>)}
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, font: `500 13px ${FB}`, color: C.mist }}><Icon e="truck" s={14} /> Driver</span>
+          </div>
+          <span style={{ font: `500 12px ${FM}`, color: C.mistDim }}>updates every 20s · {new Date(d.at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</span>
+        </div>
+        <Suspense fallback={<div style={{ height: 420 }} />}><LiveMap height={420} markers={markers} fit={markers.length > 0} /></Suspense>
+        {markers.length === 0 && <p style={{ font: `400 13px ${FB}`, color: C.mistDim, margin: "10px 0 0" }}>Nothing on the map right now — no open jobs and no drivers sharing location.</p>}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(320px,1fr))", gap: 12 }}>
+        <div style={card()}>
+          <div style={{ font: `600 15px ${FB}`, marginBottom: 10 }}>Jobs</div>
+          {d.jobs.length === 0 ? <p style={{ font: `400 13px ${FB}`, color: C.mistDim, margin: 0 }}>No open jobs.</p> : d.jobs.map((j) => (
+            <div key={j.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "9px 0", borderTop: `1px solid ${C.lineSoft}` }}>
+              <span style={{ width: 8, height: 8, borderRadius: 99, flex: "none", background: LIVE_STATUS[j.status]?.color }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ font: `500 14px ${FB}`, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{j.address || "No address"}</div>
+                <div style={{ font: `400 12.5px ${FB}`, color: C.mistDim }}>{LIVE_STATUS[j.status]?.label}{j.driver ? ` · ${j.driver}` : ""}{j.scheduledFor ? ` · ${date(j.scheduledFor)}` : ` · booked ${date(j.createdAt)}`}</div>
+              </div>
+              <div style={{ font: `600 14px ${FM}` }}>{money(j.price)}</div>
+            </div>
+          ))}
+        </div>
+        <div style={card()}>
+          <div style={{ font: `600 15px ${FB}`, marginBottom: 10 }}>Drivers</div>
+          {d.drivers.length === 0 ? <p style={{ font: `400 13px ${FB}`, color: C.mistDim, margin: 0 }}>No drivers online.</p> : d.drivers.map((x) => (
+            <div key={x.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "9px 0", borderTop: `1px solid ${C.lineSoft}` }}>
+              <Icon e="truck" s={16} color={x.online ? C.push : C.mistDim} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ font: `500 14px ${FB}` }}>{x.name || "Driver"}</div>
+                <div style={{ font: `400 12.5px ${FB}`, color: C.mistDim }}>{x.online ? "Online" : "Offline"}{x.busy ? ` · ${x.busy} job${x.busy > 1 ? "s" : ""}` : ""}{x.seenAt ? ` · location ${fresh(x.seenAt) ? "live" : date(x.seenAt)}` : " · no location yet"}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -392,7 +540,7 @@ export default function AdminApp({ email, onSignOut }) {
   const [tab, setTab] = useState("overview");
   const [allowed, setAllowed] = useState(null); // null checking · true · false
   useEffect(() => { api("summary").then(() => setAllowed(true)).catch((e) => setAllowed(e.status === 403 ? false : true)); }, []);
-  const tabs = [["overview", "Overview"], ["drivers", "Drivers"], ["customers", "Customers"], ["jobs", "Jobs"], ["sources", "Sources"]];
+  const tabs = [["overview", "Overview"], ["live", "Live map"], ["drivers", "Drivers"], ["customers", "Customers"], ["jobs", "Jobs"], ["sources", "Sources"]];
   return (
     <div style={{ minHeight: "100vh", background: C.night, color: C.ice, fontFamily: FB }}>
       <header style={{ position: "sticky", top: 0, zIndex: 20, background: C.glass, backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderBottom: `1px solid ${C.line}` }}>
@@ -401,14 +549,15 @@ export default function AdminApp({ email, onSignOut }) {
             <div style={{ width: 30, height: 30, borderRadius: 8, background: C.amber, color: C.onAmber, display: "grid", placeItems: "center" }}><Icon e="snowflake" s={16} /></div>
             <div style={{ font: `700 17px ${FD}`, letterSpacing: ".04em" }}>DRIFT <span style={{ color: C.mist, fontWeight: 500, letterSpacing: 0 }}>Owner</span></div>
           </div>
-          {allowed && <nav style={{ display: "flex", gap: 4, flex: 1, overflowX: "auto" }}>
+          <style>{`@media (max-width: 680px) { .adm-nav { order: 3; flex: 1 1 100% !important; } .adm-email { display: none; } }`}</style>
+          {allowed && <nav className="adm-nav" style={{ display: "flex", gap: 4, flex: 1, overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
             {tabs.map(([k, l]) => (
               <button key={k} onClick={() => setTab(k)} style={{ font: `600 14px ${FB}`, padding: "8px 12px", borderRadius: 10, border: "none", cursor: "pointer",
-                background: tab === k ? C.slate2 : "transparent", color: tab === k ? C.ice : C.mist }}>{l}</button>
+                background: tab === k ? C.slate2 : "transparent", color: tab === k ? C.ice : C.mist, whiteSpace: "nowrap", flex: "none" }}>{l}</button>
             ))}
           </nav>}
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ font: `400 13px ${FB}`, color: C.mistDim }}>{email}</span>
+            <span className="adm-email" style={{ font: `400 13px ${FB}`, color: C.mistDim }}>{email}</span>
             <button onClick={onSignOut} style={btn()}>Sign out</button>
           </div>
         </div>
@@ -423,6 +572,7 @@ export default function AdminApp({ email, onSignOut }) {
           </div>
         )}
         {allowed && tab === "overview" && <Overview />}
+        {allowed && tab === "live" && <LiveBoard />}
         {allowed && tab === "drivers" && <Drivers />}
         {allowed && tab === "customers" && <Customers />}
         {allowed && tab === "jobs" && <Jobs />}

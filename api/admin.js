@@ -104,6 +104,62 @@ const ACTIONS = {
     };
   },
 
+  // ---------- trends: one row per day (Duluth time) for the charts ----------
+  async trends({ days } = {}) {
+    const n = Math.min(Math.max(Number(days) || 30, 7), 90);
+    const start = Date.now() - n * 864e5;
+    const iso = new Date(start).toISOString();
+    const [profiles, jobs] = await Promise.all([
+      all("profiles", "is_driver, created_at", (q) => q.gte("created_at", iso)),
+      all("jobs", "status, payment_status, price, tip, platform_fee, created_at, completed_at", (q) => q.gte("created_at", iso)),
+    ]);
+    const key = (t) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(t));
+    const rows = {};
+    for (let i = n - 1; i >= 0; i--) { const k = key(Date.now() - i * 864e5); rows[k] = { day: k, customers: 0, drivers: 0, jobs: 0, completed: 0, gross: 0, drift: 0 }; }
+    for (const p of profiles) { const r = rows[key(p.created_at)]; if (r) r[p.is_driver ? "drivers" : "customers"] += 1; }
+    for (const j of jobs) {
+      const r = rows[key(j.created_at)]; if (r) r.jobs += 1;
+      if (j.status === "completed" && j.completed_at) {
+        const c = rows[key(j.completed_at)];
+        if (c) { c.completed += 1; if (j.payment_status === "captured") { c.gross = round2(c.gross + num(j.price) + num(j.tip)); c.drift = round2(c.drift + num(j.platform_fee)); } }
+      }
+    }
+    return { days: Object.values(rows) };
+  },
+
+  // ---------- live storm-day map: online drivers + open / active jobs ----------
+  async live() {
+    const soon = new Date(Date.now() + 12 * 3600e3).toISOString();
+    const [drivers, jobs] = await Promise.all([
+      all("profiles", "id, name, email, truck, is_online", (q) => q.eq("is_driver", true).eq("is_online", true)),
+      all("jobs", "id, status, address, lat, lng, price, driver_id, scheduled_for, created_at, expires_at, payment_status",
+        (q) => q.in("status", ["requested", "scheduled", "accepted", "enroute", "plowing"]).order("created_at", { ascending: false }).limit(300)),
+    ]);
+    const now = new Date().toISOString();
+    const held = (j) => ["authorized", "not_required"].includes(j.payment_status); // card held (or payments off) — drivers can see it
+    const active = jobs.filter((j) => {
+      if (j.status === "requested") return held(j) && j.expires_at > now;           // skip expired + abandoned checkouts
+      if (j.status === "scheduled") return held(j) && j.scheduled_for && j.scheduled_for < soon;
+      return true;
+    });
+    const driverIds = [...new Set([...drivers.map((d) => d.id), ...active.map((j) => j.driver_id).filter(Boolean)])];
+    const locs = driverIds.length ? await all("driver_locations", "driver_id, lat, lng, updated_at", (q) => q.in("driver_id", driverIds)) : [];
+    const names = driverIds.length ? await all("profiles", "id, name, email", (q) => q.in("id", driverIds)) : [];
+    const nm = (id) => { const p = names.find((x) => x.id === id); return p ? (p.name || p.email) : null; };
+    return {
+      drivers: driverIds.map((id) => {
+        const loc = locs.find((l) => l.driver_id === id);
+        const d = drivers.find((x) => x.id === id);
+        const busy = active.filter((j) => j.driver_id === id && ["accepted", "enroute", "plowing"].includes(j.status)).length;
+        return { id, name: nm(id), truck: d?.truck || null, online: !!d, busy, lat: loc?.lat ?? null, lng: loc?.lng ?? null, seenAt: loc?.updated_at || null };
+      }),
+      jobs: active.map((j) => ({ id: j.id, status: j.status, address: j.address, price: num(j.price), driver: nm(j.driver_id),
+        scheduledFor: j.scheduled_for, createdAt: j.created_at,
+        lat: j.lat ?? null, lng: j.lng ?? null })),
+      at: new Date().toISOString(),
+    };
+  },
+
   // ---------- drivers ----------
   async drivers() {
     const [drivers, jobs, docs] = await Promise.all([

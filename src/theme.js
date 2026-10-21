@@ -21,7 +21,7 @@ const DARK = {
   lineSoft: "#1A2230",
   ice: "#EEF3F8",     // primary text
   mist: "#9BA7B7",    // secondary text
-  mistDim: "#66738A", // tertiary text
+  mistDim: "#738099", // tertiary text
   amber: "#FFB020",   // brand — plow-beacon amber
   amberDeep: "#C7830F",
   amberSoft: "#FFD166",
@@ -47,8 +47,8 @@ const LIGHT = {
   line: "#DDE3EA",
   lineSoft: "#E8EDF2",
   ice: "#0E131A",
-  mist: "#5C5C66",
-  mistDim: "#8A8A93",
+  mist: "#52525C",
+  mistDim: "#71717B",   // still readable in bright sun off snow
   amber: "#C47A00",   // deeper marigold: readable as text on white, still reads as the brand
   amberDeep: "#9E6200",
   amberSoft: "#D98A00",

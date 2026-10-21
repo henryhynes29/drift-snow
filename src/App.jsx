@@ -448,6 +448,13 @@ function notify(dispatch, opts, phone) {
   return n;
 }
 
+// Add money to today's bar in the 7-day earnings chart (the last entry is today).
+function bumpToday(payouts = [], amt = 0) {
+  const list = payouts.length ? [...payouts] : [{ d: new Date().toLocaleDateString(undefined, { weekday: "short" }), amt: 0 }];
+  const last = list.length - 1;
+  list[last] = { ...list[last], amt: Math.round(((list[last].amt || 0) + Number(amt || 0)) * 100) / 100 };
+  return list;
+}
 function reducer(s, a) {
   switch (a.type) {
     case "ROLE": return { ...s, role: a.role };
@@ -558,6 +565,7 @@ function reducer(s, a) {
           week: s.earnings.week + q.driverPay,
           jobsToday: s.earnings.jobsToday + 1,
           jobsWeek: (s.earnings.jobsWeek || 0) + 1,
+          payouts: bumpToday(s.earnings.payouts, q.driverPay),
         },
         history: [{ id: "h" + Date.now(), date: "Today", size: a.size?.label || "", total: q.riderTotal,
           driver: a.driverName || s.driver.name, rating: 0, photos: s.order?.photos || null }, ...s.history],
@@ -565,7 +573,7 @@ function reducer(s, a) {
     }
     case "CLEAR_ORDER": return { ...s, order: null };
     case "TIP": return { ...s, earnings: { ...s.earnings,
-      today: s.earnings.today + a.amt, week: s.earnings.week + a.amt } };
+      today: s.earnings.today + a.amt, week: s.earnings.week + a.amt, payouts: bumpToday(s.earnings.payouts, a.amt) } };
     case "NOTIFY": return { ...s, notifications: [a.notif, ...s.notifications].slice(0, 50) };
     case "NOTIF_READ":
       return { ...s, notifications: s.notifications.map(n => (!a.id || n.id === a.id) ? { ...n, read: true } : n) };
@@ -591,7 +599,7 @@ function ReviewsSheet({ userId, name, rating, count, onClose }) {
   }
   return (
     <Sheet onClose={onClose}>
-      <h3 style={{ font: `800 24px ${FD}`, textTransform: "uppercase", color: C.ice, margin: "0 0 4px" }}>{name ? `${name}'s reviews` : "Reviews"}</h3>
+      <h3 style={{ ...H(24), color: C.ice, margin: "0 0 4px" }}>{name ? `${name}'s reviews` : "Reviews"}</h3>
       <div style={{ display: "flex", alignItems: "center", gap: 8, font: `600 13px ${FB}`, color: C.mist, marginBottom: 14 }}>
         {rating ? <><Stars v={Number(rating)} size={14} /> {rating} · {count} review{count === 1 ? "" : "s"}</> : "No ratings yet"}
       </div>
@@ -602,7 +610,7 @@ function ReviewsSheet({ userId, name, rating, count, onClose }) {
             <div key={r.id} style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: "12px 14px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <Stars v={r.stars} size={13} />
-                <span style={{ font: `500 12px ${FB}`, color: C.mistDim }}>
+                <span style={{ font: `500 13px ${FB}`, color: C.mistDim }}>
                   {new Date(r.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}</span>
               </div>
               {r.comment && <p style={{ font: `400 14px/1.45 ${FB}`, color: C.ice, margin: "8px 0 0" }}>{r.comment}</p>}
@@ -736,7 +744,9 @@ function Skeleton({ h = 16, w = "100%", r = 8, style }) {
     backgroundSize: "200% 100%", animation: "shimmer 1.4s infinite", ...style }} />;
 }
 
-const h2 = { font: `800 38px/.95 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", margin: "10px 0 10px" };
+// Headings: calm sentence case. The tall caps display font is saved for big moments (prices, ETA, "Plowed").
+const H = (size) => ({ font: `700 ${size}px/1.15 ${FB}`, letterSpacing: "-.022em" });
+const h2 = { ...H(28), margin: "10px 0 10px" };
 const sub = { font: `400 15px/1.5 ${FB}`, color: C.mist, margin: 0 };
 const legalLink = { background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit",
   color: C.plow, textDecoration: "underline", textUnderlineOffset: 2 };
@@ -796,7 +806,7 @@ function Field({ label, value, onChange, placeholder, validate, format, inputMod
         {showErr && <span style={{ position: "absolute", right: 13, color: C.danger, fontSize: 15 }}>!</span>}
       </div>
       <div style={{ height: showErr ? 18 : 0, overflow: "hidden", transition: "height .18s" }}>
-        <span style={{ font: `500 11px ${FB}`, color: C.danger }}>{showErr ? res : ""}</span>
+        <span style={{ font: `500 13px ${FB}`, color: C.danger }}>{showErr ? res : ""}</span>
       </div>
     </div>
   );
@@ -1041,7 +1051,7 @@ function PropertyDesigner({ onDone, existing, compact }) {
         <div style={{ flex: 1 }}>
           <div style={{ font: `700 15px ${FB}`, color: C.ice }}>
             {phase === 0 ? "Where should we plow?" : "Where should the snow go?"}</div>
-          <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 1 }}>
+          <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 1 }}>
             {phase === 0 ? "Step 1 of 2 · this sets your price" : "Step 2 of 2 · keeps snow off what matters"}</div>
         </div>
         <Steps n={2} i={phase} />
@@ -1144,7 +1154,7 @@ function PropertyDesigner({ onDone, existing, compact }) {
           <Row label="Measured area" value={`${plowSqFt.toLocaleString()} sq ft`} />
           <div style={{ height: 1, background: C.line, margin: "10px 0" }} />
           <Row label="Suggested offer" value={`$${q.suggested}`} big />
-          <div style={{ font: `400 12px ${FB}`, color: C.mistDim, marginTop: 4 }}>A suggestion — you choose your offer when you book.</div>
+          <div style={{ font: `400 13px ${FB}`, color: C.mistDim, marginTop: 4 }}>A suggestion — you choose your offer when you book.</div>
         </div>
       )}
 
@@ -1390,7 +1400,7 @@ function AddressSearch({ value, onChange, picked, onPick, compact }) {
                 placeItems: "center", fontSize: 13, flexShrink: 0 }}><Icon e="pin" s={13} /></span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ font: `600 14px ${FB}`, color: C.ice }}>{a.line1}</div>
-                <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 2 }}>
+                <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 2 }}>
                   {a.hoodLabel} · {a.city}, {a.state} {a.zip}</div>
               </div>
               {a.gradeHint !== "flat" && (
@@ -1411,7 +1421,7 @@ function AddressSearch({ value, onChange, picked, onPick, compact }) {
               placeItems: "center", fontSize: 13, color: C.onPush, fontWeight: 900, flexShrink: 0 }}><Icon e="check" s={13} /></span>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ font: `700 14px ${FB}`, color: C.ice }}>{picked.line1}</div>
-              <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 1 }}>
+              <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 1 }}>
                 {picked.city}, {picked.state} {picked.zip}</div>
             </div>
             <button onClick={() => { onChange(""); onPick(null); }}
@@ -1507,7 +1517,7 @@ function Onboarding() {
               color: C.mist, font: `600 14px ${FB}`, padding: 12, WebkitTapHighlightColor: "transparent" }}>
             I want to plow &amp; earn →
           </button>
-          <p style={{ font: `500 12px ${FB}`, color: C.mistDim, marginTop: 4, textAlign: "center" }}>
+          <p style={{ font: `500 13px ${FB}`, color: C.mistDim, marginTop: 4, textAlign: "center" }}>
             Setup takes about a minute · no commitment
           </p>
         </Fade>
@@ -1752,6 +1762,11 @@ function ServiceTile({ icon, title, sub, onClick, disabled, tone }) {
   );
 }
 
+// Small frosted chip that sits on the satellite photo.
+const heroChip = (tint) => ({ display: "inline-flex", alignItems: "center", gap: 4, padding: "4px 9px", borderRadius: 999,
+  font: `600 12px ${FB}`, color: tint || "#fff", background: "rgba(8,10,14,.6)", border: "1px solid rgba(255,255,255,.18)",
+  backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)" });
+
 function RiderHome({ go }) {
   const { state, dispatch } = useStore();
   const LIVE = isLive(state);
@@ -1759,6 +1774,8 @@ function RiderHome({ go }) {
   const [jobType, setJobType] = useState("driveway");
   const [showSched, setShowSched] = useState(false);
   const [schedAt, setSchedAt] = useState(null); // { when, label } — null = as soon as possible
+  const [adjust, setAdjust] = useState(false);     // price / schedule drawer
+  const [depthOpen, setDepthOpen] = useState(false);
   const [salt, setSalt] = useState(false);
   const [showBreak, setShowBreak] = useState(false); // breakdown one tap away — keeps the card calm
   const [payOpen, setPayOpen] = useState(false);    // Stripe authorization sheet (only when keys are set)
@@ -1939,7 +1956,7 @@ function RiderHome({ go }) {
 
   return (
     <Fade k="home"><section style={{ paddingTop: 10, paddingBottom: 28 }}>
-      <h1 style={{ font: `800 35px/1.1 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice, margin: "4px 0 18px" }}>
+      <h1 style={{ ...H(30), color: C.ice, margin: "6px 0 18px" }}>
         {greet}{first ? `, ${first}` : ""}</h1>
 
       {/* One notice at a time, most important first: hazards → get the app → snow forecast. */}
@@ -1962,45 +1979,43 @@ function RiderHome({ go }) {
 
       {/* ---- THE primary action: your saved place + one button (Uber "Home" / DoorDash reorder) ---- */}
       {prop ? (
-        <div style={{ marginTop: 4, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 20,
-          padding: 8, boxShadow: E.low }}>
-          {/* map of the property */}
-          <div style={{ borderRadius: 14, overflow: "hidden", position: "relative" }}>
+        <div style={{ marginTop: 4, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 24, overflow: "hidden", boxShadow: E.mid }}>
+          {/* hero: their actual driveway from above */}
+          <div style={{ position: "relative", height: 178, background: C.mapBg }}>
             {prop.mapImg ? (
-              <img src={prop.mapImg} alt="" style={{ width: "100%", height: 150, objectFit: "cover", display: "block" }} />
+              <img src={prop.mapImg} alt={`Satellite view of ${prop.addr || "your property"}`} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
             ) : MAP_ENABLED && prop.center ? (
-              <LiveMap center={prop.center} height={150} interactive={false} markers={[
-                { lng: prop.center.lng, lat: prop.center.lat, size: 26 },
-                ...(LIVE ? [] : [
-                  { lng: prop.center.lng + 0.0034, lat: prop.center.lat + 0.0016, size: 22, kind: "truck" },
-                  { lng: prop.center.lng - 0.0041, lat: prop.center.lat - 0.0025, size: 22, kind: "truck" }]),
-              ]} />
+              <LiveMap center={prop.center} height={178} interactive={false} markers={[{ lng: prop.center.lng, lat: prop.center.lat, size: 26 }]} />
             ) : (
-              <StormMap pin blips={LIVE ? [] : [{ id: 1, x: 62, y: 38 }, { id: 2, x: 30, y: 64 }]} height={2.5} />
+              <StormMap pin blips={LIVE ? [] : [{ id: 1, x: 62, y: 38 }, { id: 2, x: 30, y: 64 }]} height={2.1} />
             )}
+            <div style={{ position: "absolute", inset: 0, pointerEvents: "none",
+              background: "linear-gradient(180deg, rgba(5,7,10,.05) 30%, rgba(5,7,10,.82) 100%)" }} />
+            <button onClick={() => go("props")} style={{ position: "absolute", top: 10, right: 10, minHeight: 34, padding: "0 12px",
+              borderRadius: 999, border: "1px solid rgba(255,255,255,.22)", background: "rgba(8,10,14,.55)", color: "#fff",
+              backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", font: `600 13px ${FB}`, cursor: "pointer",
+              display: "flex", alignItems: "center", gap: 6 }}><Icon e="edit" s={13} /> Edit</button>
+            <div style={{ position: "absolute", left: 14, right: 14, bottom: 12, color: "#fff" }}>
+              <div style={{ font: `600 17px/1.2 ${FB}`, textShadow: "0 1px 8px rgba(0,0,0,.5)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {prop.addr || prop.label}</div>
+              <div style={{ display: "flex", gap: 6, marginTop: 7, flexWrap: "wrap" }}>
+                {sqft > 0 && <span style={heroChip()}>{sqft.toLocaleString()} sq ft</span>}
+                {prop.grade && prop.grade !== "flat" && <span style={heroChip()}>{MODIFIERS.grade[prop.grade].label}</span>}
+                {hazardsChecked(prop)
+                  ? <span style={heroChip("#3DDC84")}><Icon e="check" s={11} strokeWidth={2.6} /> {hazardLabels(prop).length ? `${hazardLabels(prop).length} hazard${hazardLabels(prop).length > 1 ? "s" : ""} marked` : "Hazards checked"}</span>
+                  : <span style={heroChip("#FF8A80")}>Hazards not marked</span>}
+              </div>
+            </div>
           </div>
 
-          <div style={{ padding: "12px 8px 6px" }}>
-            {/* place row */}
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div style={{ width: 34, height: 34, borderRadius: "50%", background: C.night2, color: C.ice,
-                display: "grid", placeItems: "center", flexShrink: 0 }}><Icon e="home" s={17} /></div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ font: `600 16px ${FB}`, color: C.ice }}>{prop.label}</div>
-                <div style={{ font: `400 13px ${FB}`, color: C.mist, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {prop.addr}{modActive && prop.grade && prop.grade !== "flat" ? ` · ${MODIFIERS.grade[prop.grade].label.toLowerCase()}` : ""}</div>
-              </div>
-              <button onClick={() => go("props")} style={{ background: "none", border: "none", cursor: "pointer",
-                font: `600 14px ${FB}`, color: C.plow, padding: "6px 4px", WebkitTapHighlightColor: "transparent" }}>Edit</button>
-            </div>
-
+          <div style={{ padding: "14px 16px 16px" }}>
             {/* what to clear */}
-            <div style={{ display: "flex", background: C.night2, borderRadius: 11, padding: 3, marginTop: 14 }}>
+            <div style={{ display: "flex", background: C.night2, borderRadius: 12, padding: 3 }}>
               {SERVICES.map(([id, label]) => {
                 const on = jobType === id;
                 return (
-                  <button key={id} onClick={() => setJobType(id)} style={{ flex: 1, minHeight: 36, border: "none", borderRadius: 9,
-                    cursor: "pointer", font: `600 13px ${FB}`, color: on ? C.ice : C.mist,
+                  <button key={id} onClick={() => setJobType(id)} style={{ flex: 1, minHeight: 38, border: "none", borderRadius: 10,
+                    cursor: "pointer", font: `600 14px ${FB}`, color: on ? C.ice : C.mist,
                     background: on ? C.slate2 : "transparent", boxShadow: on ? E.low : "none",
                     transition: `background .2s ${EASE}`, WebkitTapHighlightColor: "transparent" }}>{label}</button>
                 );
@@ -2008,124 +2023,48 @@ function RiderHome({ go }) {
             </div>
 
             {needsOutline ? (
-              <div style={{ padding: "18px 2px 4px" }}>
-                <div style={{ font: `600 15px ${FB}`, color: C.ice }}>Outline this area to get a price</div>
-                <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 4, marginBottom: 14 }}>
-                  Your square footage sets a suggested offer — you choose the final number. We'll place a starting outline for you.</div>
+              <div style={{ padding: "18px 2px 2px" }}>
+                <div style={{ font: `600 16px ${FB}`, color: C.ice }}>Outline this area to get a price</div>
+                <div style={{ font: `400 14px/1.45 ${FB}`, color: C.mist, marginTop: 4, marginBottom: 14 }}>
+                  We'll place a starting outline for you. Your square footage sets a suggested price — you choose the final number.</div>
                 <Btn full onClick={() => go("props")}>Map it</Btn>
               </div>
             ) : (
               <>
-                {/* snow on the ground — deeper snow suggests a higher price */}
-                {!NO_DEPTH.includes(jobType) && (
-                  <div style={{ marginTop: 18 }}>
-                    <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
-                      <div style={{ font: `600 15px ${FB}`, color: C.ice }}>How much snow?</div>
-                      {depthNote && !depthTouched.current && <div style={{ font: `400 12px ${FB}`, color: C.mistDim }}>{depthNote}</div>}
-                    </div>
-                    <div role="radiogroup" aria-label="Snow depth" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, marginTop: 8 }}>
+                {/* the answer: one price */}
+                <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, marginTop: 18 }}>
+                  <div>
+                    <div style={{ font: `500 13px ${FB}`, color: C.mist }}>{tierId === "custom" ? "Your price" : `${(OFFER_TIERS.find(t => t.id === tierId) || OFFER_TIERS[1]).label} price`}</div>
+                    <div style={{ font: `800 58px/.92 ${FD}`, color: C.ice, letterSpacing: "-.005em", marginTop: 4 }} aria-live="polite">${animPrice}</div>
+                  </div>
+                  {!NO_DEPTH.includes(jobType) && (
+                    <button onClick={() => setDepthOpen(v => !v)} aria-expanded={depthOpen} aria-label={`Snow depth: ${depthById(depth).label}. Change`} style={{ display: "flex", alignItems: "center", gap: 7,
+                      minHeight: 40, padding: "0 12px", borderRadius: 999, cursor: "pointer", marginBottom: 4,
+                      background: depthOpen ? C.amber + "18" : C.night2, border: `1px solid ${depthOpen ? C.amber : C.line}`,
+                      color: C.ice, font: `600 13.5px ${FB}`, WebkitTapHighlightColor: "transparent" }}>
+                      <Icon e="snowflake" s={14} color={C.amber} /> {depthById(depth).label} snow
+                      <span style={{ display: "flex", color: C.mist, transform: depthOpen ? "rotate(180deg)" : "none", transition: "transform .2s" }}><Icon e="chevrondown" s={13} /></span>
+                    </button>
+                  )}
+                </div>
+                <div style={{ font: `400 13.5px ${FB}`, color: C.mist, marginTop: 8 }}>
+                  ~{q.mins} min on site · charged when it's done · <span style={{ color: C.push, fontWeight: 600 }}>no contract</span></div>
+
+                {depthOpen && !NO_DEPTH.includes(jobType) && (
+                  <div style={{ marginTop: 12, animation: "fadeIn .18s ease" }}>
+                    <div role="radiogroup" aria-label="Snow depth" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
                       {DEPTHS.map(d => {
                         const on = depth === d.id;
                         return (
-                          <button key={d.id} role="radio" aria-checked={on} onClick={() => setDepth(d.id)}
-                            style={{ minHeight: 40, borderRadius: 11, cursor: "pointer", font: `600 13px ${FB}`,
-                              color: on ? C.amber : C.mist, background: on ? C.amber + "16" : C.night2,
+                          <button key={d.id} role="radio" aria-checked={on} onClick={() => { setDepth(d.id); setDepthOpen(false); }}
+                            style={{ minHeight: 44, borderRadius: 12, cursor: "pointer", font: `600 14px ${FB}`,
+                              color: on ? C.amber : C.ice, background: on ? C.amber + "16" : C.night2,
                               border: `1.5px solid ${on ? C.amber : "transparent"}`, WebkitTapHighlightColor: "transparent" }}>{d.label}</button>
                         );
                       })}
                     </div>
-                  </div>
-                )}
-                {/* name your price — tiers are recommendations, not the price */}
-                <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginTop: 18, gap: 10 }}>
-                  <div style={{ font: `600 15px ${FB}`, color: C.ice }}>Name your price</div>
-                  <div style={{ font: `400 12.5px ${FB}`, color: C.mistDim, whiteSpace: "nowrap" }}>{basisLine.replace("per plow · ", "")}</div>
-                </div>
-                <div style={{ font: `400 13px/1.45 ${FB}`, color: C.mist, marginTop: 4 }}>
-                  <span style={{ color: C.ice, fontWeight: 600 }}>Suggested prices</span> for your {jt.basis === "area" ? "driveway size" : jt.basis === "linear" ? "walkway length" : "job"}. Pick one, or type any price you want.</div>
-                <div role="radiogroup" aria-label="Offer" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 10 }}>
-                  {qRec.tiers.map(t => {
-                    const on = tierId === t.id;
-                    return (
-                      <button key={t.id} role="radio" aria-checked={on} onClick={() => setOffer(t.offer)}
-                        style={{ textAlign: "left", cursor: "pointer", padding: "10px 10px 9px", borderRadius: 13,
-                          background: on ? C.amber + "16" : C.night2, border: `1.5px solid ${on ? C.amber : "transparent"}`,
-                          transition: `background .15s, border-color .15s`, WebkitTapHighlightColor: "transparent" }}>
-                        <div style={{ font: `600 12px ${FB}`, color: on ? C.amber : C.mist }}>{t.label}</div>
-                        <div style={{ font: `800 24px/1.15 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice, marginTop: 3 }}>${t.offer}</div>
-                        <div style={{ font: `400 11.5px ${FB}`, color: C.mistDim, marginTop: 1 }}>{t.note}</div>
-                      </button>
-                    );
-                  })}
-                </div>
-                {/* custom amount */}
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 8,
-                  background: C.night2, borderRadius: 13, padding: "6px 6px 6px 14px",
-                  border: `1.5px solid ${tierId === "custom" ? C.amber : "transparent"}` }}>
-                  <span style={{ font: `500 13px ${FB}`, color: tierId === "custom" ? C.ice : C.mist }}>
-                    {tierId === "custom" ? "Your price" : "Or type your own price"}</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                    <button onClick={() => bump(-OFFER_STEP)} aria-label="Lower offer" disabled={q.offer <= OFFER_MIN}
-                      style={{ ...miniBtn, width: 38, minHeight: 38, padding: 0, borderRadius: 10, opacity: q.offer <= OFFER_MIN ? .4 : 1 }}><Icon e="minus" s={16} /></button>
-                    <label style={{ display: "flex", alignItems: "center", justifyContent: "center", minWidth: 64, height: 38,
-                      borderRadius: 10, background: C.slate, border: `1px solid ${C.line}`, cursor: "text", padding: "0 6px" }}>
-                      <span style={{ font: `800 20px ${FD}`, color: C.mist }}>$</span>
-                      <input type="text" inputMode="numeric" pattern="[0-9]*" aria-label="Your price in dollars"
-                        value={typing ?? String(q.offer)}
-                        onFocus={(e) => { setTyping(String(q.offer)); e.target.select(); }}
-                        onChange={(e) => {
-                          const v = e.target.value.replace(/\D/g, "").slice(0, 3);
-                          setTyping(v);
-                          const n = parseInt(v, 10);
-                          if (n >= OFFER_MIN) setOffer(Math.min(OFFER_MAX, n));
-                        }}
-                        onBlur={() => {
-                          const n = parseInt(typing, 10);
-                          if (n) setOffer(Math.min(OFFER_MAX, Math.max(OFFER_MIN, n)));
-                          setTyping(null);
-                        }}
-                        onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-                        style={{ width: `${Math.max(2, String(typing ?? q.offer).length)}ch`, border: "none", outline: "none",
-                          background: "transparent", padding: 0, font: `800 20px ${FD}`, color: C.ice, textAlign: "center" }} />
-                    </label>
-                    <button onClick={() => bump(OFFER_STEP)} aria-label="Raise offer"
-                      style={{ ...miniBtn, width: 38, minHeight: 38, padding: 0, borderRadius: 10 }}><Icon e="plus" s={16} /></button>
-                  </div>
-                </div>
-                {q.low && (
-                  <div role="note" style={{ display: "flex", gap: 9, alignItems: "flex-start", marginTop: 8, padding: "10px 12px",
-                    borderRadius: 12, background: C.amber + "12", border: `1px solid ${C.amber}40` }}>
-                    <span style={{ color: C.amber, display: "flex", marginTop: 1 }}><Icon e="warning" s={15} /></span>
-                    <span style={{ font: `400 13px/1.45 ${FB}`, color: C.mist }}>
-                      Offers under ${qRec.standardOffer} can take longer to get picked up — drivers choose which jobs to accept, especially mid-storm.</span>
-                  </div>
-                )}
-
-                {/* total */}
-                <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginTop: 16, gap: 12 }}>
-                  <div>
-                    <div style={{ font: `800 35px/1 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice }}>${animPrice}</div>
-                    <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 6 }}>total · ~{q.mins} min on site</div>
-                  </div>
-                  <div style={{ textAlign: "right", font: `400 13px/1.5 ${FB}`, color: C.mist }}>
-                    Charged when done<br /><span style={{ color: C.push, fontWeight: 600 }}>No contract</span></div>
-                </div>
-
-                <button onClick={() => setShowBreak(v => !v)} style={{ width: "100%", background: "none", border: "none",
-                  cursor: "pointer", padding: "12px 0 4px", display: "flex", alignItems: "center", gap: 6,
-                  font: `500 13px ${FB}`, color: C.mist, WebkitTapHighlightColor: "transparent" }}>
-                  What's in the total
-                  <span style={{ display: "flex", transform: showBreak ? "rotate(180deg)" : "none", transition: "transform .2s" }}><Icon e="chevrondown" s={14} /></span>
-                </button>
-                {showBreak && (
-                  <div style={{ animation: "fadeIn .2s ease", padding: "4px 0 2px" }}>
-                    <Row label="Your offer" value={`$${q.offer}`} />
-                    <Row label="Driver call-out fee (all to your driver)" value={`$${CALLOUT_FEE}`} />
-                    <Row label="DRIFT booking fee" value={`$${DRIFT_FEE}`} />
-                    <div style={{ height: 1, background: C.line, margin: "8px 0" }} />
-                    <Row label="Total" value={`$${q.riderTotal}`} big />
-                    <div style={{ font: `400 12px/1.45 ${FB}`, color: C.mistDim, marginTop: 6 }}>
-                      Suggested offers are based on {jt.basis === "area" ? `${sqft.toLocaleString()} sq ft` : jt.basis === "linear" ? `~${linearFt} ft of walk` : "the job"}{q.depthMult > 1 ? `, ${q.depthLabel} of snow` : ""}{modActive ? " and your property's slope and hazards" : ""}. Tips are optional and go 100% to your driver.</div>
+                    <div style={{ font: `400 12.5px ${FB}`, color: C.mistDim, marginTop: 7 }}>
+                      {depthNote && !depthTouched.current ? `${depthNote} · ` : ""}Deeper snow is a bigger job, so the suggested price goes up.</div>
                   </div>
                 )}
 
@@ -2133,27 +2072,120 @@ function RiderHome({ go }) {
                   <div role="note" style={{ display: "flex", gap: 9, alignItems: "flex-start", marginTop: 14, padding: "11px 13px",
                     borderRadius: 12, background: C.danger + "10", border: `1px solid ${C.danger}40` }}>
                     <span style={{ color: C.danger, display: "flex", marginTop: 1 }}><Icon e="cone" s={15} /></span>
-                    <span style={{ font: `400 13px/1.45 ${FB}`, color: C.mist }}>
-                      <span style={{ color: C.ice, fontWeight: 600 }}>One-time step:</span> mark curbs, raised concrete, well caps and septic on your map so your driver knows what's under the snow.</span>
+                    <span style={{ font: `400 13.5px/1.45 ${FB}`, color: C.mist }}>
+                      <span style={{ color: C.ice, fontWeight: 600 }}>One-time step:</span> mark curbs, raised concrete, well caps and septic so your driver knows what's under the snow.</span>
                   </div>
                 )}
                 {schedAt && !needsHazards && (
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 14, padding: "10px 12px", borderRadius: 12,
-                    background: C.amber + "12", border: `1px solid ${C.amber}55`, font: `500 13.5px ${FB}`, color: C.ice }}>
-                    <Icon e="calendar" s={15} color={C.amber} /> <span>Scheduled for <b>{schedAt.label}</b> · drivers claim it ahead of time</span>
+                    background: C.amber + "12", border: `1px solid ${C.amber}55`, font: `500 14px ${FB}`, color: C.ice }}>
+                    <Icon e="calendar" s={15} color={C.amber} /> <span style={{ flex: 1 }}>Scheduled for <b>{schedAt.label}</b></span>
+                    <button onClick={() => setSchedAt(null)} aria-label="Book now instead" style={{ background: "none", border: "none", color: C.mist, cursor: "pointer", padding: 4, display: "flex" }}><Icon e="close" s={15} /></button>
                   </div>
                 )}
+
                 {/* the one button */}
-                <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                <div style={{ marginTop: 16 }}>
                   {needsHazards
                     ? <Btn full onClick={markHazards}>Mark hazards to book · 1 min</Btn>
-                    : <Btn full onClick={guard(startRequest)} id="send-offer">{schedAt ? `Schedule · $${animPrice}` : `Send offer · $${animPrice}`}</Btn>}
-                  {!needsHazards && <button onClick={() => (schedAt ? setSchedAt(null) : setShowSched(true))} aria-label={schedAt ? "Book now instead" : "Schedule for later"}
-                    style={{ ...miniBtn, minHeight: TAP, width: TAP, padding: 0, borderRadius: 14, ...(schedAt ? { color: C.amber, borderColor: C.amber } : {}) }}>
-                    <Icon e={schedAt ? "close" : "calendar"} s={19} /></button>}
+                    : <Btn full onClick={guard(startRequest)} id="send-offer" style={{ minHeight: 58, fontSize: 17 }}>
+                        {schedAt ? `Schedule plow · $${animPrice}` : jobType === "sidewalk" ? `Clear my sidewalk · $${animPrice}` : `Plow my driveway · $${animPrice}`}</Btn>}
                 </div>
-                <p style={{ font: `400 12.5px/1.5 ${FB}`, color: C.mistDim, textAlign: "center", margin: "10px 6px 4px" }}>
-                  You're only charged once it's done. Booking connects you with an independent operator under our{" "}
+
+                {/* everything else, one tap away */}
+                {!needsHazards && (
+                  <button onClick={() => setAdjust(v => !v)} aria-expanded={adjust} style={{ width: "100%", background: "none", border: "none",
+                    cursor: "pointer", padding: "14px 0 2px", display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                    font: `600 14px ${FB}`, color: C.mist, WebkitTapHighlightColor: "transparent" }}>
+                    {adjust ? "Done adjusting" : "Change price or schedule for later"}
+                    <span style={{ display: "flex", transform: adjust ? "rotate(180deg)" : "none", transition: "transform .2s" }}><Icon e="chevrondown" s={14} /></span>
+                  </button>
+                )}
+                {adjust && !needsHazards && (
+                  <div style={{ marginTop: 10, paddingTop: 14, borderTop: `1px solid ${C.lineSoft}`, animation: "fadeIn .2s ease" }}>
+                    <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
+                      <div style={{ font: `600 15px ${FB}`, color: C.ice }}>Suggested prices</div>
+                      <div style={{ font: `400 13px ${FB}`, color: C.mistDim, whiteSpace: "nowrap" }}>{basisLine.replace("per plow · ", "")}</div>
+                    </div>
+                    <div style={{ font: `400 13.5px/1.45 ${FB}`, color: C.mist, marginTop: 3 }}>Pick one, or type any price you want — drivers choose which jobs to take.</div>
+                    <div role="radiogroup" aria-label="Offer" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 10 }}>
+                      {qRec.tiers.map(t => {
+                        const on = tierId === t.id;
+                        return (
+                          <button key={t.id} role="radio" aria-checked={on} onClick={() => setOffer(t.offer)}
+                            style={{ textAlign: "left", cursor: "pointer", padding: "10px 10px 9px", borderRadius: 13,
+                              background: on ? C.amber + "16" : C.night2, border: `1.5px solid ${on ? C.amber : "transparent"}`,
+                              transition: `background .15s, border-color .15s`, WebkitTapHighlightColor: "transparent" }}>
+                            <div style={{ font: `600 13px ${FB}`, color: on ? C.amber : C.mist }}>{t.label}</div>
+                            <div style={{ font: `800 26px/1.1 ${FD}`, color: C.ice, marginTop: 3 }}>${t.offer + CALLOUT_FEE + DRIFT_FEE}</div>
+                            <div style={{ font: `400 13px ${FB}`, color: C.mistDim, marginTop: 1 }}>{t.note}</div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {/* custom amount */}
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 8,
+                      background: C.night2, borderRadius: 13, padding: "6px 6px 6px 14px",
+                      border: `1.5px solid ${tierId === "custom" ? C.amber : "transparent"}` }}>
+                      <span style={{ font: `500 14px ${FB}`, color: tierId === "custom" ? C.ice : C.mist }}>
+                        {tierId === "custom" ? "Your offer" : "Or type your own"}</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <button onClick={() => bump(-OFFER_STEP)} aria-label="Lower offer" disabled={q.offer <= OFFER_MIN}
+                          style={{ ...miniBtn, width: 40, minHeight: 40, padding: 0, borderRadius: 11, opacity: q.offer <= OFFER_MIN ? .4 : 1 }}><Icon e="minus" s={16} /></button>
+                        <label style={{ display: "flex", alignItems: "center", justifyContent: "center", minWidth: 66, height: 40,
+                          borderRadius: 11, background: C.slate, border: `1px solid ${C.line}`, cursor: "text", padding: "0 6px" }}>
+                          <span style={{ font: `800 20px ${FD}`, color: C.mist }}>$</span>
+                          <input type="text" inputMode="numeric" pattern="[0-9]*" aria-label="Your price in dollars"
+                            value={typing ?? String(q.offer)}
+                            onFocus={(e) => { setTyping(String(q.offer)); e.target.select(); }}
+                            onChange={(e) => {
+                              const v = e.target.value.replace(/\D/g, "").slice(0, 3);
+                              setTyping(v);
+                              const n = parseInt(v, 10);
+                              if (n >= OFFER_MIN) setOffer(Math.min(OFFER_MAX, n));
+                            }}
+                            onBlur={() => {
+                              const n = parseInt(typing, 10);
+                              if (n) setOffer(Math.min(OFFER_MAX, Math.max(OFFER_MIN, n)));
+                              setTyping(null);
+                            }}
+                            onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                            style={{ width: `${Math.max(2, String(typing ?? q.offer).length)}ch`, border: "none", outline: "none",
+                              background: "transparent", padding: 0, font: `800 20px ${FD}`, color: C.ice, textAlign: "center" }} />
+                        </label>
+                        <button onClick={() => bump(OFFER_STEP)} aria-label="Raise offer"
+                          style={{ ...miniBtn, width: 40, minHeight: 40, padding: 0, borderRadius: 11 }}><Icon e="plus" s={16} /></button>
+                      </div>
+                    </div>
+                    {q.low && (
+                      <div role="note" style={{ display: "flex", gap: 9, alignItems: "flex-start", marginTop: 8, padding: "10px 12px",
+                        borderRadius: 12, background: C.amber + "12", border: `1px solid ${C.amber}40` }}>
+                        <span style={{ color: C.amber, display: "flex", marginTop: 1 }}><Icon e="warning" s={15} /></span>
+                        <span style={{ font: `400 13.5px/1.45 ${FB}`, color: C.mist }}>
+                          Prices under ${qRec.standardOffer + CALLOUT_FEE + DRIFT_FEE} can take longer to get picked up — drivers choose which jobs to accept, especially mid-storm.</span>
+                      </div>
+                    )}
+
+                    {/* schedule */}
+                    <button onClick={() => (schedAt ? setSchedAt(null) : setShowSched(true))} aria-label={schedAt ? "Book now instead" : "Schedule for later"}
+                      style={{ ...miniBtn, width: "100%", minHeight: 48, marginTop: 12, justifyContent: "center", gap: 8, fontSize: 14.5,
+                        ...(schedAt ? { color: C.amber, borderColor: C.amber } : {}) }}>
+                      <Icon e={schedAt ? "close" : "calendar"} s={16} /> {schedAt ? `Scheduled ${schedAt.label} — book now instead` : "Schedule for later (pick a 2-hour window)"}</button>
+
+                    {/* what's in the total */}
+                    <div style={{ marginTop: 14, padding: "12px 14px", borderRadius: 14, background: C.night2 }}>
+                      <Row label="Your offer to the driver" value={`$${q.offer}`} />
+                      <Row label="Call-out fee (all to your driver)" value={`$${CALLOUT_FEE}`} />
+                      <Row label="DRIFT booking fee" value={`$${DRIFT_FEE}`} />
+                      <div style={{ height: 1, background: C.line, margin: "8px 0" }} />
+                      <Row label="Total" value={`$${q.riderTotal}`} big />
+                      <div style={{ font: `400 12.5px/1.45 ${FB}`, color: C.mistDim, marginTop: 6 }}>
+                        Based on {jt.basis === "area" ? `${sqft.toLocaleString()} sq ft` : jt.basis === "linear" ? `~${linearFt} ft of walk` : "the job"}{q.depthMult > 1 ? `, ${q.depthLabel} of snow` : ""}{modActive ? " and your property's slope and hazards" : ""}. Tips are optional and go 100% to your driver.</div>
+                    </div>
+                  </div>
+                )}
+                <p style={{ font: `400 12.5px/1.5 ${FB}`, color: C.mistDim, textAlign: "center", margin: "12px 6px 0" }}>
+                  Booking connects you with an independent local operator under our{" "}
                   <button onClick={() => setDoc("customerTerms")} style={legalLink}>Terms</button> and{" "}
                   <button onClick={() => setDoc("customerRelease")} style={legalLink}>Release</button>.</p>
               </>
@@ -2164,7 +2196,7 @@ function RiderHome({ go }) {
         <div style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 20, padding: 20 }}>
           <div style={{ width: 44, height: 44, borderRadius: 12, background: C.amber + "1F", color: C.amber,
             display: "grid", placeItems: "center", marginBottom: 14 }}><Icon e="home" s={22} /></div>
-          <div style={{ font: `800 24px ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice }}>Add your driveway</div>
+          <div style={{ ...H(22), color: C.ice }}>Add your driveway</div>
           <div style={{ font: `400 14px/1.5 ${FB}`, color: C.mist, margin: "6px 0 18px" }}>
             Search your address and we'll place a starting outline. Takes about a minute — then it's one tap every storm.</div>
           <Btn full onClick={() => go("props")}>Add my driveway</Btn>
@@ -2189,10 +2221,10 @@ function RiderHome({ go }) {
           <div style={{ maxWidth: 440, margin: "0 auto", padding: "10px 20px", display: "flex", alignItems: "center", gap: 12 }}>
             <div style={{ minWidth: 0 }}>
               <div style={{ font: `800 26px/1 ${FD}`, color: C.ice }}>${q.riderTotal}</div>
-              <div style={{ font: `400 12px ${FB}`, color: C.mist, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                 {schedAt ? schedAt.label : jt.label}{q.depthMult > 1 ? ` · ${q.depthLabel}` : ""}</div>
             </div>
-            <Btn full onClick={guard(startRequest)} style={{ minHeight: 50 }}>{schedAt ? "Schedule" : "Send offer"}</Btn>
+            <Btn full onClick={guard(startRequest)} style={{ minHeight: 50 }}>{schedAt ? "Schedule plow" : "Book now"}</Btn>
           </div>
         </div>
       )}
@@ -2231,7 +2263,7 @@ function ScheduleSheet({ onClose, onPick, price }) {
   return (
     <Sheet onClose={onClose}>
       <Eyebrow>Schedule a plow</Eyebrow>
-      <h2 style={{ font: `800 31px ${FD}`, textTransform: "uppercase", margin: "8px 0 4px" }}>When should we come?</h2>
+      <h2 style={{ ...H(26), margin: "8px 0 4px" }}>When should we come?</h2>
       <p style={{ ...sub, marginBottom: 14 }}>Pick a 2-hour window. Your card is held now and charged only after it's plowed.</p>
       <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4, marginBottom: 14, WebkitOverflowScrolling: "touch" }}>
         {days.map((d, i) => {
@@ -2310,7 +2342,7 @@ function PayForm({ amount, jobId, onAuthorized, onClose, scheduled }) {
       <div style={{ marginTop: 16 }}>
         <Btn full onClick={pay} disabled={busy || !stripe}>{busy ? "Holding…" : scheduled ? `Hold $${amount} and schedule` : `Hold $${amount} and send offer`}</Btn>
       </div>
-      <p style={{ font: `500 11px ${FB}`, color: C.mistDim, textAlign: "center", marginTop: 10 }}>
+      <p style={{ font: `500 13px ${FB}`, color: C.mistDim, textAlign: "center", marginTop: 10 }}>
         Charged only when the job is done. Payments secured by Stripe.
       </p>
     </div>
@@ -2399,7 +2431,7 @@ function JobChat({ jobId, senderId, peerName, seed }) {
       <Eyebrow>Message {peerName}</Eyebrow>
       <div style={{ marginTop: 8, background: C.night2, border: `1px solid ${C.line}`, borderRadius: 12, padding: 12, maxHeight: 150, overflowY: "auto" }}>
         {msgs.length === 0 ? (
-          <div style={{ font: `500 12px ${FB}`, color: C.mistDim, textAlign: "center", padding: "6px 0" }}>Say hi <Icon e="wave" s={12} /></div>
+          <div style={{ font: `500 13px ${FB}`, color: C.mistDim, textAlign: "center", padding: "6px 0" }}>Say hi <Icon e="wave" s={12} /></div>
         ) : msgs.map((m, i) => (
           <div key={m.id || i} style={{ display: "flex", justifyContent: m.me ? "flex-end" : "flex-start", marginBottom: 6 }}>
             <span style={{ font: `500 13px ${FB}`, background: m.me ? C.amber : C.slate, color: m.me ? C.onAmber : C.ice,
@@ -2456,7 +2488,7 @@ function NotificationSheet({ onClose }) {
   return (
     <Sheet onClose={onClose}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
-        <div><Eyebrow>Activity</Eyebrow><h3 style={{ font: `800 28px ${FD}`, textTransform: "uppercase", margin: "6px 0 0" }}>Notifications</h3></div>
+        <div><Eyebrow>Activity</Eyebrow><h3 style={{ ...H(24), margin: "6px 0 0" }}>Notifications</h3></div>
         {list.some(n => !n.read) && (
           <button onClick={() => dispatch({ type: "NOTIF_READ" })} style={{ ...miniBtn, padding: "7px 12px" }}>Mark all read</button>
         )}
@@ -2482,7 +2514,7 @@ function NotificationSheet({ onClose }) {
                   <span style={{ font: `700 13px ${FB}`, color: C.ice }}>{n.title}</span>
                   <span style={{ font: `500 10px ${FB}`, color: C.mistDim, flexShrink: 0 }}>{timeAgo(n.ts)}</span>
                 </div>
-                {n.body && <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 3, lineHeight: 1.35 }}>{n.body}</div>}
+                {n.body && <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 3, lineHeight: 1.35 }}>{n.body}</div>}
               </div>
               {!n.read && <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.amber, flexShrink: 0, marginTop: 6 }} />}
             </button>
@@ -2677,7 +2709,9 @@ function RiderTracking() {
   const liveArrived = o.state === "plowing";
   const shownArrived = LIVE ? liveArrived : arrived;
   const stage = finding ? 0 : shownArrived ? 2 : 1;         // 0 sent · 1 on the way · 2 plowing · 3 done
-  const big = finding ? "Finding your plow" : shownArrived ? "Plowing now" : LIVE ? "On the way" : `${Math.max(1, Math.ceil(eta))} min`;
+  // Live: real distance + drive time from the driver's phone to your driveway.
+  const liveEta = LIVE && !finding && !shownArrived && ahead === 0 && driverLL && trackCenter ? driveEstimate(driverLL, trackCenter) : null;
+  const big = finding ? "Finding your plow" : shownArrived ? "Plowing now" : LIVE ? (liveEta ? `${liveEta.mins} min` : ahead > 0 ? "You're next" : "On the way") : `${Math.max(1, Math.ceil(eta))} min`;
   const line = finding ? (LIVE ? (needsCard ? "Hold your card to send your offer to drivers"
         : !o.jobId ? "Sending your offer…"
         : dibsMs > 0 ? `Sent to your favorite driver${favCount === 1 ? "" : "s"} first · everyone else sees it in ${Math.floor(dibsMs / 60000)}:${String(Math.floor(dibsMs / 1000) % 60).padStart(2, "0")}`
@@ -2685,16 +2719,46 @@ function RiderTracking() {
       : "Sent to plows near you — usually under 2 minutes")
     : shownArrived ? `${first} is clearing ${o.property?.label?.toLowerCase() === "home" ? "your driveway" : (o.property?.label || "your property")}`
     : ahead > 0 ? `${first} is finishing ${ahead} job${ahead > 1 ? "s" : ""} first, then heading to you`
-    : `${first} is on the way`;
+    : liveEta ? `${first} is ${miText(liveEta.mi)} away` : `${first} is on the way`;
 
   return (
     <section style={{ paddingTop: 10, paddingBottom: 28 }}>
-      {/* map first — it's what people actually look at */}
-      <div style={{ borderRadius: 20, overflow: "hidden", border: `1px solid ${C.line}` }}>
+      {/* one big answer, one line (Uber / DoorDash) */}
+      <div style={{ padding: "14px 2px 0" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 7, font: `500 12px ${FM}`, letterSpacing: ".1em", textTransform: "uppercase",
+          color: finding ? C.amber : shownArrived ? C.push : C.plow }}>
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: "currentColor", animation: "pulse 1.6s ease-in-out infinite" }} />
+          {finding ? "Finding a driver" : shownArrived ? "On site" : "On the way"}</div>
+        <div style={{ font: `800 ${finding || shownArrived || !/min$/.test(big) ? 42 : 64}px/.92 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice, marginTop: 8 }}>{big}</div>
+        <div style={{ font: `400 15.5px/1.4 ${FB}`, color: C.mist, marginTop: 8 }}>{line}</div>
+      </div>
+
+      {/* your driver, up top */}
+      {!finding && (
+        <div style={{ marginTop: 16, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 18, padding: "12px 12px 12px 14px",
+          display: "flex", gap: 12, alignItems: "center" }}>
+          <Avatar name={d.name} size={48} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ font: `600 16px ${FB}`, color: C.ice }}>{d.name}</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 3, font: `400 13.5px ${FB}`, color: C.mist, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {d.rating && <span style={{ color: C.amber, display: "flex" }}><Icon e="star" s={12} /></span>}
+              {d.rating ? `${d.rating}${d.reviews ? ` (${d.reviews})` : ""}` : d.jobs ? `${d.jobs} plows` : "New driver"}{d.truck ? ` · ${d.truck}` : ""}</div>
+            {LIVE && d.id && d.reviews > 0 && <button onClick={() => setReviewsOpen(true)} style={{ background: "none", border: "none", padding: 0,
+              marginTop: 3, cursor: "pointer", font: `600 13px ${FB}`, color: C.amber }}>Read reviews ›</button>}
+          </div>
+          {!LIVE && <button onClick={() => dispatch({ type: "TOAST", msg: `Calling ${first}…` })} aria-label={`Call ${first}`}
+            style={{ ...miniBtn, width: 46, minHeight: 46, padding: 0, borderRadius: "50%", background: C.night2 }}><Icon e="phone" s={17} /></button>}
+          <button onClick={() => document.getElementById("chatbox")?.scrollIntoView({ behavior: "smooth" })} aria-label={`Message ${first}`}
+            style={{ ...miniBtn, width: 46, minHeight: 46, padding: 0, borderRadius: "50%", background: C.amber, color: C.onAmber, border: "none" }}><Icon e="chat" s={17} /></button>
+        </div>
+      )}
+
+      {/* the live map */}
+      <div style={{ marginTop: 14, borderRadius: 20, overflow: "hidden", border: `1px solid ${C.line}` }}>
         {MAP_ENABLED && trackCenter ? (
           <LiveMap center={trackCenter} height={300}
             route={finding || !driverLL ? [] : [[driverLL.lng, driverLL.lat], [trackCenter.lng, trackCenter.lat]]}
-            markers={finding || !driverLL ? [{ lng: trackCenter.lng, lat: trackCenter.lat, size: 26 }] : [
+            markers={finding || !driverLL ? [{ lng: trackCenter.lng, lat: trackCenter.lat, size: 26, pulse: finding }] : [
               { lng: trackCenter.lng, lat: trackCenter.lat, size: 26 },
               { lng: driverLL.lng, lat: driverLL.lat, size: 30, kind: "truck", pulse: true },
             ]} />
@@ -2704,11 +2768,9 @@ function RiderTracking() {
         )}
       </div>
 
-      {/* one big number, one line, one thin progress bar (Uber / DoorDash) */}
-      <div style={{ padding: "20px 2px 0" }}>
-        <div style={{ font: `800 ${finding || arrived ? 36 : 50}px/.95 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice }}>{big}</div>
-        <div style={{ font: `400 15px ${FB}`, color: C.mist, marginTop: 6 }}>{line}</div>
-        <div style={{ display: "flex", gap: 5, marginTop: 16 }} aria-label={`Step ${stage + 1} of 4`}>
+      {/* one thin progress bar */}
+      <div style={{ padding: "16px 2px 0" }}>
+        <div style={{ display: "flex", gap: 5 }} aria-label={`Step ${stage + 1} of 4`}>
           {[0, 1, 2, 3].map(i => (
             <div key={i} style={{ flex: 1, height: 4, borderRadius: 4, overflow: "hidden", background: C.line }}>
               <div style={{ height: "100%", borderRadius: 4, background: C.amber,
@@ -2718,35 +2780,10 @@ function RiderTracking() {
             </div>
           ))}
         </div>
-        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 7, font: `500 11.5px ${FB}`, color: C.mistDim }}>
-          <span>Sent</span><span>On the way</span><span>Plowing</span><span>Done</span>
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, font: `500 12.5px ${FB}`, color: C.mistDim }}>
+          {["Sent", "On the way", "Plowing", "Done"].map((l, i) => <span key={l} style={{ color: i === stage ? C.ice : i < stage ? C.mist : C.mistDim, fontWeight: i === stage ? 600 : 500 }}>{l}</span>)}
         </div>
       </div>
-
-      {/* driver card */}
-      {!finding && (
-        <div style={{ marginTop: 20, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 18, padding: 16 }}>
-          <div style={{ display: "flex", gap: 13, alignItems: "center" }}>
-            <Avatar name={d.name} size={50} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ font: `600 16px ${FB}`, color: C.ice }}>{d.name}</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3, font: `400 13px ${FB}`, color: C.mist }}>
-                {d.rating && <span style={{ color: C.amber, display: "flex" }}><Icon e="star" s={12} /></span>}
-                {d.rating ? `${d.rating}${d.reviews ? ` (${d.reviews})` : ""} · ${d.jobs} plows` : d.jobs ? `${d.jobs} plows` : "New driver"}{d.truck ? ` · ${d.truck}` : ""}</div>
-              {LIVE && d.id && d.reviews > 0 && <button onClick={() => setReviewsOpen(true)} style={{ background: "none", border: "none", padding: 0,
-                marginTop: 4, cursor: "pointer", font: `600 13px ${FB}`, color: C.amber }}>Read reviews ›</button>}
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-            {!LIVE && <button onClick={() => dispatch({ type: "TOAST", msg: `Calling ${first}…` })}
-              style={{ ...miniBtn, flex: 1, minHeight: 44, fontSize: 14, background: C.night2 }}><Icon e="phone" s={15} /> Call</button>}
-            <button onClick={() => document.getElementById("chatbox")?.scrollIntoView({ behavior: "smooth" })}
-              style={{ ...miniBtn, flex: 1, minHeight: 44, fontSize: 14, background: C.night2 }}><Icon e="chat" s={15} /> Message</button>
-            {!LIVE && <button onClick={() => dispatch({ type: "TOAST", msg: "Live location shared with your contact" })} aria-label="Share live location"
-              style={{ ...miniBtn, minHeight: 44, width: 44, padding: 0, background: C.night2 }}><Icon e="link" s={15} /></button>}
-          </div>
-        </div>
-      )}
 
       {needsCard && (STRIPE_ENABLED
         ? <PaymentSheet amount={o.quote?.riderTotal} jobId={o.jobId} onClose={() => cancelOffer(true)}
@@ -2853,12 +2890,19 @@ function RiderReceipt() {
 
   return (
     <section style={{ paddingTop: 8 }}>
-      <div style={{ textAlign: "center", margin: "10px 0 20px" }}>
-        <div style={{ width: 60, height: 60, borderRadius: "50%", background: C.push + "22", border: `2px solid ${C.push}`,
-          display: "grid", placeItems: "center", margin: "0 auto 14px", fontSize: 28, color: C.push }}><Icon e="check" s={28} /></div>
-        <h2 style={{ font: `800 33px ${FD}`, textTransform: "uppercase", margin: 0 }}>{isRoadside ? "Back on the road" : "Plowed & clear"}</h2>
-        <p style={{ ...sub, marginTop: 6 }}>{d.name} finished your {jtR.label.toLowerCase()}{q.salt ? " + salting" : ""}.</p>
+      <div style={{ textAlign: "center", margin: "12px 0 20px" }}>
+        <DoneCheck />
+        <h2 style={{ font: `800 40px/1 ${FD}`, textTransform: "uppercase", margin: "16px 0 0" }}>{isRoadside ? "Back on the road" : "Plowed & clear"}</h2>
+        <p style={{ ...sub, marginTop: 8, fontSize: 15 }}>{d.name} finished your {jtR.label.toLowerCase()}{q.salt ? " + salting" : ""}.</p>
       </div>
+
+      {/* proof of work: drag to compare */}
+      {(o.photos?.before?.length || o.photos?.after?.length) ? (
+        <div style={{ marginBottom: 16 }}>
+          <BeforeAfter before={o.photos?.before?.[0]} after={o.photos?.after?.[0]} />
+          <div style={{ font: `500 13px ${FB}`, color: C.mist, textAlign: "center", marginTop: 8 }}>Drag to compare before and after</div>
+        </div>
+      ) : null}
 
       <div style={{ background: C.night2, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 }}>
         {q.offer != null && <>
@@ -2868,34 +2912,12 @@ function RiderReceipt() {
           <div style={{ height: 1, background: C.line, margin: "8px 0" }} />
         </>}
         <Row label={q.offer != null ? "Total" : jtR.label} value={`$${q.riderTotal}`} big />
-        <p style={{ font: `400 12px ${FB}`, color: C.mistDim, margin: "8px 0 0" }}>{isLive(state) ? (o.paymentStatus === "captured" ? "Charged to your card when the job was marked done"
+        <p style={{ font: `400 13px ${FB}`, color: C.mistDim, margin: "8px 0 0" }}>{isLive(state) ? (o.paymentStatus === "captured" ? "Charged to your card when the job was marked done"
           : o.paymentStatus === "failed" ? "We couldn't charge your card — we'll reach out" : "Receipt saved to Trips")
           : `Charged to ···${state.payment?.last4 || "4242"} when the job was marked done`}</p>
       </div>
 
-      {/* proof of work: before / after */}
-      {(o.photos?.before?.length || o.photos?.after?.length) ? (
-        <div style={{ marginTop: 16 }}>
-          <Eyebrow color={C.push}>Proof of work</Eyebrow>
-          <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
-            {["before", "after"].map(phase => {
-              const p = o.photos?.[phase]?.[0];
-              return (
-                <div key={phase} style={{ flex: 1 }}>
-                  <div style={{ width: "100%", aspectRatio: "1.2", borderRadius: 12, overflow: "hidden",
-                    border: `1px solid ${phase === "before" ? C.plow : C.push}55`, position: "relative", background: C.slate }}>
-                    {p ? <FauxPhoto seed={p.seed} phase={phase} path={p.path} /> :
-                      <div style={{ display: "grid", placeItems: "center", height: "100%", color: C.mistDim, font: `500 11px ${FB}` }}>no photo</div>}
-                    <div style={{ position: "absolute", top: 6, left: 6, background: "rgba(0,0,0,.6)", borderRadius: 5,
-                      padding: "2px 7px", font: `700 9px ${FB}`, color: "#fff" }}>{phase.toUpperCase()}</div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-      <div style={{ marginTop: 16, textAlign: "center" }}>
+      <div style={{ marginTop: 18, textAlign: "center" }}>
         <Eyebrow>Rate {d.name.split(" ")[0]}</Eyebrow>
         <div style={{ margin: "10px 0" }}><Stars v={rating} size={30} onSet={setRating} /></div>
         {rating > 0 && (
@@ -2934,7 +2956,7 @@ function SiteDetails({ grade, setGrade, hazards, setHazards, shared, setShared }
   return (
     <div>
       <Eyebrow color={C.amber}>Site details</Eyebrow>
-      <p style={{ font: `500 12px ${FB}`, color: C.mist, margin: "6px 0 12px" }}>
+      <p style={{ font: `500 13px ${FB}`, color: C.mist, margin: "6px 0 12px" }}>
         Duluth's hills and ice change the job. This keeps your price accurate and warns your driver.
       </p>
 
@@ -2973,7 +2995,7 @@ function SiteDetails({ grade, setGrade, hazards, setHazards, shared, setShared }
         display: "flex", justifyContent: "space-between", alignItems: "center", padding: 14, borderRadius: 12,
         background: C.slate, border: `1.5px solid ${shared ? C.push : C.line}` }}>
         <div><div style={{ font: `700 13px ${FB}`, color: C.ice }}>Shared driveway</div>
-          <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 2 }}>Split cost with neighbors — 10% off</div></div>
+          <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 2 }}>Split cost with neighbors — 10% off</div></div>
         <Toggle on={shared} />
       </button>
     </div>
@@ -3068,7 +3090,7 @@ function RiderProperties({ onBackToBook }) {
                       <span style={{ font: `700 15px ${FB}` }}>{p.label}</span>
                       {isActive && <Chip color={C.amber} solid>Active</Chip>}
                     </div>
-                    <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.addr}</div>
+                    <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.addr}</div>
                     <div style={{ marginTop: 7, display: "flex", gap: 6, flexWrap: "wrap" }}>
                       <Chip color={C.plow}>{p.zones.filter(z => z.mode === "plow").length} plow</Chip>
                       <Chip color={C.push}>{p.zones.filter(z => z.mode === "push").length} push</Chip>
@@ -3078,7 +3100,7 @@ function RiderProperties({ onBackToBook }) {
                   </div>
                 </div>
                 <div style={{ textAlign: "right", flexShrink: 0 }}>
-                  <div style={{ font: `400 11.5px ${FB}`, color: C.mistDim }}>Suggested</div>
+                  <div style={{ font: `400 12.5px ${FB}`, color: C.mistDim }}>Suggested</div>
                   <div style={{ font: `800 22px ${FD}`, textTransform: "uppercase", color: C.ice }}>${pq.suggested ?? pq.riderTotal}</div>
                   <button onClick={(ev) => { ev.stopPropagation(); startEdit(p); }}
                     style={{ ...miniBtn, minHeight: 32, fontSize: 12, marginTop: 7 }}>Edit</button>
@@ -3101,7 +3123,7 @@ function RiderProperties({ onBackToBook }) {
             <div style={{ width: 40, height: 40, borderRadius: 12, background: state.autoPlow ? C.amber + "1E" : C.night2,
               display: "grid", placeItems: "center", fontSize: 19, flexShrink: 0 }}><Icon e="repeat" s={19} /></div>
             <div><div style={{ font: `700 14px ${FB}` }}>Auto-plow this winter</div>
-              <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 2 }}>
+              <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 2 }}>
                 {state.autoPlow ? `Dispatches at ${state.autoPlowThreshold}"+ · cancel anytime` : "Set a trigger once — only pay when it snows, no contract"}</div></div>
           </div>
           <Toggle on={state.autoPlow} />
@@ -3144,7 +3166,7 @@ function RiderProperties({ onBackToBook }) {
               </span>
             </div>
 
-            <div style={{ marginTop: 10, font: `500 11px ${FB}`, color: C.mistDim, textAlign: "center" }}>
+            <div style={{ marginTop: 10, font: `500 13px ${FB}`, color: C.mistDim, textAlign: "center" }}>
               No monthly fee · $0 when it doesn't snow · turn off anytime
             </div>
           </div>
@@ -3201,7 +3223,7 @@ function RiderHistory() {
         ].map((s, i) => (
           <div key={i} style={{ flex: 1, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: "13px 12px" }}>
             <div style={{ font: `800 26px ${FD}`, textTransform: "uppercase", color: s.c, lineHeight: 1 }}>{s.v}</div>
-            <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 4 }}>{s.l}</div>
+            <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 4 }}>{s.l}</div>
           </div>
         ))}
       </div>
@@ -3228,7 +3250,7 @@ function RiderHistory() {
                       <PropertyThumb zones={job.property?.zones} img={job.property?.mapImg} />
                       <div style={{ minWidth: 0 }}>
                         <div style={{ font: `700 15px ${FB}` }}>{job.label}</div>
-                        <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{job.property?.addr}</div>
+                        <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{job.property?.addr}</div>
                         <div style={{ marginTop: 7, display: "flex", gap: 6 }}>
                           <Chip color={C.plow}><Icon e={jt.icon} s={13} /> {jt.label}</Chip>
                         </div>
@@ -3267,7 +3289,7 @@ function RiderHistory() {
                           border: `1px solid ${C.line}`, display: "grid", placeItems: "center", fontSize: 19, flexShrink: 0 }}><Icon e="snowflake" s={19} /></div>}
                     <div style={{ minWidth: 0 }}>
                       <div style={{ font: `700 15px ${FB}` }}>{h.jobType && JOB_TYPES[h.jobType] ? JOB_TYPES[h.jobType].label : `${h.size} plow`}</div>
-                      <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 3 }}>{h.date} · {h.driver}</div>
+                      <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 3 }}>{h.date} · {h.driver}</div>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5 }}>
                         {h.rating > 0 && <Stars v={h.rating} size={11} />}
                         {hasPhotos && <span style={{ font: `600 11px ${FB}`, color: C.plow }}><Icon e="camera" s={13} /> Before / after</span>}
@@ -3354,6 +3376,50 @@ function FauxPhoto({ seed = 1, phase = "after", style, path }) {
   );
 }
 
+// Animated "done" check: the ring pops, then the tick draws itself.
+function DoneCheck({ size = 68, color }) {
+  const c = color || C.push;
+  return (
+    <div style={{ width: size, height: size, margin: "0 auto", borderRadius: "50%", display: "grid", placeItems: "center",
+      background: c + "1F", border: `2px solid ${c}`, animation: "ring .45s cubic-bezier(.2,.9,.3,1.2) both" }}>
+      <svg width={size * .46} height={size * .46} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4.5 12.5l5 5 10-11" strokeDasharray="30" strokeDashoffset="30" style={{ animation: "draw .45s .3s ease-out forwards" }} />
+      </svg>
+    </div>
+  );
+}
+
+// Drag-to-compare before/after photo (the moment people screenshot and share).
+function BeforeAfter({ before, after, height }) {
+  const [x, setX] = useState(50);
+  const ref = useRef(null), drag = useRef(false);
+  const move = (e) => {
+    const r = ref.current?.getBoundingClientRect(); if (!r) return;
+    setX(Math.min(97, Math.max(3, ((e.clientX - r.left) / r.width) * 100)));
+  };
+  return (
+    <div ref={ref} role="slider" aria-label="Drag to compare before and after" aria-valuenow={Math.round(x)} tabIndex={0}
+      onKeyDown={(e) => { if (e.key === "ArrowLeft") setX((v) => Math.max(3, v - 5)); if (e.key === "ArrowRight") setX((v) => Math.min(97, v + 5)); }}
+      onPointerDown={(e) => { drag.current = true; e.currentTarget.setPointerCapture?.(e.pointerId); move(e); }}
+      onPointerMove={(e) => drag.current && move(e)} onPointerUp={() => { drag.current = false; }} onPointerCancel={() => { drag.current = false; }}
+      style={{ position: "relative", width: "100%", height: height || undefined, aspectRatio: height ? undefined : "1.25", borderRadius: 18,
+        overflow: "hidden", border: `1px solid ${C.line}`, touchAction: "pan-y", cursor: "ew-resize", userSelect: "none", background: C.slate }}>
+      <div style={{ position: "absolute", inset: 0 }}><FauxPhoto seed={after?.seed || 3} phase="after" path={after?.path} /></div>
+      <div style={{ position: "absolute", inset: 0, clipPath: `inset(0 ${100 - x}% 0 0)` }}>
+        <FauxPhoto seed={before?.seed || 3} phase="before" path={before?.path} /></div>
+      <div style={{ position: "absolute", top: 0, bottom: 0, left: `${x}%`, width: 2, marginLeft: -1, background: "#fff", boxShadow: "0 0 10px rgba(0,0,0,.4)" }} />
+      <div style={{ position: "absolute", top: "50%", left: `${x}%`, width: 38, height: 38, margin: "-19px 0 0 -19px", borderRadius: "50%",
+        background: "#fff", color: "#14161A", display: "grid", placeItems: "center", boxShadow: "0 4px 14px rgba(0,0,0,.35)" }}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M9 6l-6 6 6 6M15 6l6 6-6 6" /></svg>
+      </div>
+      {[["BEFORE", 10, "left"], ["AFTER", 10, "right"]].map(([t, o, side]) => (
+        <div key={t} style={{ position: "absolute", top: 10, [side]: o, background: "rgba(0,0,0,.55)", borderRadius: 7,
+          padding: "4px 9px", font: `700 10.5px ${FM}`, letterSpacing: ".08em", color: "#fff" }}>{t}</div>
+      ))}
+    </div>
+  );
+}
+
 // full-screen before/after viewer with a wipe slider
 function PhotoViewer({ job, onClose }) {
   const before = job.photos?.before?.[0] || { seed: 3, phase: "before" };
@@ -3364,21 +3430,11 @@ function PhotoViewer({ job, onClose }) {
       display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 400 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <div style={{ font: `800 21px ${FD}`, textTransform: "uppercase", color: C.ice }}>Before / After</div>
+          <div style={{ ...H(20), color: C.ice }}>Before & after</div>
           <button onClick={onClose} style={{ ...miniBtn, padding: "7px 12px" }}>Close</button>
         </div>
-        {/* wipe comparison */}
-        <div style={{ position: "relative", width: "100%", aspectRatio: "1.3", borderRadius: 16, overflow: "hidden", border: `1px solid ${C.line}` }}>
-          <div style={{ position: "absolute", inset: 0 }}><FauxPhoto seed={after.seed} phase="after" path={after.path} /></div>
-          <div style={{ position: "absolute", inset: 0, width: `${wipe}%`, overflow: "hidden", borderRight: `2px solid ${C.amber}` }}>
-            <div style={{ width: `${100 / (wipe / 100)}%`, height: "100%" }}><FauxPhoto seed={before.seed} phase="before" path={before.path} /></div>
-          </div>
-          <div style={{ position: "absolute", top: 10, left: 10, background: "rgba(0,0,0,.55)", borderRadius: 6, padding: "3px 8px", font: `700 10px ${FB}`, color: "#fff" }}>BEFORE</div>
-          <div style={{ position: "absolute", top: 10, right: 10, background: "rgba(0,0,0,.55)", borderRadius: 6, padding: "3px 8px", font: `700 10px ${FB}`, color: "#fff" }}>AFTER</div>
-        </div>
-        <input type="range" min="0" max="100" value={wipe} onChange={e => setWipe(+e.target.value)}
-          style={{ width: "100%", marginTop: 14, accentColor: C.amber }} />
-        <p style={{ font: `500 12px ${FB}`, color: C.mist, textAlign: "center", marginTop: 6 }}>
+        <BeforeAfter before={before} after={after} />
+        <p style={{ font: `500 13px ${FB}`, color: C.mist, textAlign: "center", marginTop: 10 }}>
           Drag to compare · {job.driver} · {job.date}
         </p>
       </div>
@@ -3459,7 +3515,7 @@ function ProfileSheet({ onClose, driver }) {
   const label = { font: `600 13px ${FB}`, color: C.mist, margin: "14px 0 6px", display: "block" };
   return (
     <Sheet onClose={onClose}>
-      <h3 style={{ font: `800 26px ${FD}`, textTransform: "uppercase", margin: "0 0 4px" }}>{driver ? "Profile and equipment" : "Your profile"}</h3>
+      <h3 style={{ ...H(24), margin: "0 0 4px" }}>{driver ? "Profile and equipment" : "Your profile"}</h3>
       <label style={label}>Name</label>
       <input value={name} onChange={(e) => setName(e.target.value)} style={input} autoComplete="name" />
       <label style={label}>Phone</label>
@@ -3478,7 +3534,7 @@ function ProfileSheet({ onClose, driver }) {
                 font: `600 13px ${FB}`, color: on ? C.push : C.mist }}>
               <Icon e={t.icon} s={15} />{t.label}{on && <Icon e="check" s={13} />}</button>); })}
         </div>
-        <p style={{ font: `400 12px ${FB}`, color: C.mistDim, margin: "8px 0 0" }}>You'll only see jobs your equipment can do.</p>
+        <p style={{ font: `400 13px ${FB}`, color: C.mistDim, margin: "8px 0 0" }}>You'll only see jobs your equipment can do.</p>
       </>}
       <div style={{ marginTop: 18 }}>
         <Btn full onClick={save} disabled={busy || !name.trim() || (driver && !tools.length)}>{busy ? "Saving…" : "Save"}</Btn>
@@ -3522,7 +3578,7 @@ function FavoritesSheet({ onClose }) {
   };
   return (
     <Sheet onClose={onClose}>
-      <h3 style={{ font: `800 24px ${FD}`, textTransform: "uppercase", color: C.ice, margin: "0 0 4px" }}>Favorite drivers</h3>
+      <h3 style={{ ...H(24), color: C.ice, margin: "0 0 4px" }}>Favorite drivers</h3>
       <p style={{ font: `400 14px/1.45 ${FB}`, color: C.mist, margin: "0 0 14px" }}>
         When you book, your favorites who are online get your offer first, for 2 minutes, before anyone else sees it.</p>
       {list === null ? <div style={{ font: `500 13px ${FB}`, color: C.mist }}>Loading…</div>
@@ -3563,7 +3619,7 @@ function RiderAccount({ onReferral }) {
         background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left" }}>
         <Avatar name={p.name || "You"} size={58} />
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ font: `800 26px ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice }}>{p.name || "Your account"}</div>
+          <div style={{ ...H(24), color: C.ice }}>{p.name || "Your account"}</div>
           <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 2 }}>{[p.phone, p.email].filter(Boolean).join(" · ") || "Add your contact info"}</div>
           <div style={{ font: `600 13px ${FB}`, color: C.amber, marginTop: 4 }}>Edit profile</div>
         </div>
@@ -3664,11 +3720,11 @@ function RiderReferral({ onBack }) {
       <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
         <div style={{ flex: 1, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 12, padding: 14 }}>
           <div style={{ font: `800 28px ${FD}`, textTransform: "uppercase", color: C.amber }}>${animCredit}</div>
-          <div style={{ font: `500 12px ${FB}`, color: C.mist }}>Credit earned</div>
+          <div style={{ font: `500 13px ${FB}`, color: C.mist }}>Credit earned</div>
         </div>
         <div style={{ flex: 1, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 12, padding: 14 }}>
           <div style={{ font: `800 28px ${FD}`, textTransform: "uppercase", color: C.ice }}>{ref.invited}</div>
-          <div style={{ font: `500 12px ${FB}`, color: C.mist }}>Neighbors invited</div>
+          <div style={{ font: `500 13px ${FB}`, color: C.mist }}>Neighbors invited</div>
         </div>
       </div>
 
@@ -3691,7 +3747,7 @@ function RiderReferral({ onBack }) {
               <div style={{ width: 22, height: 22, borderRadius: "50%", background: C.amber, color: C.onAmber,
                 display: "grid", placeItems: "center", font: `800 12px ${FB}`, flexShrink: 0 }}>{n}</div>
               <div><div style={{ font: `700 13px ${FB}` }}>{t}</div>
-                <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 2 }}>{d}</div></div>
+                <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 2 }}>{d}</div></div>
             </div>
           ))}
         </div>
@@ -3708,7 +3764,7 @@ function RiderReferral({ onBack }) {
                 <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                   <span style={{ fontSize: 17 }}>{x.status === "first-plow" ? <Icon e="checkfill" s={17} /> : <Icon e="hourglass" s={17} />}</span>
                   <div><div style={{ font: `700 13px ${FB}` }}>{x.name}</div>
-                    <div style={{ font: `500 11px ${FB}`, color: C.mist }}>
+                    <div style={{ font: `500 13px ${FB}`, color: C.mist }}>
                       {x.status === "first-plow" ? "Booked first plow" : "Joined — waiting on first plow"}</div></div>
                 </div>
                 {x.amt > 0 && <Chip color={C.good}>+${x.amt}</Chip>}
@@ -3760,7 +3816,7 @@ function DocUpload({ kind, label, hint, onDone, status }) {
           : <Icon e={done ? "check" : "doc"} s={16} />}</div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ font: `600 14px ${FB}`, color: C.ice }}>{label}</div>
-        <div style={{ font: `400 12px ${FB}`, color: bad ? C.danger : C.mist, marginTop: 2 }}>
+        <div style={{ font: `400 13px ${FB}`, color: bad ? C.danger : C.mist, marginTop: 2 }}>
           {st === "uploading" ? "Uploading…" : st === "approved" ? "Approved" : bad ? "Needs a new photo — tap to replace" : done ? "Uploaded · tap to replace" : hint}</div>
       </div>
       {!done && st !== "uploading" && <span style={{ font: `600 13px ${FB}`, color: C.amber }}>Upload</span>}
@@ -3777,7 +3833,7 @@ function DriverDocsCard() {
   return (
     <Card style={{ marginBottom: 14 }}>
       <Eyebrow>Documents</Eyebrow>
-      <p style={{ font: `400 12px/1.45 ${FB}`, color: C.mistDim, margin: "6px 0 10px" }}>
+      <p style={{ font: `400 13px/1.45 ${FB}`, color: C.mistDim, margin: "6px 0 10px" }}>
         Stored privately. Only you and DRIFT can see them — never customers.</p>
       {!docs ? <Skeleton h={56} r={14} /> : (
         <div style={{ display: "grid", gap: 8 }}>
@@ -3787,7 +3843,7 @@ function DriverDocsCard() {
               hint={k === "insurance" ? "Optional" : "Required to drive"} onDone={load} />;
           })}
           {docs.filter((d) => d.status === "rejected" && d.note).slice(0, 1).map((d) => (
-            <p key={d.id} style={{ font: `500 12px ${FB}`, color: C.danger, margin: 0 }}>Note from DRIFT: {d.note}</p>))}
+            <p key={d.id} style={{ font: `500 13px ${FB}`, color: C.danger, margin: 0 }}>Note from DRIFT: {d.note}</p>))}
         </div>
       )}
     </Card>
@@ -3841,7 +3897,7 @@ function DriverOnboarding() {
           {st === "verified" ? <Icon e="check" s={16} /> : st === "uploading" ? "…" : <Icon e="doc" s={16} />}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ font: `700 13px ${FB}`, color: C.ice }}>{label}</div>
-          <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 2 }}>
+          <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 2 }}>
             {st === "verified" ? "Uploaded" : st === "uploading" ? "Uploading…" : hint}</div>
         </div>
         {!st && <span style={{ font: `700 12px ${FB}`, color: C.amber }}>Upload</span>}
@@ -3880,7 +3936,7 @@ function DriverOnboarding() {
                 border: `1px solid ${C.line}`, borderRadius: 14, padding: 13 }}>
                 <span style={{ fontSize: 19 }}><Icon e={i} s={19} /></span>
                 <div><div style={{ font: `700 13px ${FB}` }}>{t}</div>
-                  <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 2 }}>{d}</div></div>
+                  <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 2 }}>{d}</div></div>
               </div>
             ))}
           </div>
@@ -3927,7 +3983,7 @@ function DriverOnboarding() {
                   <span style={{ fontSize: 23 }}><Icon e={t.icon} s={23} /></span>
                   <div style={{ flex: 1 }}>
                     <div style={{ font: `700 14px ${FB}`, color: on ? C.push : C.ice }}>{t.label}</div>
-                    <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 2 }}>{t.note}</div>
+                    <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 2 }}>{t.note}</div>
                   </div>
                   <span style={{ width: 24, height: 24, borderRadius: 8, display: "grid", placeItems: "center",
                     background: on ? C.push : "transparent", border: `2px solid ${on ? C.push : C.line}`,
@@ -3972,11 +4028,11 @@ function DriverOnboarding() {
               <span style={{ fontSize: 19 }}><Icon e="bank" s={19} /></span>
             </div>
             <div style={{ font: `700 20px ${FB}`, letterSpacing: ".08em", color: C.ice }}>•••• •••• 6789</div>
-            <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 6 }}>{name || "Your name"} · Checking</div>
+            <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 6 }}>{name || "Your name"} · Checking</div>
           </div>
           <UploadRow k="w9" label="W-9 tax form" hint="Required for 1099 contractors" />
           </>}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "14px 0", font: `500 12px ${FB}`, color: C.mistDim }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "14px 0", font: `500 13px ${FB}`, color: C.mistDim }}>
             <span><Icon e="lock" s={14} /></span> Bank details handled by Stripe · we never see them
           </div>
           <div style={{ position: "sticky", bottom: 16 }}>
@@ -4032,7 +4088,7 @@ function InstallSheet({ onClose }) {
   };
   return (
     <Sheet onClose={onClose}>
-      <h3 style={{ font: `800 26px ${FD}`, textTransform: "uppercase", margin: "0 0 4px" }}>Add DRIFT to your Home Screen</h3>
+      <h3 style={{ ...H(24), margin: "0 0 4px" }}>Add DRIFT to your Home Screen</h3>
       <p style={{ ...sub, marginBottom: 8 }}>It opens full screen like a normal app, one tap away{ios ? ", and on iPhone it's needed for notifications" : ""}. Takes 20 seconds.</p>
       {inApp ? <>
         {step(1, <>You're in the Facebook browser, which can't do this. Tap <b>{ios ? "⋯" : "⋮"}</b> at the top and choose <b>{ios ? "Open in Safari" : "Open in Chrome"}</b>.</>)}
@@ -4176,7 +4232,7 @@ const jobLL = (j) => j?.property?.center?.lat != null ? j.property.center
   : j?.lat != null ? { lat: j.lat, lng: j.lng } : j?.property?.lat != null ? { lat: j.property.lat, lng: j.property.lng } : null;
 const miText = (mi) => `${mi < 10 ? mi.toFixed(1) : Math.round(mi)} mi`;
 
-function JobRow({ job, here, onClick, right, sub }) {
+function JobRow({ job, here, onClick, right, sub, num }) {
   const { state } = useStore();
   const pay = driverNetPay(job.quote, state.driver);
   const dr = driveEstimate(here, jobLL(job));
@@ -4187,6 +4243,8 @@ function JobRow({ job, here, onClick, right, sub }) {
   return (
     <div onClick={onClick} role={onClick ? "button" : undefined} style={{ display: "flex", gap: 12, alignItems: "center", padding: "12px 14px",
       background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, cursor: onClick ? "pointer" : "default", WebkitTapHighlightColor: "transparent" }}>
+      {num != null && <div aria-label={`Stop ${num}`} style={{ width: 30, height: 30, borderRadius: 99, flex: "none", display: "grid", placeItems: "center",
+        background: C.amber, color: C.onAmber, font: `800 16px/1 ${FD}` }}>{num}</div>}
       <div style={{ font: `800 26px/1 ${FD}`, color: C.ice, minWidth: 58 }}>${pay}</div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ font: `600 14.5px ${FB}`, color: C.ice, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -4198,11 +4256,11 @@ function JobRow({ job, here, onClick, right, sub }) {
   );
 }
 
-function JobsMap({ jobs, here, height = 200 }) {
+function JobsMap({ jobs, here, height = 200, numbered }) {
   const { state } = useStore();
   const markers = [
     ...(here ? [{ lng: here.lng, lat: here.lat, size: 28, kind: "truck" }] : []),
-    ...jobs.map((j) => ({ ll: jobLL(j), j })).filter((x) => x.ll).map(({ ll, j }) => ({ lng: ll.lng, lat: ll.lat, label: `$${driverNetPay(j.quote, state.driver)}` })),
+    ...jobs.map((j) => ({ ll: jobLL(j), j })).filter((x) => x.ll).map(({ ll, j }, i) => ({ lng: ll.lng, lat: ll.lat, label: numbered ? `${i + 1} · $${driverNetPay(j.quote, state.driver)}` : `$${driverNetPay(j.quote, state.driver)}` })),
   ];
   if (!MAP_ENABLED) return null;
   return <LiveMap center={here || DULUTH_CENTER} height={height} markers={markers} fit />;
@@ -4244,7 +4302,7 @@ function NearbySheet({ here, onClose, onAdded, queued }) {
   return (
     <Sheet onClose={onClose}>
       <Eyebrow>Nearby jobs</Eyebrow>
-      <h3 style={{ font: `800 28px ${FD}`, textTransform: "uppercase", margin: "6px 0 4px" }}>Line up your next job</h3>
+      <h3 style={{ ...H(24), margin: "6px 0 4px" }}>Line up your next job</h3>
       <p style={{ ...sub, marginBottom: 12 }}>You can hold up to 3 jobs at once ({queued} now). Finish them in order — customers see you're on the way after your current one.</p>
       <NearbyJobs pool={pool} here={here} onOpen={setOpen} emptyText="No open jobs nearby right now." />
       {open && <IncomingJob order={open} here={here} browse busy={busy} acceptLabel="Add to queue" onAccept={() => take(open)} onPass={() => setOpen(null)} />}
@@ -4263,7 +4321,10 @@ function RouteBoard({ here }) {
   const load = () => listScheduledJobs().then(({ data }) => setRows((data || []).filter((r) => r.customer_id !== state.userId).map((r) => rowToOrder(r))));
   useEffect(() => { load(); const unsub = subscribeOpenJobs(load); const iv = setInterval(() => setNow(Date.now()), 30000); return () => { unsub(); clearInterval(iv); }; }, []);
   if (!rows) return <div style={{ display: "grid", gap: 8 }}><Skeleton h={64} r={14} /><Skeleton h={64} r={14} /></div>;
-  const mine = rows.filter((r) => r.driverId === state.userId);
+  const mine = rows.filter((r) => r.driverId === state.userId).sort((a, b) => a.scheduledFor - b.scheduledFor);
+  // Route summary: stops in time order, miles from here → stop 1 → stop 2 …
+  let routeMi = 0, prevLL = here, routePay = 0;
+  mine.forEach((j) => { const ll = jobLL(j); const d = driveEstimate(prevLL, ll); if (d) routeMi += d.mi; if (ll) prevLL = ll; routePay += driverNetPay(j.quote, state.driver) || 0; });
   const open_ = rows.filter((r) => r.driverId !== state.userId);
   const soon = mine.filter((r) => r.scheduledFor - now < 12 * 3600e3);
   const needCheckin = soon.filter((r) => !r.checkedInAt);
@@ -4304,17 +4365,21 @@ function RouteBoard({ here }) {
         </div>
       )}
 
-      <Eyebrow>My route</Eyebrow>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <Eyebrow>My route</Eyebrow>
+        {mine.length > 0 && <div style={{ font: `500 13px ${FM}`, color: C.mist }}>{mine.length} stop{mine.length > 1 ? "s" : ""}{routeMi > 0 ? ` · ${miText(routeMi)}` : ""} · <b style={{ color: C.push }}>${Math.round(routePay)}</b></div>}
+      </div>
+      {mine.length > 1 && <div style={{ borderRadius: 18, overflow: "hidden", marginTop: 8 }}><JobsMap jobs={mine} here={here} height={170} numbered /></div>}
       <div style={{ display: "grid", gap: 8, margin: "8px 0 18px" }}>
         {mine.length === 0 && <div style={{ padding: "16px 14px", font: `400 14px/1.45 ${FB}`, color: C.mist, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14 }}>
           No scheduled jobs yet. Add some below the night or day before a storm. You'll check in 45 minutes before your first one.</div>}
-        {mine.map((j) => {
+        {mine.map((j, i) => {
           const canStart = now >= j.scheduledFor - 90 * 60e3;
           return (
             <div key={j.jobId}>
-              <JobRow job={j} here={here} sub={fmtWindowLocal(j.scheduledFor)} right={j.checkedInAt
+              <JobRow job={j} here={i === 0 ? here : jobLL(mine[i - 1]) || here} num={mine.length > 1 ? i + 1 : undefined} sub={fmtWindowLocal(j.scheduledFor)} right={j.checkedInAt
                 ? <Chip color={C.push}>Checked in</Chip> : <Chip color={C.amber}>Check in by {clock(j.scheduledFor - 45 * 60e3)}</Chip>} />
-              <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                 {canStart && <Btn sm kind="good" onClick={() => start(j)} disabled={busy === j.jobId} style={{ flex: 1 }}>Start this job</Btn>}
                 <Btn sm kind="dark" onClick={() => openDirections({ lat: jobLL(j)?.lat, lng: jobLL(j)?.lng, addr: j.property?.addr })} style={{ flex: 1 }}>Directions</Btn>
                 <Btn sm kind="danger" onClick={() => setConfirmDrop(j)} style={{ flex: canStart ? "0 0 auto" : 1 }}>Drop</Btn>
@@ -4339,7 +4404,7 @@ function RouteBoard({ here }) {
       {open && <IncomingJob order={open} here={here} browse busy={busy === open.jobId} acceptLabel="Add to my route" onAccept={() => claim(open)} onPass={() => setOpen(null)} />}
       {confirmDrop && (
         <Sheet onClose={() => setConfirmDrop(null)}>
-          <h3 style={{ font: `800 26px ${FD}`, textTransform: "uppercase", margin: "0 0 6px" }}>Drop this job?</h3>
+          <h3 style={{ ...H(24), margin: "0 0 6px" }}>Drop this job?</h3>
           <p style={{ ...sub, marginBottom: 14 }}>{lateDrop(confirmDrop)
             ? <><b style={{ color: C.danger }}>It's less than 3 hours before the window, so this counts as a late cancel</b> on your record. The customer is counting on you — only drop it if you really can't make it.</>
             : "It's more than 3 hours out, so dropping it is free. It goes back to every driver and the customer is told we're finding someone new."}</p>
@@ -4452,7 +4517,7 @@ function DriverDrive() {
           animation: online ? "pulse 1.6s infinite" : "none" }} />
         {online ? "Online" : "Offline"}
       </div>
-      <h1 style={{ font: `800 35px/1.1 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice, margin: "6px 0 4px" }}>
+      <h1 style={{ ...H(30), color: C.ice, margin: "6px 0 4px" }}>
         {online ? "Watching for requests" : "Ready to plow?"}</h1>
       <p style={{ font: `400 15px ${FB}`, color: C.mist, margin: "0 0 16px" }}>
         {online ? (LIVE ? `${pool.length} open request${pool.length === 1 ? "" : "s"} nearby` : `${SNOW_DEPTH_IN}" down · 12 open requests nearby`)
@@ -4682,7 +4747,7 @@ function IncomingJob({ order, onAccept, onPass, busy, here, browse, acceptLabel 
                     <span style={{ font: `800 26px/1 ${FD}`, textTransform: "uppercase", color: C.ice }}>{t.v}</span>
                     {t.unit && <span style={{ font: `600 12px ${FB}`, color: C.mist }}>{t.unit}</span>}
                   </div>
-                  <div style={{ font: `400 12px ${FB}`, color: C.mist, marginTop: 4 }}>{t.l}</div>
+                  <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 4 }}>{t.l}</div>
                 </div>
               ))}
             </div>
@@ -4762,7 +4827,7 @@ function ClusterRoute() {
         <Eyebrow color={C.plow}>Nearby on your route</Eyebrow>
         {bonusPay > 0 && <Chip color={C.push}>+${bonusPay} added</Chip>}
       </div>
-      <p style={{ font: `500 11px ${FB}`, color: C.mist, margin: "6px 0 10px" }}>
+      <p style={{ font: `500 13px ${FB}`, color: C.mist, margin: "6px 0 10px" }}>
         Batch these while you're on this street — less deadhead, more per hour.
       </p>
       <div style={{ display: "grid", gap: 8 }}>
@@ -4777,7 +4842,7 @@ function ClusterRoute() {
               <span style={{ fontSize: 22 }}><Icon e={jt.icon} s={22} /></span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ font: `700 13px ${FB}`, color: C.ice }}>{n.addr}</div>
-                <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 2 }}>{jt.label} · {n.dist} · {n.mins} min</div>
+                <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 2 }}>{jt.label} · {n.dist} · {n.mins} min</div>
               </div>
               <div style={{ textAlign: "right" }}>
                 <div style={{ font: `800 18px ${FD}`, textTransform: "uppercase", color: C.push }}>${n.pay}</div>
@@ -4918,9 +4983,8 @@ function DriverActiveJob() {
     return (
       <Fade k="jobdone"><section style={{ paddingTop: 8 }}>
         <div style={{ textAlign: "center", margin: "20px 0" }}>
-          <div style={{ width: 64, height: 64, borderRadius: "50%", background: C.push + "22", border: `2px solid ${C.push}`,
-            display: "grid", placeItems: "center", margin: "0 auto 16px", fontSize: 30, color: C.push }}><Icon e="check" s={30} /></div>
-          <h2 style={{ font: `800 35px ${FD}`, textTransform: "uppercase", margin: 0 }}>Job complete</h2>
+          <DoneCheck size={72} />
+          <h2 style={{ font: `800 40px/1 ${FD}`, textTransform: "uppercase", margin: "16px 0 0" }}>Job complete</h2>
           <p style={{ ...sub, marginTop: 6 }}>Nice work. Payout added to today's earnings.</p>
         </div>
         <div style={{ background: C.night2, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 14 }}>
@@ -4954,7 +5018,7 @@ function DriverActiveJob() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 12 }}>
         <div>
           <Eyebrow color={arrived ? C.push : C.amber}>{arrived ? "At the property" : "En route"}</Eyebrow>
-          <h2 style={{ font: `800 33px ${FD}`, textTransform: "uppercase", margin: "6px 0 0" }}>{arrived ? "Plow the job" : LIVE ? "Head to the property" : `${Math.ceil(eta)} min to site`}</h2>
+          <h2 style={{ ...H(28), margin: "6px 0 0" }}>{arrived ? "Plow the job" : LIVE ? "Head to the property" : `${Math.ceil(eta)} min to site`}</h2>
         </div>
         <div style={{ font: `800 24px ${FD}`, textTransform: "uppercase", color: C.push }}>${dPay}</div>
       </div>
@@ -4973,17 +5037,17 @@ function DriverActiveJob() {
       {/* navigation / address */}
       <Card style={{ marginTop: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div><div style={{ font: `700 14px ${FB}` }}>{o.property?.addr}</div>
-          <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 2 }}>{o.property?.label} · {(JOB_TYPES[o.jobType || "driveway"]).label}</div></div>
-        <Btn sm onClick={() => {
+          <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 2 }}>{o.property?.label} · {(JOB_TYPES[o.jobType || "driveway"]).label}</div></div>
+        <Btn onClick={() => {
           const ok = openDirections({ lat: jobCenter?.lat, lng: jobCenter?.lng, addr: o.property?.addr });
           dispatch({ type: "TOAST", msg: ok ? "Opening directions in Maps…" : "No address on this job yet" });
-        }}>Navigate</Btn>
+        }} style={{ minHeight: 52, padding: "0 20px", flex: "none" }}><Icon e="send" s={18} /> Navigate</Btn>
       </Card>
 
       {/* LIVE: the driver says when they've arrived (no fake ETA) */}
       {LIVE && !arrived && (
         <div style={{ marginTop: 12 }}>
-          <Btn full kind="good" onClick={() => setHere(true)}>I'm at the property</Btn>
+          <Btn full kind="good" onClick={() => setHere(true)} style={{ minHeight: 64, fontSize: 18, borderRadius: 18 }}>I'm at the property</Btn>
         </div>
       )}
 
@@ -5040,13 +5104,13 @@ function DriverActiveJob() {
           {o.state !== "plowing" ? (
             <>
               <Eyebrow color={C.plow}>Before you plow</Eyebrow>
-              <p style={{ font: `500 12px ${FB}`, color: C.mist, margin: "6px 0 10px" }}>
+              <p style={{ font: `500 13px ${FB}`, color: C.mist, margin: "6px 0 10px" }}>
                 Snap a quick "before" photo. The customer sees it as proof of the starting conditions.
               </p>
               <PhotoCapture phase="before" photos={o.photos?.before || []} jobId={o.jobId}
                 onCapture={(photo) => savePhoto("before", photo)} />
               <div style={{ marginTop: 12 }}>
-                <Btn full kind="good" onClick={startPlow} disabled={!(o.photos?.before?.length)}>
+                <Btn full kind="good" onClick={startPlow} disabled={!(o.photos?.before?.length)} style={{ minHeight: 64, fontSize: 18, borderRadius: 18 }}>
                   {o.photos?.before?.length ? "Start plowing" : "Take a before photo first"}
                 </Btn>
               </div>
@@ -5059,25 +5123,25 @@ function DriverActiveJob() {
                 {checkableZones.map((z, i) => (
                   <button key={i} onClick={() => setChecks(c => ({ ...c, [i]: !c[i] }))}
                     style={{ display: "flex", gap: 12, alignItems: "center", textAlign: "left", cursor: "pointer",
-                      background: C.slate, border: `1px solid ${checks[i] ? C.push : C.line}`, borderRadius: 12, padding: 13 }}>
-                    <span style={{ width: 22, height: 22, borderRadius: 6, flexShrink: 0, display: "grid", placeItems: "center",
+                      background: C.slate, border: `1px solid ${checks[i] ? C.push : C.line}`, borderRadius: 14, padding: "16px 14px", minHeight: 58 }}>
+                    <span style={{ width: 26, height: 26, borderRadius: 7, flexShrink: 0, display: "grid", placeItems: "center",
                       background: checks[i] ? C.push : "transparent", border: `2px solid ${checks[i] ? C.push : C.line}`,
                       color: C.onPush, fontWeight: 800 }}>{checks[i] ? <Icon e="check" s={13} /> : ""}</span>
-                    <span style={{ font: `600 13px ${FB}`, color: C.ice }}>Plow zone {i + 1} cleared</span>
+                    <span style={{ font: `600 15px ${FB}`, color: C.ice }}>Plow zone {i + 1} cleared</span>
                   </button>
                 ))}
               </div>
               </>}
 
               <Eyebrow color={C.push}>After photo</Eyebrow>
-              <p style={{ font: `500 12px ${FB}`, color: C.mist, margin: "6px 0 10px" }}>
+              <p style={{ font: `500 13px ${FB}`, color: C.mist, margin: "6px 0 10px" }}>
                 Show the finished job. This lands on the customer's receipt.
               </p>
               <PhotoCapture phase="after" photos={o.photos?.after || []} jobId={o.jobId}
                 onCapture={(photo) => savePhoto("after", photo)} />
 
               <div style={{ marginTop: 14 }}>
-                <Btn full onClick={complete} disabled={!allChecked || !(o.photos?.after?.length) || finishing}>
+                <Btn full onClick={complete} disabled={!allChecked || !(o.photos?.after?.length) || finishing} style={{ minHeight: 64, fontSize: 18, borderRadius: 18 }}>
                   {finishing ? "Finishing…" : !allChecked ? "Check off all zones" : !(o.photos?.after?.length) ? "Add an after photo" : `Complete job · collect $${dPay}`}
                 </Btn>
               </div>
@@ -5176,7 +5240,7 @@ function PayoutsCard() {
         {!st.ready && <Btn full kind="good" onClick={() => setOpen(true)}>{st.hasAccount ? "Continue setup" : "Set up payouts"}</Btn>}
         {st.hasAccount && <Btn full kind="dark" onClick={openDashboard}>Payout history and tax forms</Btn>}
       </div>
-      <p style={{ font: `400 12px ${FB}`, color: C.mistDim, textAlign: "center", margin: "10px 0 0" }}>
+      <p style={{ font: `400 13px ${FB}`, color: C.mistDim, textAlign: "center", margin: "10px 0 0" }}>
         Secured by Stripe · DRIFT never sees your bank details</p>
       {open && <PayoutSetupSheet askType={!st.hasAccount} onClose={() => { setOpen(false); refresh(); }} />}
     </div>
@@ -5210,7 +5274,7 @@ function PayoutTypeStep({ onPick }) {
       <div style={{ marginTop: 16 }}>
         <Btn full disabled={type === "company" && biz.trim().length < 2} onClick={() => onPick({ entityType: type, businessName: biz.trim() })}>Continue</Btn>
       </div>
-      <p style={{ font: `400 12px ${FB}`, color: C.mistDim, textAlign: "center", margin: "10px 0 0" }}>This can't be switched later, so pick the one your taxes go under.</p>
+      <p style={{ font: `400 13px ${FB}`, color: C.mistDim, textAlign: "center", margin: "10px 0 0" }}>This can't be switched later, so pick the one your taxes go under.</p>
     </div>
   );
 }
@@ -5219,7 +5283,7 @@ function PayoutSetupSheet({ onClose, askType }) {
   const [choice, setChoice] = useState(askType ? null : {});
   return (
     <Sheet onClose={onClose}>
-      <h3 style={{ font: `800 26px ${FD}`, textTransform: "uppercase", margin: "0 0 12px" }}>Set up payouts</h3>
+      <h3 style={{ ...H(24), margin: "0 0 12px" }}>Set up payouts</h3>
       {choice ? <PayoutOnboarding choice={choice} onClose={onClose} /> : <PayoutTypeStep onPick={setChoice} />}
     </Sheet>
   );
@@ -5280,35 +5344,47 @@ function DriverEarnings({ onReferral }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: S.lg }}>
         <div style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: S.lg }}>
           {LIVE ? <><div style={{ font: `800 28px ${FD}`, textTransform: "uppercase", color: C.ice }}>{e.jobsWeek || 0}</div>
-            <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 3 }}>Jobs this week</div></>
+            <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 3 }}>Jobs this week</div></>
           : <><div style={{ font: `800 28px ${FD}`, textTransform: "uppercase", color: C.ice }}>$92<span style={{ fontSize: 13 }}>/hr</span></div>
-          <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 3 }}>Active-job rate at peak</div></>}</div>
+          <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 3 }}>Active-job rate at peak</div></>}</div>
         <div style={{ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: S.lg }}>
           <div style={{ font: `800 28px ${FD}`, textTransform: "uppercase", color: C.push }}>{Math.round(driverPct(state.driver) * 100)}%</div>
-          <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 3 }}>You keep per job</div></div>
+          <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 3 }}>You keep per job</div></div>
       </div>
 
-      {/* interactive chart */}
+      {/* this week, day by day */}
       <Card style={{ marginBottom: S.lg }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: S.lg }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 14 }}>
           <Eyebrow color={C.mist}>{LIVE ? "Last 7 days" : "Daily payouts"}</Eyebrow>
-          {sel && <Chip color={C.amber}>{sel.d} · ${sel.amt}</Chip>}
+          <span style={{ font: `500 13px ${FB}`, color: sel ? C.ice : C.mist }}>{sel ? `${sel.d} · $${sel.amt}` : `$${Math.round(e.payouts.reduce((t, p) => t + p.amt, 0))} total`}</span>
         </div>
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 9, height: 130 }}>
-          {e.payouts.map(p => {
-            const on = sel?.d === p.d;
-            return (
-              <button key={p.d} onClick={() => setSel(on ? null : p)}
-                style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 7,
-                  background: "none", border: "none", cursor: "pointer", padding: 0, WebkitTapHighlightColor: "transparent" }}>
-                <div style={{ width: "100%", height: `${(p.amt / max) * 92}px`, borderRadius: "8px 8px 3px 3px",
-                  background: on ? C.push : C.amber,
-                  transition: `all .25s ${EASE}` }} />
-                <span style={{ font: `600 11px ${FB}`, color: on ? C.ice : C.mist }}>{p.d}</span>
-              </button>
-            );
-          })}
-        </div>
+        {e.payouts.every(p => !p.amt) ? (
+          <div style={{ height: 120, display: "grid", placeItems: "center", textAlign: "center", font: `400 14px/1.45 ${FB}`, color: C.mist,
+            borderRadius: 12, background: `repeating-linear-gradient(0deg, transparent 0 29px, ${C.lineSoft} 29px 30px)` }}>
+            No payouts yet this week.<br />Your first storm will show up here.</div>
+        ) : (
+          <div style={{ position: "relative", display: "flex", alignItems: "flex-end", gap: 8, height: 140, paddingTop: 18,
+            background: `repeating-linear-gradient(0deg, ${C.lineSoft} 0 1px, transparent 1px 30px)` }}>
+            {e.payouts.map((p, i) => {
+              const on = sel?.d === p.d, today = i === e.payouts.length - 1;
+              return (
+                <button key={p.d + i} onClick={() => setSel(on ? null : p)} aria-label={`${p.d}: $${p.amt}`}
+                  style={{ flex: 1, height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "center", gap: 6,
+                    background: "none", border: "none", cursor: "pointer", padding: 0, WebkitTapHighlightColor: "transparent" }}>
+                  {p.amt > 0 && <span style={{ font: `600 11.5px ${FB}`, color: on || today ? C.ice : C.mist }}>${Math.round(p.amt)}</span>}
+                  <div style={{ width: "100%", height: p.amt ? `${Math.max(6, (p.amt / max) * 88)}px` : 3, borderRadius: "7px 7px 3px 3px",
+                    background: on ? C.push : today ? C.amber : C.amber + "99", transition: `all .25s ${EASE}` }} />
+                  <span style={{ font: `${today ? 700 : 500} 12px ${FB}`, color: on || today ? C.ice : C.mist }}>{today ? "Today" : p.d}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {e.week > 0 && <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 14, paddingTop: 12, borderTop: `1px solid ${C.lineSoft}`,
+          font: `400 13px/1.45 ${FB}`, color: C.mist }}>
+          <Icon e="bank" s={15} style={{ marginTop: 2, flexShrink: 0 }} />
+          <span>Taxes aren't taken out — a common rule of thumb is to set aside about 25%, so <b style={{ color: C.ice }}>${Math.round(e.week * 0.25)}</b> of this week. Ask a tax pro for your situation.</span>
+        </div>}
       </Card>
 
       {/* payouts: real Stripe setup for signed-in drivers, demo card otherwise */}
@@ -5320,13 +5396,13 @@ function DriverEarnings({ onReferral }) {
             <span style={{ fontSize: 22 }}><Icon e="bank" s={22} /></span>
             <div style={{ font: `700 15px ${FB}`, color: C.ice }}>Set up your payouts</div>
           </div>
-          <p style={{ font: `500 12px ${FB}`, color: C.mist, margin: "0 0 14px" }}>
+          <p style={{ font: `500 13px ${FB}`, color: C.mist, margin: "0 0 14px" }}>
             Connect a bank account through Stripe to get paid — takes about 2 minutes. You keep 80% of every offer, the full ${CALLOUT_FEE} call-out fee, and all tips — deposited automatically.
           </p>
           <Btn full kind="dark" onClick={() => {
             dispatch({ type: "TOAST", msg: "Sign in with a driver account to set up payouts" });
           }}>Connect bank with Stripe ›</Btn>
-          <p style={{ font: `500 11px ${FB}`, color: C.mistDim, textAlign: "center", marginTop: 10 }}>
+          <p style={{ font: `500 13px ${FB}`, color: C.mistDim, textAlign: "center", marginTop: 10 }}>
             Secured by Stripe · we never see your bank details
           </p>
         </div>
@@ -5335,14 +5411,14 @@ function DriverEarnings({ onReferral }) {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: S.md }}>
             <div>
               <div style={{ font: `700 14px ${FB}`, color: C.ice }}>Available now</div>
-              <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 2 }}>Stripe Connect · same-day</div>
+              <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 2 }}>Stripe Connect · same-day</div>
             </div>
             <div style={{ font: `800 31px ${FD}`, textTransform: "uppercase", color: C.push }}>${e.week}</div>
           </div>
           <Btn full kind="good" onClick={() => dispatch({ type: "TOAST", msg: `$${e.week} sent — arrives in seconds` })}>
             Cash out instantly
           </Btn>
-          <p style={{ font: `500 11px ${FB}`, color: C.mistDim, textAlign: "center", marginTop: 10 }}>
+          <p style={{ font: `500 13px ${FB}`, color: C.mistDim, textAlign: "center", marginTop: 10 }}>
             $0.50 instant fee · free if you wait for Tuesday deposit
           </p>
         </div>
@@ -5356,7 +5432,7 @@ function DriverEarnings({ onReferral }) {
           <div style={{ width: 40, height: 40, borderRadius: 12, background: C.push + "1E", display: "grid",
             placeItems: "center", fontSize: 19, flexShrink: 0 }}><Icon e="handshake" s={19} /></div>
           <div><div style={{ font: `700 14px ${FB}` }}>Refer a driver · earn ${ref.reward}</div>
-            <div style={{ font: `500 12px ${FB}`, color: C.mist, marginTop: 2 }}>
+            <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 2 }}>
               {ref.credit > 0 ? `$${ref.credit} earned · ${ref.invited} referred` : `Paid when they finish ${ref.threshold} jobs`}</div></div></div>
         <Icon e="chevronright" s={16} color={C.mistDim} />
       </Card>}
@@ -5419,7 +5495,7 @@ function DriverAccount({ onReferral }) {
       {/* equipment — determines which job types you can accept */}
       <Card style={{ marginBottom: 14 }}>
         <Eyebrow color={C.plow}>Your equipment</Eyebrow>
-        <p style={{ font: `500 11px ${FB}`, color: C.mistDim, margin: "6px 0 10px" }}>
+        <p style={{ font: `500 13px ${FB}`, color: C.mistDim, margin: "6px 0 10px" }}>
           You'll only be offered jobs your gear can handle.
         </p>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -5445,7 +5521,7 @@ function DriverAccount({ onReferral }) {
           {docRow("Vehicle registration", d.docs?.plate || "pending")}
           {docRow("W-9 / tax info", d.docs?.w9 || "pending")}
         </div>
-        <p style={{ font: `500 11px ${FB}`, color: C.mistDim, margin: "10px 0 0" }}>
+        <p style={{ font: `500 13px ${FB}`, color: C.mistDim, margin: "10px 0 0" }}>
           DRIFT doesn't provide insurance. Any coverage you carry is your own choice and your responsibility.
         </p>
       </Card>}
@@ -5453,7 +5529,7 @@ function DriverAccount({ onReferral }) {
       {!LIVE && <Card style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}><span style={{ fontSize: 20 }}><Icon e="bank" s={20} /></span>
           <div><div style={{ font: `700 13px ${FB}` }}>Payout account</div>
-            <div style={{ font: `500 12px ${FB}`, color: C.mist }}>Stripe Connect · ···6789</div></div></div>
+            <div style={{ font: `500 13px ${FB}`, color: C.mist }}>Stripe Connect · ···6789</div></div></div>
         <Chip color={C.good}>Linked</Chip>
       </Card>}
 
@@ -5462,7 +5538,7 @@ function DriverAccount({ onReferral }) {
         borderColor: C.push + "55" }}>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}><span style={{ fontSize: 20 }}><Icon e="handshake" s={20} /></span>
           <div><div style={{ font: `700 13px ${FB}` }}>Refer drivers · earn ${ref.reward} each</div>
-            <div style={{ font: `500 12px ${FB}`, color: C.mist }}>Bring on plow operators you trust</div></div></div>
+            <div style={{ font: `500 13px ${FB}`, color: C.mist }}>Bring on plow operators you trust</div></div></div>
         <span style={{ color: C.push, display: "flex" }}><Icon e="chevronright" s={16} /></span>
       </Card>}
 
@@ -5508,11 +5584,11 @@ function DriverReferral({ onBack }) {
       <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
         <div style={{ flex: 1, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 12, padding: 14 }}>
           <div style={{ font: `800 28px ${FD}`, textTransform: "uppercase", color: C.push }}>${ref.credit}</div>
-          <div style={{ font: `500 12px ${FB}`, color: C.mist }}>Bonuses earned</div>
+          <div style={{ font: `500 13px ${FB}`, color: C.mist }}>Bonuses earned</div>
         </div>
         <div style={{ flex: 1, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 12, padding: 14 }}>
           <div style={{ font: `800 28px ${FD}`, textTransform: "uppercase", color: C.ice }}>{ref.invited}</div>
-          <div style={{ font: `500 12px ${FB}`, color: C.mist }}>Drivers referred</div>
+          <div style={{ font: `500 13px ${FB}`, color: C.mist }}>Drivers referred</div>
         </div>
       </div>
 
@@ -5874,6 +5950,8 @@ function Shell({ startEntered = false }) {
           @keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
           @keyframes spin{to{transform:rotate(360deg)}}
           @keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+          @keyframes draw{to{stroke-dashoffset:0}}
+          @keyframes ring{0%{transform:scale(.6);opacity:0}70%{transform:scale(1.06);opacity:1}100%{transform:scale(1);opacity:1}}
           @keyframes fall{to{transform:translateY(210px)}}
           @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
           @media (prefers-reduced-motion: reduce){*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
@@ -5911,7 +5989,7 @@ function Shell({ startEntered = false }) {
           {/* Demo-only hint (hidden once real accounts are on) */}
           {state.order && !inSetup && !supabaseEnabled && (
             <div style={{ margin: "10px 20px 0", background: C.slate, border: `1px solid ${C.line}`, borderRadius: 10,
-              padding: "8px 12px", font: `500 12px ${FB}`, color: C.mist, display: "flex", alignItems: "center", gap: 8 }}>
+              padding: "8px 12px", font: `500 13px ${FB}`, color: C.mist, display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ width: 7, height: 7, borderRadius: "50%", background: C.amber }} />
               Demo: this job is live on both sides — switch views from Account.
             </div>
