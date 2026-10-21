@@ -38,7 +38,8 @@ export default async function handler(req, res) {
     // Vercel's nightly cron calls GET /api/pay (no action) with the CRON_SECRET.
     if (action === "sweep" || (req.method === "GET" && !action)) return send(res, 200, await sweep(req));
     // Every few minutes (Supabase cron, or any signed-in app as a backup): scheduled-plow reminders & hand-offs.
-    if (action === "tick" && req.method === "GET") { cronAuth(req); return send(res, 200, await tick()); }
+    // No secret needed: it only does what's already due, and it's throttled to once per 90 seconds.
+    if (action === "tick" && req.method === "GET") return send(res, 200, await throttledTick());
     if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
     const body = await readJson(req);
     const user = await requireUser(req);
@@ -314,16 +315,7 @@ const ACTIONS = {
   },
 
   // Backup for the cron: any signed-in app can nudge the scheduler (at most every 90 seconds).
-  async tick() {
-    const { data: row } = await admin.from("app_settings").select("last_tick").eq("id", 1).maybeSingle();
-    const prev = row?.last_tick || null;
-    if (prev && Date.now() - new Date(prev).getTime() < 90e3) return { skipped: true };
-    let q = admin.from("app_settings").update({ last_tick: new Date().toISOString() }).eq("id", 1);
-    q = prev ? q.eq("last_tick", prev) : q.is("last_tick", null);   // only one caller wins
-    const { data: claimed } = await q.select("id");
-    if (!claimed?.length) return { skipped: true };
-    return await tick();
-  },
+  async tick() { return await throttledTick(); },
 
   // ---------- 5. driver payouts (Stripe Connect, Accounts v2) ----------
   // Creates the driver's Stripe account once, then returns a short-lived
@@ -527,6 +519,18 @@ async function payOwedJobs(driverId, accountId) {
     }
   }
   return total;
+}
+
+// Runs the scheduler at most once every 90 seconds, no matter who asks.
+async function throttledTick() {
+  const { data: row } = await admin.from("app_settings").select("last_tick").eq("id", 1).maybeSingle();
+  const prev = row?.last_tick || null;
+  if (prev && Date.now() - new Date(prev).getTime() < 90e3) return { skipped: true };
+  let q = admin.from("app_settings").update({ last_tick: new Date().toISOString() }).eq("id", 1);
+  q = prev ? q.eq("last_tick", prev) : q.is("last_tick", null);   // only one caller wins
+  const { data: claimed } = await q.select("id");
+  if (!claimed?.length) return { skipped: true };
+  return await tick();
 }
 
 function cronAuth(req) {
