@@ -26,9 +26,14 @@ function hasSession() {
   return false
 }
 const q = new URLSearchParams(window.location.search)
+// Remember which link brought this visitor (?ref=hermantown-moms) — saved to their profile at sign-up.
+try {
+  const ref = (q.get('ref') || '').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 40)
+  if (ref && !localStorage.getItem('drift.ref')) localStorage.setItem('drift.ref', ref)
+} catch { /* private mode */ }
 // A link from a sign-in / password-reset email carries tokens in the URL — open the app for those too.
 const authLink = /access_token=|type=recovery|error_description=/.test(window.location.hash) || q.has('code')
-const appRoute = window.location.pathname !== '/' || authLink || ['drive', 'admin', 'ops', 'demo', 'reset'].some((k) => q.has(k))
+const appRoute = window.location.pathname !== '/' || authLink || ['drive', 'admin', 'ops', 'demo', 'reset', 'job', 'offer', 'route', 'go', 'rebook'].some((k) => q.has(k))
 const startInApp = appRoute || hasSession()
 
 const Blank = () => <div style={{ minHeight: '100vh', background: '#07090D' }} />

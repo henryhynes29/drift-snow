@@ -88,12 +88,12 @@ export async function sendSnowAlert({ customers, drivers }) {
   let c = 0, d = 0;
   if (customers) {
     const { data } = await admin.from("profiles").select("id").eq("is_driver", false).eq("snow_alerts", true);
-    c = await pushTo((data || []).map((p) => p.id), { ...customers, tag: "snow", url: "/", sticky: false },
+    c = await pushTo((data || []).map((p) => p.id), { ...customers, tag: "snow", url: "/?rebook=1", sticky: false },
       { ttl: 6 * 3600, urgency: "normal" });
   }
   if (drivers) {
     const { data } = await admin.from("profiles").select("id").eq("is_driver", true).eq("suspended", false);
-    d = await pushTo((data || []).map((p) => p.id), { ...drivers, tag: "snow-driver", url: "/", sticky: false },
+    d = await pushTo((data || []).map((p) => p.id), { ...drivers, tag: "snow-driver", url: "/?route=1", sticky: false },
       { ttl: 6 * 3600, urgency: "normal" });
   }
   return { customers: c, drivers: d };

@@ -83,6 +83,13 @@ function circleEl(d, fill, glyphSvg) {
 
 // LiveMap marker. mk: { lng, lat, kind?: "truck", size?, pulse?, ring? }
 function makeMarkerEl(mk) {
+  if (mk.label) { // open job: a price tag pin
+    const tag = document.createElement("div");
+    tag.textContent = mk.label;
+    tag.style.cssText = `font:800 13px/1 system-ui,sans-serif;color:#1A1204;background:${mk.color || TRUCK_FILL};border:2px solid #fff;` +
+      `border-radius:999px;padding:5px 8px;box-shadow:${MARKER_SHADOW};white-space:nowrap;pointer-events:none;`;
+    return tag;
+  }
   const isTruck = mk.kind === "truck";
   const base = isTruck ? 30 : 28;
   const d = mk.size ? Math.max(16, Math.round((mk.size * base) / 28)) : base;
@@ -149,7 +156,7 @@ const midpointOf = (coords, shape) => {
 // ============================================================
 // LiveMap — read-only satellite map w/ markers + optional route
 // ============================================================
-export function LiveMap({ center, markers = [], route, height = 220, interactive = true }) {
+export function LiveMap({ center, markers = [], route, height = 220, interactive = true, fit = false }) {
   const el = useRef(null), mapRef = useRef(null), markerObjs = useRef([]);
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
@@ -167,12 +174,23 @@ export function LiveMap({ center, markers = [], route, height = 220, interactive
     return () => { m.remove(); mapRef.current = null; markerObjs.current = []; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  useEffect(() => { const m = mapRef.current; if (m && center) m.easeTo({ center: [center.lng, center.lat], duration: 600 }); }, [center?.lng, center?.lat]);
+  useEffect(() => { const m = mapRef.current; if (m && center && !fit) m.easeTo({ center: [center.lng, center.lat], duration: 600 }); }, [center?.lng, center?.lat]);
+  // fit: zoom out to show every marker (e.g. all open jobs + the driver)
+  const fitKey = fit ? markers.map((mk) => `${mk.lng.toFixed(4)},${mk.lat.toFixed(4)}`).join("|") : "";
+  useEffect(() => {
+    const m = mapRef.current; if (!m || !fit || !markers.length) return;
+    if (markers.length === 1) { m.easeTo({ center: [markers[0].lng, markers[0].lat], zoom: 14, duration: 500 }); return; }
+    const b = new mapboxgl.LngLatBounds();
+    markers.forEach((mk) => b.extend([mk.lng, mk.lat]));
+    m.fitBounds(b, { padding: 40, maxZoom: 15, duration: 500 });
+  }, [fitKey]);
   useEffect(() => {
     const m = mapRef.current; if (!m) return;
-    if (markerObjs.current.length !== markers.length) {
+    const key = markers.map((mk) => `${mk.kind || ""}${mk.label || ""}`).join("|");
+    if (markerObjs.current.length !== markers.length || markerObjs.current.key !== key) {
       markerObjs.current.forEach((o) => o.remove());
       markerObjs.current = markers.map((mk) => new mapboxgl.Marker({ element: makeMarkerEl(mk) }).setLngLat([mk.lng, mk.lat]).addTo(m));
+      markerObjs.current.key = key;
     } else { markers.forEach((mk, i) => markerObjs.current[i].setLngLat([mk.lng, mk.lat])); }
   }, [markers]);
   useEffect(() => {

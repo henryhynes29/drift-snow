@@ -8,6 +8,12 @@
   "orientation": "portrait",
   "background_color": "#0B0B0C",
   "theme_color": "#0B0B0C",
+  "shortcuts": [
+    { "name": "Book a plow", "short_name": "Book a plow", "url": "/?go=book", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Jump-start", "short_name": "Jump-start", "url": "/?go=jumpstart", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Driver: go online", "short_name": "Drive", "url": "/?go=drive", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Driver: my route", "short_name": "My route", "url": "/?route=1", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }
+  ],
   "icons": [
     { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },

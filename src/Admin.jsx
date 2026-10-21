@@ -186,6 +186,7 @@ function Drivers() {
         ["Registration", (r) => <Chip tone={docTone(r.registration)}>{r.registration}</Chip>],
         ["Payouts", (r) => <Chip tone={r.payouts_ready ? "good" : "warn"}>{r.payouts_ready ? "set up" : "not set up"}</Chip>],
         ["Jobs", (r) => r.jobsDone],
+        ["Late cancels", (r) => r.late_cancels ? <Chip tone={r.late_cancels >= 3 ? "bad" : "warn"}>{r.late_cancels}</Chip> : "0"],
         ["Earned", (r) => money(r.earned)],
         ["Status", (r) => r.suspended ? <Chip tone="bad">suspended</Chip> : r.is_online ? <Chip tone="good">online</Chip> : <Chip>offline</Chip>],
         ["Joined", (r) => day(r.created_at)],
@@ -220,6 +221,7 @@ function DriverPanel({ id, onClose }) {
             <div><b>Email:</b> {p.email}</div><div><b>Phone:</b> {p.phone || "—"}</div>
             <div><b>Truck:</b> {p.truck || "—"}</div><div><b>Equipment:</b> {(p.tools || []).join(", ") || "—"}</div>
             <div><b>Joined:</b> {day(p.created_at)} · <b>Rating:</b> {p.rating ? `${Number(p.rating).toFixed(1)} (${p.ratings_count || 0})` : "no ratings yet"} · <b>Jobs done:</b> {p.jobs_count || 0}</div>
+            <div><b>Late cancels:</b> {p.late_cancels || 0}{(p.late_cancels || 0) >= 3 ? " — consider suspending" : ""} <span style={{ color: C.mistDim }}>(scheduled jobs dropped within 3 hrs, or missed check-in)</span></div>
             <div><b>Payouts (Stripe):</b> {!p.stripe_account_id ? "not started" : d.stripeStatus?.ready ? "ready" : `in progress${d.stripeStatus?.due?.length ? ` — needs ${d.stripeStatus.due.join(", ")}` : ""}`}</div>
             <div style={{ marginTop: 8 }}>
               {p.suspended
@@ -270,6 +272,15 @@ function DriverPanel({ id, onClose }) {
             </div>
           ))}
 
+          {(d.backouts || []).length > 0 && <>
+            <h3 style={{ font: `700 16px ${FD}`, color: C.ice, margin: "22px 0 10px" }}>Dropped scheduled jobs</h3>
+            {d.backouts.map((b, i) => (
+              <div key={i} style={{ font: `400 13px ${FB}`, color: C.ice, padding: "7px 0", borderBottom: `1px solid ${C.lineSoft}` }}>
+                {date(b.created_at)} · {b.reason === "no_checkin" ? "Missed check-in" : "Backed out"} · {b.late ? <Chip tone="bad">late</Chip> : <Chip>free</Chip>}
+              </div>
+            ))}
+          </>}
+
           <h3 style={{ font: `700 16px ${FD}`, color: C.ice, margin: "22px 0 10px" }}>Jobs</h3>
           <Table rows={d.jobs} cols={[
             ["Date", (j) => date(j.created_at)], ["Address", (j) => j.address || "—"],
@@ -280,6 +291,37 @@ function DriverPanel({ id, onClose }) {
         </>}
       </div>
     </div>
+  );
+}
+
+// Where sign-ups come from: each Facebook group / ad / flyer gets its own link.
+function Sources() {
+  const [rows, setRows] = useState(null);
+  const [name, setName] = useState("");
+  const [copied, setCopied] = useState(false);
+  useEffect(() => { api("sources").then((d) => setRows(d.sources)).catch((e) => setRows({ error: e.message })); }, []);
+  const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+  const link = slug ? `https://driftplowing.com/?ref=${slug}` : "";
+  const copy = async () => { try { await navigator.clipboard.writeText(link); setCopied(true); setTimeout(() => setCopied(false), 1800); } catch { /* ignore */ } };
+  return (
+    <>
+      <div style={{ ...card(), marginBottom: 16 }}>
+        <div style={{ font: `700 16px ${FD}`, color: C.ice, marginBottom: 4 }}>Make a tracking link</div>
+        <p style={{ font: `400 13px/1.5 ${FB}`, color: C.mist, margin: "0 0 10px" }}>Use a different link for each Facebook group, ad or flyer. Everyone who signs up through it shows up below.</p>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Hermantown moms group" style={{ ...search(), marginBottom: 0, flex: 1, minWidth: 200 }} />
+          <button onClick={copy} disabled={!link} style={btn("good")}>{copied ? "Copied!" : "Copy link"}</button>
+        </div>
+        {link && <div style={{ font: `500 13px ${FB}`, color: C.plow, marginTop: 10, wordBreak: "break-all" }}>{link}</div>}
+      </div>
+      {!rows ? <p style={{ color: C.mist }}>Loading…</p> : rows.error ? <p style={{ color: C.danger }}>{rows.error}</p> : (
+        <Table rows={rows} cols={[
+          ["Source", (r) => <b>{r.source}</b>], ["Sign-ups", (r) => r.signups], ["Last 7 days", (r) => r.last7],
+          ["Customers", (r) => r.customers], ["Drivers", (r) => r.drivers],
+          ["Booked a plow", (r) => r.bookedCustomers], ["Revenue", (r) => money(r.revenue)],
+        ]} />
+      )}
+    </>
   );
 }
 
@@ -295,7 +337,7 @@ function Customers() {
       <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search customers" style={search()} />
       <Table rows={shown} cols={[
         ["Customer", (r) => <><div style={{ font: `600 14px ${FB}` }}>{r.name || "—"}</div><div style={{ font: `400 12px ${FB}`, color: C.mist }}>{r.email}</div></>],
-        ["Phone", (r) => r.phone || "—"], ["Jobs", (r) => r.jobs], ["Completed", (r) => r.completed],
+        ["Phone", (r) => r.phone || "—"], ["Source", (r) => r.ref_source || "—"], ["Jobs", (r) => r.jobs], ["Completed", (r) => r.completed],
         ["Spent", (r) => money(r.spent)], ["Joined", (r) => day(r.created_at)],
       ]} />
     </>
@@ -350,7 +392,7 @@ export default function AdminApp({ email, onSignOut }) {
   const [tab, setTab] = useState("overview");
   const [allowed, setAllowed] = useState(null); // null checking · true · false
   useEffect(() => { api("summary").then(() => setAllowed(true)).catch((e) => setAllowed(e.status === 403 ? false : true)); }, []);
-  const tabs = [["overview", "Overview"], ["drivers", "Drivers"], ["customers", "Customers"], ["jobs", "Jobs"]];
+  const tabs = [["overview", "Overview"], ["drivers", "Drivers"], ["customers", "Customers"], ["jobs", "Jobs"], ["sources", "Sources"]];
   return (
     <div style={{ minHeight: "100vh", background: C.night, color: C.ice, fontFamily: FB }}>
       <header style={{ position: "sticky", top: 0, zIndex: 20, background: C.glass, backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderBottom: `1px solid ${C.line}` }}>
@@ -384,6 +426,7 @@ export default function AdminApp({ email, onSignOut }) {
         {allowed && tab === "drivers" && <Drivers />}
         {allowed && tab === "customers" && <Customers />}
         {allowed && tab === "jobs" && <Jobs />}
+        {allowed && tab === "sources" && <Sources />}
       </main>
     </div>
   );

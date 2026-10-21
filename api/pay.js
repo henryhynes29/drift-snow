@@ -17,20 +17,28 @@
 import {
   stripe, admin, HttpError, cents, requireUser, getJob, updateJob, getProfile,
   updateProfile, readJson, send, driverPayoutsReady, payDriverForJob, markAuthorized, announceJob,
-  onlineFavorites, FIRST_DIBS_MINUTES,
+  onlineFavorites, FIRST_DIBS_MINUTES, pushTo, announceScheduled, announceOpenScheduled, fmtWindow, fmtTime, JOB_KIND,
 } from "./_lib.js";
 import { snowCheck } from "./_weather.js";
 
-const OPEN = ["requested"];
+const OPEN = ["requested", "scheduled"];
+const NO_STRIPE_OK = ["announce", "tick", "sched-claim", "sched-backout", "sched-checkin", "sched-start"];
+const H = 3600e3, MIN = 60e3;
+const FREE_BACKOUT_HOURS = 3;     // drivers can drop a scheduled job for free until 3 hrs before
+const CHECKIN_DEADLINE_MIN = 45;  // ...and must check in by 45 min before the window
+const OPEN_TO_ALL_MIN = 30;       // unclaimed scheduled jobs go to everyone 30 min before
+const MAX_ROUTE = 12;             // scheduled jobs one driver can hold
 const ACTIVE = ["accepted", "enroute", "plowing"];
 
 export default async function handler(req, res) {
   const action = (req.query?.action || new URL(req.url, "http://x").searchParams.get("action") || "").toString();
   try {
-    if (!stripe && action !== "announce") throw new HttpError(503, "Payments aren't set up on the server yet");
+    if (!stripe && !NO_STRIPE_OK.includes(action)) throw new HttpError(503, "Payments aren't set up on the server yet");
     if (!admin) throw new HttpError(503, "Server isn't connected to the database yet");
     // Vercel's nightly cron calls GET /api/pay (no action) with the CRON_SECRET.
     if (action === "sweep" || (req.method === "GET" && !action)) return send(res, 200, await sweep(req));
+    // Every few minutes (Supabase cron, or any signed-in app as a backup): scheduled-plow reminders & hand-offs.
+    if (action === "tick" && req.method === "GET") { cronAuth(req); return send(res, 200, await tick()); }
     if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
     const body = await readJson(req);
     const user = await requireUser(req);
@@ -99,6 +107,7 @@ const ACTIONS = {
   async announce(user, { jobId }) {
     let job = await getJob(jobId);
     if (job.customer_id !== user.id) throw new HttpError(403, "Not your job");
+    if (job.status === "scheduled") return { sent: job.payment_status === "not_required" ? await announceScheduled(job) : 0 };
     if (job.status !== "requested" || !["not_required", "authorized"].includes(job.payment_status)) return { sent: 0 };
     if (job.payment_status === "not_required" && !job.announced_at && !job.exclusive_until) {
       const favs = await onlineFavorites(job.customer_id);
@@ -113,13 +122,18 @@ const ACTIONS = {
     const job = await getJob(jobId);
     if (job.customer_id !== user.id) throw new HttpError(403, "Not your job");
     const expired = reason === "expired";
-    if (expired && !(job.status === "requested" && new Date(job.expires_at) <= new Date())) {
+    if (expired && !(OPEN.includes(job.status) && new Date(job.expires_at) <= new Date())) {
       throw new HttpError(409, "This offer hasn't expired");
     }
     if (!(OPEN.includes(job.status) || (!expired && ["accepted", "enroute"].includes(job.status)))) {
       throw new HttpError(409, job.status === "plowing" ? "Your driver has already started" : "This job can't be cancelled");
     }
     await releaseHold(job);
+    if (job.status === "scheduled" && job.driver_id) {
+      await pushTo([job.driver_id], { title: "A scheduled job was cancelled",
+        body: `${job.address || "A customer"} cancelled their ${fmtWindow(job.scheduled_for, job.window_end)} plow. It's off your route.`,
+        tag: `job-${job.id}`, url: "/?route=1" });
+    }
     return { job: await updateJob(job.id, {
       status: expired ? "expired" : "cancelled",
       payment_status: job.payment_status === "not_required" ? "not_required" : "canceled",
@@ -220,6 +234,95 @@ const ACTIONS = {
     if (busy?.length) throw new HttpError(409, "This card is holding an active job. Remove it after the job is done.");
     await stripe.paymentMethods.detach(pm);
     return { ok: true };
+  },
+
+  // ---------- scheduled plows: driver routes ----------
+  // Put a scheduled job on your route. Also takes over a job whose driver missed check-in.
+  async "sched-claim"(user, { jobId }) {
+    const me = await getProfile(user.id);
+    if (!me?.is_driver || me.suspended) throw new HttpError(403, "Only active drivers can take jobs");
+    const job = await getJob(jobId);
+    const now = Date.now(), start = new Date(job.scheduled_for).getTime();
+    if (job.status !== "scheduled" || new Date(job.window_end).getTime() <= now) throw new HttpError(409, "This job isn't open anymore");
+    if (!["authorized", "not_required"].includes(job.payment_status)) throw new HttpError(409, "This job isn't ready yet");
+    if (job.customer_id === user.id) throw new HttpError(409, "That's your own job");
+    if (job.driver_id === user.id) return { job, already: true };
+    const noShow = job.driver_id && !job.checked_in_at && now >= start - CHECKIN_DEADLINE_MIN * MIN;
+    if (job.driver_id && !noShow) throw new HttpError(409, "Another driver already has this one");
+    const { count } = await admin.from("jobs").select("id", { count: "exact", head: true })
+      .eq("driver_id", user.id).eq("status", "scheduled").gt("window_end", new Date().toISOString());
+    if ((count || 0) >= MAX_ROUTE) throw new HttpError(409, `Your route is full (${MAX_ROUTE} jobs)`);
+    // Claiming within 2 hours of the window counts as checking in.
+    const patch = { driver_id: user.id, claimed_at: new Date().toISOString(), reminders_sent: 0,
+      checked_in_at: now >= start - 2 * H ? new Date().toISOString() : null };
+    let q = admin.from("jobs").update(patch).eq("id", job.id).eq("status", "scheduled");
+    q = job.driver_id ? q.eq("driver_id", job.driver_id).is("checked_in_at", null) : q.is("driver_id", null);
+    const { data: got } = await q.select().maybeSingle();
+    if (!got) throw new HttpError(409, "Another driver just took this one");
+    if (noShow) await recordBackout(job, job.driver_id, true, "no_checkin");
+    const first = (me.name || "A driver").split(" ")[0];
+    await pushTo([job.customer_id], { title: `${first} will plow ${fmtWindow(job.scheduled_for, job.window_end)}`,
+      body: `Your scheduled plow has a driver. We'll let you know when they're on the way.`, tag: `job-${job.id}`, url: `/?job=${job.id}` });
+    return { job: got };
+  },
+
+  // Drop a scheduled job. Free until 3 hours before the window; later counts as a late cancel.
+  async "sched-backout"(user, { jobId }) {
+    const job = await getJob(jobId);
+    if (job.driver_id !== user.id || job.status !== "scheduled") throw new HttpError(409, "This job isn't on your route");
+    const start = new Date(job.scheduled_for).getTime();
+    const late = Date.now() > start - FREE_BACKOUT_HOURS * H;
+    const { data: got } = await admin.from("jobs").update({ driver_id: null, claimed_at: null, checked_in_at: null,
+      reminders_sent: 0, released_at: new Date().toISOString(), announced_all_at: null })
+      .eq("id", job.id).eq("driver_id", user.id).eq("status", "scheduled").select().maybeSingle();
+    if (!got) throw new HttpError(409, "This job isn't on your route");
+    await recordBackout(job, user.id, late, "backed_out");
+    await pushTo([job.customer_id], { title: "Finding you a new driver",
+      body: `Your ${fmtWindow(job.scheduled_for, job.window_end)} driver had to cancel. Your plow is back open to every driver.`,
+      tag: `job-${job.id}`, url: `/?job=${job.id}` });
+    if (Date.now() >= start - 2 * H) await announceOpenScheduled(got, "the driver had to cancel");
+    else await announceScheduled(got);
+    return { job: got, late };
+  },
+
+  // "I'm on it" — confirms every scheduled job on today's route (within the next 12 hours).
+  async "sched-checkin"(user) {
+    const until = new Date(Date.now() + 12 * H).toISOString();
+    const { data: rows } = await admin.from("jobs").update({ checked_in_at: new Date().toISOString() })
+      .eq("driver_id", user.id).eq("status", "scheduled").is("checked_in_at", null)
+      .lte("scheduled_for", until).gt("window_end", new Date().toISOString()).select();
+    const me = await getProfile(user.id);
+    const first = (me?.name || "Your driver").split(" ")[0];
+    for (const j of rows || []) {
+      await pushTo([j.customer_id], { title: `${first} is confirmed for ${fmtWindow(j.scheduled_for, j.window_end)}`,
+        body: "Your driver checked in for today's route.", tag: `job-${j.id}`, url: `/?job=${j.id}` });
+    }
+    return { checkedIn: (rows || []).length };
+  },
+
+  // Start a scheduled job (up to 90 min before its window) — it becomes a normal live job.
+  async "sched-start"(user, { jobId }) {
+    const job = await getJob(jobId);
+    if (job.driver_id !== user.id || job.status !== "scheduled") throw new HttpError(409, "This job isn't on your route");
+    if (Date.now() < new Date(job.scheduled_for).getTime() - 90 * MIN) throw new HttpError(409, `You can start this one after ${fmtTime(new Date(new Date(job.scheduled_for).getTime() - 90 * MIN).toISOString())}`);
+    const { count } = await admin.from("jobs").select("id", { count: "exact", head: true })
+      .eq("driver_id", user.id).in("status", ["accepted", "enroute", "plowing"]);
+    if ((count || 0) >= 3) throw new HttpError(409, "Finish a job first — you have 3 going");
+    const got = await updateJob(job.id, { status: "accepted", accepted_at: new Date().toISOString(),
+      checked_in_at: job.checked_in_at || new Date().toISOString() });
+    return { job: got };
+  },
+
+  // Backup for the cron: any signed-in app can nudge the scheduler (at most every 90 seconds).
+  async tick() {
+    const { data: row } = await admin.from("app_settings").select("last_tick").eq("id", 1).maybeSingle();
+    const prev = row?.last_tick || null;
+    if (prev && Date.now() - new Date(prev).getTime() < 90e3) return { skipped: true };
+    let q = admin.from("app_settings").update({ last_tick: new Date().toISOString() }).eq("id", 1);
+    q = prev ? q.eq("last_tick", prev) : q.is("last_tick", null);   // only one caller wins
+    const { data: claimed } = await q.select("id");
+    if (!claimed?.length) return { skipped: true };
+    return await tick();
   },
 
   // ---------- 5. driver payouts (Stripe Connect, Accounts v2) ----------
@@ -426,6 +529,84 @@ async function payOwedJobs(driverId, accountId) {
   return total;
 }
 
+function cronAuth(req) {
+  const secret = process.env.CRON_SECRET;
+  const got = req.headers.authorization || "";
+  const key = new URL(req.url, "http://x").searchParams.get("key");
+  if (!secret || (got !== `Bearer ${secret}` && key !== secret)) throw new HttpError(401, "Unauthorized");
+}
+
+async function recordBackout(job, driverId, late, reason) {
+  try {
+    await admin.from("driver_backouts").insert({ job_id: job.id, driver_id: driverId, late, reason });
+    if (late) {
+      const p = await getProfile(driverId);
+      await updateProfile(driverId, { late_cancels: (p?.late_cancels || 0) + 1 });
+    }
+  } catch (e) { console.error("[sched] backout record", e.message); }
+}
+
+// ---------- scheduled plows: reminders, no-shows, hand-offs (every few minutes) ----------
+async function tick() {
+  const now = Date.now(), iso = (t) => new Date(t).toISOString();
+  const out = { reminded: 0, released: 0, opened: 0, expired: 0 };
+  const { data: sched } = await admin.from("jobs").select("*").eq("status", "scheduled")
+    .in("payment_status", ["authorized", "not_required"]).lte("scheduled_for", iso(now + 3 * H));
+
+  // 1. Check-in reminders: 2 hrs, 75 min and 50 min before each driver's first job.
+  const byDriver = {};
+  for (const j of sched || []) if (j.driver_id && !j.checked_in_at) (byDriver[j.driver_id] ||= []).push(j);
+  for (const [driverId, jobs] of Object.entries(byDriver)) {
+    jobs.sort((a, b) => new Date(a.scheduled_for) - new Date(b.scheduled_for));
+    const first = jobs[0], start = new Date(first.scheduled_for).getTime();
+    const deadline = start - CHECKIN_DEADLINE_MIN * MIN;
+    if (now >= deadline) continue; // handled below
+    const due = now >= start - 50 * MIN ? 3 : now >= start - 75 * MIN ? 2 : now >= start - 2 * H ? 1 : 0;
+    const sent = Math.min(...jobs.map((j) => j.reminders_sent || 0));
+    if (due <= sent) continue;
+    const by = fmtTime(iso(deadline));
+    await pushTo([driverId], due === 3
+      ? { title: `CHECK IN NOW — jobs drop at ${by}`, body: `You haven't checked in. At ${by} your ${jobs.length} scheduled job${jobs.length > 1 ? "s go" : " goes"} to other drivers and it counts as a late cancel.`, tag: "checkin", url: "/?route=1", sticky: true }
+      : { title: `Check in for your route by ${by}`, body: `${jobs.length} scheduled job${jobs.length > 1 ? "s" : ""} starting ${fmtWindow(first.scheduled_for, first.window_end)}. Open DRIFT and tap "I'm on it" — if you don't, they go to other drivers.`, tag: "checkin", url: "/?route=1", sticky: true },
+      { ttl: 3600, urgency: "high" });
+    await admin.from("jobs").update({ reminders_sent: due }).in("id", jobs.map((j) => j.id));
+    out.reminded += 1;
+  }
+
+  // 2. Missed check-in: 45 min before the window, the job goes back to everyone.
+  for (const j of sched || []) {
+    if (!j.driver_id || j.checked_in_at || now < new Date(j.scheduled_for).getTime() - CHECKIN_DEADLINE_MIN * MIN) continue;
+    const { data: got } = await admin.from("jobs").update({ driver_id: null, claimed_at: null, released_at: iso(now), announced_all_at: iso(now) })
+      .eq("id", j.id).eq("driver_id", j.driver_id).is("checked_in_at", null).select().maybeSingle();
+    if (!got) continue;
+    await recordBackout(j, j.driver_id, true, "no_checkin");
+    await pushTo([j.driver_id], { title: "You missed check-in", body: `Your ${fmtWindow(j.scheduled_for, j.window_end)} job at ${j.address || "a customer's"} went to other drivers. This counts as a late cancel.`, tag: "checkin", url: "/?route=1" });
+    await pushTo([j.customer_id], { title: "Finding you a new driver", body: `Your driver didn't confirm, so your ${fmtWindow(j.scheduled_for, j.window_end)} plow is open to every driver nearby.`, tag: `job-${j.id}`, url: `/?job=${j.id}` });
+    await announceOpenScheduled(got, "the scheduled driver didn't check in");
+    out.released += 1;
+  }
+
+  // 3. Nobody claimed it: 30 min before the window, alert every online driver.
+  for (const j of sched || []) {
+    if (j.driver_id || j.announced_all_at || now < new Date(j.scheduled_for).getTime() - OPEN_TO_ALL_MIN * MIN) continue;
+    const { data: got } = await admin.from("jobs").update({ announced_all_at: iso(now) })
+      .eq("id", j.id).is("announced_all_at", null).is("driver_id", null).select().maybeSingle();
+    if (got) { await announceOpenScheduled(got); out.opened += 1; }
+  }
+
+  // 4. Window over and nobody started it: release the hold, tell the customer.
+  const { data: late } = await admin.from("jobs").select("*").eq("status", "scheduled").lt("window_end", iso(now));
+  for (const j of late || []) {
+    try {
+      if (stripe && j.payment_status === "authorized") await releaseHold(j);
+      await updateJob(j.id, { status: "expired", payment_status: j.payment_status === "not_required" ? "not_required" : "canceled" });
+      await pushTo([j.customer_id], { title: "Sorry — no driver made it", body: `Your ${fmtWindow(j.scheduled_for, j.window_end)} plow wasn't done, so you weren't charged. Book again anytime.`, tag: `job-${j.id}`, url: "/" });
+      out.expired += 1;
+    } catch (e) { console.error("[tick] expire", j.id, e.message); }
+  }
+  return out;
+}
+
 // ---------- 6. nightly cleanup (Vercel cron) ----------
 // Releases card holds on offers that expired, were cancelled, or were abandoned
 // on the card screen, in case the customer's phone never told us.
@@ -435,13 +616,13 @@ async function sweep(req) {
   const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
   const { data: stale } = await admin.from("jobs").select("*")
     .in("payment_status", ["pending", "authorized"])
-    .or(`status.in.(cancelled,expired),and(status.eq.requested,expires_at.lt.${new Date().toISOString()}),and(status.eq.requested,payment_status.eq.pending,created_at.lt.${cutoff})`);
+    .or(`status.in.(cancelled,expired),and(status.in.(requested,scheduled),expires_at.lt.${new Date().toISOString()}),and(status.in.(requested,scheduled),payment_status.eq.pending,created_at.lt.${cutoff})`);
   let released = 0;
   for (const job of stale || []) {
     try {
       await releaseHold(job);
       await updateJob(job.id, {
-        status: job.status === "requested" ? "expired" : job.status,
+        status: ["requested", "scheduled"].includes(job.status) ? "expired" : job.status,
         payment_status: "canceled",
       });
       released += 1;
@@ -450,5 +631,7 @@ async function sweep(req) {
   // Same daily run: check the forecast and send a snow alert if a storm is coming.
   let snow = null;
   try { snow = await snowCheck(); } catch (e) { console.error("[pay:snow]", e.message); }
-  return { released, snow };
+  let sched = null;
+  try { sched = await tick(); } catch (e) { console.error("[pay:tick]", e.message); }
+  return { released, snow, sched };
 }

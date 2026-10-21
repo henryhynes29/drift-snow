@@ -41,7 +41,7 @@ export default async function handler(req, res) {
     switch (event.type) {
       case "payment_intent.amount_capturable_updated": { // card hold succeeded
         const job = await jobForIntent(obj.id);
-        if (job && job.status === "requested" && job.payment_status === "pending") await markAuthorized(job, obj);
+        if (job && ["requested", "scheduled"].includes(job.status) && job.payment_status === "pending") await markAuthorized(job, obj);
         break;
       }
       case "payment_intent.canceled": {

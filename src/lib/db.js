@@ -120,6 +120,7 @@ export async function createJobFromOrder(order, customerId) {
       sqft: p.sqft || 0, size: order?.size || null, emergency: !!order?.emergency,
     },
     eta_minutes: order?.eta ?? null,
+    scheduled_for: order?.scheduledFor ? new Date(order.scheduledFor).toISOString() : null,
   };
   try { return await supabase.from("jobs").insert(row).select().single(); }
   catch (e) { return { error: e }; }
@@ -150,6 +151,10 @@ export function rowToOrder(r, driver) {
     eta: r.eta_minutes, photos: r.photos || { before: [], after: [] },
     paymentStatus: r.payment_status || "not_required", payoutStatus: r.payout_status || "none",
     exclusiveUntil: r.exclusive_until ? new Date(r.exclusive_until).getTime() : null,
+    scheduledFor: r.scheduled_for ? new Date(r.scheduled_for).getTime() : null,
+    windowEnd: r.window_end ? new Date(r.window_end).getTime() : null,
+    checkedInAt: r.checked_in_at ? new Date(r.checked_in_at).getTime() : null,
+    lat: r.lat, lng: r.lng, address: r.address, driverPay: Number(r.driver_pay || 0),
     preferredDriverIds: r.preferred_driver_ids || [],
     timeline: [{ k: "requested", t: "now", label: "Request sent" }],
     live: true,
@@ -181,6 +186,36 @@ export function subscribeOpenJobs(onChange) {
     .subscribe();
   const iv = setInterval(onChange, 15000);
   return () => { clearInterval(iv); supabase.removeChannel(ch); };
+}
+
+// Scheduled plows a driver can see: open ones (for building a route) and their own.
+export async function listScheduledJobs() {
+  if (!supabaseEnabled) return { data: [] };
+  const { data, error } = await supabase.from("jobs").select("*")
+    .eq("status", "scheduled").gt("window_end", new Date().toISOString())
+    .order("scheduled_for", { ascending: true }).limit(100);
+  return { data: data || [], error };
+}
+// A driver's live jobs in the order they'll do them (the one in progress first).
+export async function listMyQueue(userId) {
+  if (!supabaseEnabled || !isUuid(userId)) return { data: [] };
+  const { data } = await supabase.from("jobs").select("*").eq("driver_id", userId)
+    .in("status", ["accepted", "enroute", "plowing"]).order("accepted_at", { ascending: true });
+  const rank = { plowing: 0, enroute: 1, accepted: 2 };
+  return { data: (data || []).sort((a, b) => rank[a.status] - rank[b.status] || new Date(a.accepted_at) - new Date(b.accepted_at)) };
+}
+// Customer: how many of your driver's jobs come before yours.
+export async function queuePosition(jobId) {
+  if (!supabaseEnabled || !isUuid(jobId)) return 0;
+  const { data } = await supabase.rpc("queue_position", { p_job: jobId });
+  return Number(data || 0);
+}
+// Customer: your most recent finished job (for one-tap "Book again").
+export async function lastCompletedJob(userId) {
+  if (!supabaseEnabled || !isUuid(userId)) return null;
+  const { data } = await supabase.from("jobs").select("id, job_type, quote, property_id, address, site, completed_at")
+    .eq("customer_id", userId).eq("status", "completed").order("completed_at", { ascending: false }).limit(1);
+  return (data || [])[0] || null;
 }
 
 // First tap wins. Returns { data: jobId } if you got it, { data: null } if
@@ -226,11 +261,18 @@ export async function loadActiveJob(userId) {
   if (!supabaseEnabled || !isUuid(userId)) return { data: null };
   const { data } = await supabase.from("jobs").select("*")
     .or(`customer_id.eq.${userId},driver_id.eq.${userId}`)
-    .in("status", ["requested", "accepted", "enroute", "plowing"])
-    .order("created_at", { ascending: false }).limit(5);
+    .in("status", ["requested", "scheduled", "accepted", "enroute", "plowing"])
+    .order("created_at", { ascending: false }).limit(10);
   const now = Date.now();
-  const live = (data || []).find(r => r.status !== "requested" || (r.customer_id === userId && new Date(r.expires_at).getTime() > now));
-  return { data: live || null };
+  const rows = (data || []).filter(r =>
+    (r.status === "requested" ? r.customer_id === userId && new Date(r.expires_at).getTime() > now
+      : r.status === "scheduled" ? r.customer_id === userId   // a driver's scheduled jobs live on their route, not here
+      : true));
+  // a driver with several jobs: the one in progress first, then the oldest accepted
+  const rank = { plowing: 0, enroute: 1, accepted: 2, requested: 3, scheduled: 4 };
+  const mineAsDriver = rows.filter(r => r.driver_id === userId)
+    .sort((a, b) => rank[a.status] - rank[b.status] || new Date(a.accepted_at || 0) - new Date(b.accepted_at || 0));
+  return { data: mineAsDriver[0] || rows.find(r => r.customer_id === userId) || null };
 }
 
 // Real history for a signed-in account: finished jobs (as customer and as driver),
@@ -412,6 +454,6 @@ export async function recordLegalAcceptance(userId, rec) {
 export async function updateMyProfile(userId, patch) {
   if (!supabaseEnabled || !isUuid(userId)) return { data: null };
   const allowed = {};
-  for (const k of ["name", "phone", "truck", "tools"]) if (k in patch) allowed[k] = patch[k];
+  for (const k of ["name", "phone", "truck", "tools", "ref_source"]) if (k in patch) allowed[k] = patch[k];
   return supabase.from("profiles").update(allowed).eq("id", userId);
 }

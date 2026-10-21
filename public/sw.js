@@ -27,7 +27,13 @@ self.addEventListener("notificationclick", (event) => {
   const url = (event.notification.data && event.notification.data.url) || "/";
   event.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-    for (const w of wins) { if ("focus" in w) { await w.focus(); return; } }
+    for (const w of wins) {
+      if ("focus" in w) {
+        await w.focus();
+        w.postMessage({ type: "open", url });   // DRIFT jumps to that job / offer / route
+        return;
+      }
+    }
     await self.clients.openWindow(url);
   })());
 });

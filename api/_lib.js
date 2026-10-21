@@ -119,10 +119,17 @@ export const FIRST_DIBS_MINUTES = 2;  // favorite drivers see it alone for this 
 // the customer has favorite drivers online, give them first dibs.
 export async function markAuthorized(job, pi) {
   if (job.payment_status === "authorized") return { alreadyAuthorized: true, job };
+  const pm = typeof pi.payment_method === "string" ? pi.payment_method : pi.payment_method?.id;
+  // Scheduled plow: the card is held now; drivers add it to their routes ahead of time.
+  if (job.status === "scheduled") {
+    const updated = await updateJob(job.id, { payment_status: "authorized", payment_method_id: pm });
+    await announceScheduled(updated);
+    return { authorized: true, job: updated };
+  }
   const favs = await onlineFavorites(job.customer_id);
   const updated = await updateJob(job.id, {
     payment_status: "authorized",
-    payment_method_id: typeof pi.payment_method === "string" ? pi.payment_method : pi.payment_method?.id,
+    payment_method_id: pm,
     expires_at: new Date(Date.now() + OFFER_MINUTES * 60 * 1000).toISOString(),
     ...(favs.length ? { preferred_driver_ids: favs,
       exclusive_until: new Date(Date.now() + FIRST_DIBS_MINUTES * 60 * 1000).toISOString() } : {}),
@@ -195,7 +202,7 @@ export async function announceJob(job) {
         .eq("id", job.id).is("announced_at", null).select("id");
       if (!claimed?.length) return 0;
       return await pushTo(favs, { title: `Your regular customer needs you · $${pay}`,
-        body: `${kind}${where} — you get first dibs for ${FIRST_DIBS_MINUTES} minutes`, tag: `job-${job.id}`, url: "/" });
+        body: `${kind}${where} — you get first dibs for ${FIRST_DIBS_MINUTES} minutes`, tag: `job-${job.id}`, url: `/?offer=${job.id}` });
     }
 
     if (job.announced_all_at) return 0;
@@ -207,10 +214,60 @@ export async function announceJob(job) {
       .eq("is_driver", true).eq("is_online", true).eq("suspended", false).neq("id", job.customer_id);
     const ids = (drivers || []).map((d) => d.id).filter((id) => !favs.includes(id)); // favorites already heard
     return await pushTo(ids, { title: `New plow request · $${pay}`,
-      body: `${kind}${where} — open DRIFT to accept`, tag: `job-${job.id}`, url: "/" });
+      body: `${kind}${where} — open DRIFT to accept`, tag: `job-${job.id}`, url: `/?offer=${job.id}` });
   } catch (e) {
     console.error("[alerts]", e.message);
     return 0;
   }
 }
 
+
+// ---------- scheduled plows ----------
+export const JOB_KIND = { driveway: "Driveway plow", sidewalk: "Sidewalk", digout: "Car dig-out", jumpstart: "Jump-start" };
+// "Tue 5–7 AM" in Duluth time
+export function fmtWindow(startIso, endIso) {
+  if (!startIso) return "";
+  const tz = "America/Chicago";
+  const s = new Date(startIso), e = new Date(endIso || new Date(s.getTime() + 2 * 3600e3));
+  const day = s.toLocaleDateString("en-US", { timeZone: tz, weekday: "short" });
+  const hr = (d) => d.toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric" }).replace(":00", "");
+  const [h1, ap1] = hr(s).split(" "), [h2, ap2] = hr(e).split(" ");
+  return `${day} ${h1}${ap1 === ap2 ? "" : " " + ap1}–${h2} ${ap2}`;
+}
+export function fmtTime(iso) {
+  return new Date(iso).toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" });
+}
+
+// A scheduled plow was posted (card held): let drivers know so they can add it to
+// their route. One collapsing notification per driver (same tag), so a busy night
+// doesn't buzz their phone for every single booking.
+export async function announceScheduled(job) {
+  try {
+    if (!admin || !job || job.status !== "scheduled") return 0;
+    const { data: open } = await admin.from("jobs").select("id")
+      .eq("status", "scheduled").is("driver_id", null).gt("window_end", new Date().toISOString())
+      .in("payment_status", ["authorized", "not_required"]);
+    const n = (open || []).length;
+    const { data: drivers } = await admin.from("profiles").select("id")
+      .eq("is_driver", true).eq("suspended", false).neq("id", job.customer_id);
+    return await pushTo((drivers || []).map((d) => d.id), {
+      title: `New scheduled plow · $${Math.round(Number(job.driver_pay || 0))} · ${fmtWindow(job.scheduled_for, job.window_end)}`,
+      body: n > 1 ? `${n} scheduled jobs open — add them to your route before the storm.` : `${job.address || "Nearby"} — add it to your route.`,
+      tag: "sched-board", url: "/?route=1", sticky: false }, { ttl: 6 * 3600, urgency: "normal" });
+  } catch (e) { console.error("[sched]", e.message); return 0; }
+}
+
+// Tell online drivers a scheduled job is open right now (nobody claimed it, or the
+// driver missed check-in). Uses announced_all_at so each opening alerts once.
+export async function announceOpenScheduled(job, why = "") {
+  try {
+    if (!admin || !job) return 0;
+    const { data: drivers } = await admin.from("profiles").select("id")
+      .eq("is_driver", true).eq("is_online", true).eq("suspended", false).neq("id", job.customer_id);
+    const ids = (drivers || []).map((d) => d.id).filter((id) => id !== job.driver_id);
+    return await pushTo(ids, {
+      title: `Open now · $${Math.round(Number(job.driver_pay || 0))} · ${fmtWindow(job.scheduled_for, job.window_end)}`,
+      body: `${JOB_KIND[job.job_type] || "Snow job"}${job.address ? " · " + job.address : ""}${why ? " — " + why : ""}`,
+      tag: `job-${job.id}`, url: `/?route=1&job=${job.id}` });
+  } catch (e) { console.error("[sched]", e.message); return 0; }
+}

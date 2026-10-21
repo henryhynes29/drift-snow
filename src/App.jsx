@@ -13,8 +13,9 @@ function LiveMap(props) {
 import { useAuth } from "./lib/auth.jsx";
 import { supabaseEnabled } from "./lib/supabase.js";
 import { recordLegalAcceptance, loadProperties, replaceProperties, rateJob, pushDriverLocation, subscribeToDriverLocation, createJobFromOrder, patchJob, sendMessage, subscribeToMessages, loadMessages,
-  updateMyProfile, rowToOrder, fetchJob, listOpenJobs, subscribeOpenJobs, claimJob, getProfile, profileToDriver, setDriverStatus, becomeDriver, cancelJob, expireJob, subscribeToJob, loadActiveJob, loadAccountStats, loadReviews, listFavorites, addFavorite, removeFavorite, setSnowAlerts } from "./lib/db.js";
-import { STRIPE_ENABLED, STRIPE_PK, getStripe, startHold, confirmHold, cancelJobPaid, completeJobPaid, tipJob, connectSession, connectStatus, connectDashboard, authedFetch, announceJob } from "./lib/payments.js";
+  updateMyProfile, rowToOrder, fetchJob, listOpenJobs, listScheduledJobs, listMyQueue, queuePosition, lastCompletedJob, subscribeOpenJobs, claimJob, getProfile, profileToDriver, setDriverStatus, becomeDriver, cancelJob, expireJob, subscribeToJob, loadActiveJob, loadAccountStats, loadReviews, listFavorites, addFavorite, removeFavorite, setSnowAlerts } from "./lib/db.js";
+import { STRIPE_ENABLED, STRIPE_PK, getStripe, startHold, confirmHold, cancelJobPaid, completeJobPaid, tipJob, connectSession, connectStatus, connectDashboard, authedFetch, announceJob,
+  schedClaim, schedBackout, schedCheckin, schedStart, schedTick } from "./lib/payments.js";
 import { uploadJobPhoto, uploadDriverDoc, myDriverDocs, signedUrl } from "./lib/photos.js";
 import { unlockRinger, startRing, stopRing, keepAwake, isStandalone, isIOS, canPromptInstall, promptInstall,
   onInstallChange, pushSupported, enablePush, pushEnabled, localAlert } from "./lib/alerts.js";
@@ -301,6 +302,32 @@ function loadLegal() {
 function saveLegal(legal) { try { localStorage.setItem("drift-legal", JSON.stringify(legal)); } catch (e) { /* private mode */ } }
 
 const AdminApp = React.lazy(() => import("./Admin.jsx"));
+
+// ---- Deep links: notification taps + home-screen shortcuts ----------------
+// ?job=<id> (customer job) · ?offer=<id> (driver: a new request) · ?route=1
+// (driver: scheduled route / check-in) · ?go=book|jumpstart|drive · ?rebook=1
+const deepLink = { job: null, offer: null, route: false, go: null, rebook: false };
+const linkListeners = new Set();
+function readLink(search) {
+  const q = new URLSearchParams(search || "");
+  Object.assign(deepLink, { job: q.get("job"), offer: q.get("offer"), route: q.has("route"), go: q.get("go"), rebook: q.has("rebook") });
+}
+if (typeof window !== "undefined") {
+  readLink(window.location.search);
+  try {
+    navigator.serviceWorker?.addEventListener("message", (e) => {
+      if (e.data?.type !== "open" || !e.data.url) return;
+      readLink(new URL(e.data.url, window.location.origin).search);
+      linkListeners.forEach((f) => f({ ...deepLink }));
+    });
+  } catch { /* no service worker */ }
+}
+function useDeepLink() {
+  const [l, setL] = useState(() => ({ ...deepLink }));
+  useEffect(() => { linkListeners.add(setL); return () => linkListeners.delete(setL); }, []);
+  return l;
+}
+const consumeLink = (k) => { deepLink[k] = (k === "route" || k === "rebook") ? false : null; };
 const ADMIN_ROUTE = typeof window !== "undefined" && ["admin", "ops"].some((k) => new URLSearchParams(window.location.search).has(k));
 
 // Came from the "Drive with DRIFT" page (/?drive=1): open straight into driver sign-up.
@@ -601,7 +628,7 @@ function Power({ n }) {
     {[1,2,3,4,5].map(i => <span key={i} style={{ width: 5, height: 13, borderRadius: 1, background: i <= n ? C.amber : C.line }} />)}
   </span>;
 }
-function Btn({ children, onClick, kind = "primary", disabled, full, sm, style }) {
+function Btn({ children, onClick, kind = "primary", disabled, full, sm, style, id }) {
   const [press, setPress] = useState(false);
   const base = {
     font: `700 ${sm ? 14 : 16}px/1 ${FB}`, letterSpacing: "-.01em",
@@ -621,7 +648,7 @@ function Btn({ children, onClick, kind = "primary", disabled, full, sm, style })
     good: { background: C.push, color: C.onPush },
   };
   return (
-    <button onClick={disabled ? undefined : onClick} disabled={disabled}
+    <button id={id} onClick={disabled ? undefined : onClick} disabled={disabled}
       onPointerDown={() => !disabled && setPress(true)}
       onPointerUp={() => setPress(false)} onPointerLeave={() => setPress(false)}
       style={{ ...base, ...kinds[kind], ...style }}>{children}</button>
@@ -1731,6 +1758,7 @@ function RiderHome({ go }) {
   const prop = state.activeProperty;
   const [jobType, setJobType] = useState("driveway");
   const [showSched, setShowSched] = useState(false);
+  const [schedAt, setSchedAt] = useState(null); // { when, label } — null = as soon as possible
   const [salt, setSalt] = useState(false);
   const [showBreak, setShowBreak] = useState(false); // breakdown one tap away — keeps the card calm
   const [payOpen, setPayOpen] = useState(false);    // Stripe authorization sheet (only when keys are set)
@@ -1775,23 +1803,75 @@ function RiderHome({ go }) {
   // One-time hazard check before the first plow (existing customers included).
   const needsHazards = !!prop && jt.basis !== "flat" && !hazardsChecked(prop);
   const markHazards = () => { editPropertyOnOpen = prop.id; go("props"); };
+  const hazardNotice = !!prop && !hazardsChecked(prop);
+  const [setupShown, setSetupShown] = useState(false);
+
+  // ---- One-tap "Book again": same driveway, same tier, priced for today's snow ----
+  const link = useDeepLink();
+  const [lastJob, setLastJob] = useState(null);
+  useEffect(() => { if (LIVE && state.userId) lastCompletedJob(state.userId).then(setLastJob).catch(() => {}); }, [LIVE, state.userId]);
+  const rbType = lastJob && JOB_TYPES[lastJob.job_type] && lastJob.job_type !== "jumpstart" ? lastJob.job_type : "driveway";
+  const rbQuote = lastJob && prop && !hazardNotice && !(JOB_TYPES[rbType].basis === "area" && !sqft)
+    ? quoteJob({ jobType: rbType, sqft, linearFt, property: prop, depth }) : null;
+  const rbTier = lastJob ? ((lastJob.quote?.tiers || []).find((t) => t.offer === Number(lastJob.quote?.offer))?.id || "recommended") : null;
+  const rbQ = rbQuote ? withOffer(rbQuote, (rbQuote.tiers.find((t) => t.id === rbTier) || rbQuote.tiers[1]).offer) : null;
+  const rebook = () => {
+    const order = { id: "o" + Date.now(), state: "requested", jobType: rbType, size: prop?.size || SIZES[1], property: prop,
+      quote: rbQ, tool: rbQ.tool, createdAt: Date.now(), driverPos: { x: state.driver.x, y: state.driver.y }, eta: 9,
+      timeline: [{ k: "requested", t: "now", label: "Booked again" }], photos: { before: [], after: [] } };
+    dispatch({ type: "REQUEST", order });
+    if (!(isLive(state) && STRIPE_ENABLED)) dispatch({ type: "TOAST", msg: "Offer sent — same as last time" });
+    autoMatch(dispatch, state, order);
+  };
+  useEffect(() => {
+    if (link.go !== "jumpstart") return;
+    setTimeout(() => document.getElementById("other-services")?.scrollIntoView({ behavior: "smooth", block: "start" }), 300);
+    consumeLink("go");
+  }, [link.go]);
+  const rbRef = useRef(null);
+  useEffect(() => { if (link.rebook && rbRef.current) { rbRef.current.scrollIntoView({ behavior: "smooth", block: "center" }); consumeLink("rebook"); } }, [link.rebook, !!rbQ]);
+  const rebookCard = rbQ ? (
+    <div ref={rbRef} style={{ display: "flex", gap: 12, alignItems: "center", padding: "12px 12px 12px 14px", borderRadius: 16, marginBottom: 12,
+      background: C.slate, border: `1px solid ${C.amber}66` }}>
+      <div style={{ width: 38, height: 38, borderRadius: 11, background: C.amber + "1F", color: C.amber, display: "grid", placeItems: "center", flexShrink: 0 }}>
+        <Icon e="undo" s={18} /></div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ font: `600 14.5px ${FB}`, color: C.ice }}>Book again · ${rbQ.riderTotal}</div>
+        <div style={{ font: `400 12.5px/1.35 ${FB}`, color: C.mist, marginTop: 2 }}>
+          {JOB_TYPES[rbType].label} · {(OFFER_TIERS.find((t) => t.id === rbTier) || OFFER_TIERS[1]).label}{rbQ.depthMult > 1 ? ` · ${rbQ.depthLabel} snow` : ""} · same as last time</div>
+      </div>
+      <Btn sm onClick={guard(rebook)} style={{ padding: "0 14px" }}>Book</Btn>
+    </div>
+  ) : null;
+
+  // ---- Sticky "Send offer" bar: always one thumb-tap away while you scroll ----
+  const [sendVisible, setSendVisible] = useState(true);
+  useEffect(() => {
+    const el = typeof document !== "undefined" && document.getElementById("send-offer");
+    if (!el || typeof IntersectionObserver === "undefined") { setSendVisible(true); return; }
+    const io = new IntersectionObserver(([e]) => setSendVisible(e.isIntersecting), { rootMargin: "0px 0px -70px 0px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [needsOutline, needsHazards, jobType, !!prop]);
   const modActive = q.mod !== 1;
   const canSalt = SALT.appliesTo.includes(jobType);
 
   const buildOrder = (extra = {}) => ({
-    id: "o" + Date.now(), state: "requested", jobType, size: prop?.size || SIZES[1], property: prop,
+    id: "o" + Date.now(), state: schedAt ? "scheduled" : "requested", jobType, size: prop?.size || SIZES[1], property: prop,
     quote: q, tool: q.tool, createdAt: Date.now(), driverPos: { x: state.driver.x, y: state.driver.y },
-    eta: 9, timeline: [{ k: "requested", t: "now", label: "Request sent" }],
-    photos: { before: [], after: [] }, ...extra,
+    eta: 9, timeline: [{ k: "requested", t: "now", label: schedAt ? `Scheduled · ${schedAt.label}` : "Request sent" }],
+    photos: { before: [], after: [] },
+    ...(schedAt ? { scheduledFor: schedAt.when, windowEnd: schedAt.when + 2 * 3600e3 } : {}), ...extra,
   });
 
   const request = () => {
     const order = buildOrder();
     dispatch({ type: "REQUEST", order });
     // With payments on, the card sheet explains the next step instead.
-    if (!(isLive(state) && STRIPE_ENABLED)) dispatch({ type: "TOAST", msg: `Offer sent — finding a nearby ${q.tool.toLowerCase()}` });
-    notify(dispatch, { kind: "job", title: "Offer sent", body: `Finding a nearby ${q.tool.toLowerCase()} for ${prop?.label || "your property"}.`, role: "rider" });
+    if (!(isLive(state) && STRIPE_ENABLED)) dispatch({ type: "TOAST", msg: schedAt ? `Scheduled for ${schedAt.label}` : `Offer sent — finding a nearby ${q.tool.toLowerCase()}` });
+    notify(dispatch, { kind: "job", title: schedAt ? "Plow scheduled" : "Offer sent", body: schedAt ? `${schedAt.label} · drivers can claim it now.` : `Finding a nearby ${q.tool.toLowerCase()} for ${prop?.label || "your property"}.`, role: "rider" });
     autoMatch(dispatch, state, order);
+    setSchedAt(null);
   };
 
   // With Stripe on, authorize the card first; otherwise straight to the demo request.
@@ -1822,12 +1902,8 @@ function RiderHome({ go }) {
     autoMatch(dispatch, state, order);
   };
 
-  const schedule = (when, label) => {
-    dispatch({ type: "SCHEDULE", job: { id: "s" + Date.now(), when, label, jobType, size: prop?.size || SIZES[1], property: prop, quote: q, tool: q.tool, createdAt: Date.now() } });
-    dispatch({ type: "TOAST", msg: `Scheduled ${label.toLowerCase()} · we'll dispatch automatically` });
-    setShowSched(false);
-    go("trips");
-  };
+  // Scheduled plow: picked in the sheet, sent with the normal "Send offer" button.
+  const schedule = (when, label) => { setSchedAt({ when, label }); setShowSched(false); };
 
   // one-tap emergency dig-out (street-parked car buried by the city plow berm)
   const emergencyDigout = () => {
@@ -1866,11 +1942,11 @@ function RiderHome({ go }) {
       <h1 style={{ font: `800 35px/1.1 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice, margin: "4px 0 18px" }}>
         {greet}{first ? `, ${first}` : ""}</h1>
 
-      {/* storm banner + sidewalk countdown run on sample weather — demo only until a real weather feed is connected */}
-      {!LIVE && <StormBanner />}
-      {LIVE && <LiveSnowBanner />}
-      <AppSetupCard role="rider" />
-      {prop && !hazardsChecked(prop) && (
+      {/* One notice at a time, most important first: hazards → get the app → snow forecast. */}
+      {rebookCard}
+      {!hazardNotice && <AppSetupCard role="rider" onShown={setSetupShown} />}
+      {!hazardNotice && !setupShown && (LIVE ? <LiveSnowBanner /> : <StormBanner />)}
+      {hazardNotice && (
         <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "12px 12px 12px 14px", borderRadius: 14, marginBottom: 12,
           background: C.slate, border: `1px solid ${C.danger}55` }}>
           <div style={{ width: 36, height: 36, borderRadius: 10, background: C.danger + "1F", color: C.danger,
@@ -1882,7 +1958,7 @@ function RiderHome({ go }) {
           <Btn sm onClick={markHazards} style={{ padding: "0 12px" }}>Mark</Btn>
         </div>
       )}
-      {!LIVE && SNOW_DEPTH_IN >= 2 && prop && <OrdinanceCountdown price={quickQuote("sidewalk").riderTotal} onBook={guard(bookSidewalk)} />}
+      {!LIVE && !hazardNotice && !setupShown && SNOW_DEPTH_IN >= 2 && prop && <OrdinanceCountdown price={quickQuote("sidewalk").riderTotal} onBook={guard(bookSidewalk)} />}
 
       {/* ---- THE primary action: your saved place + one button (Uber "Home" / DoorDash reorder) ---- */}
       {prop ? (
@@ -2061,13 +2137,20 @@ function RiderHome({ go }) {
                       <span style={{ color: C.ice, fontWeight: 600 }}>One-time step:</span> mark curbs, raised concrete, well caps and septic on your map so your driver knows what's under the snow.</span>
                   </div>
                 )}
+                {schedAt && !needsHazards && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 14, padding: "10px 12px", borderRadius: 12,
+                    background: C.amber + "12", border: `1px solid ${C.amber}55`, font: `500 13.5px ${FB}`, color: C.ice }}>
+                    <Icon e="calendar" s={15} color={C.amber} /> <span>Scheduled for <b>{schedAt.label}</b> · drivers claim it ahead of time</span>
+                  </div>
+                )}
                 {/* the one button */}
                 <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
                   {needsHazards
                     ? <Btn full onClick={markHazards}>Mark hazards to book · 1 min</Btn>
-                    : <Btn full onClick={guard(startRequest)}>Send offer · ${animPrice}</Btn>}
-                  {!LIVE && <button onClick={guard(() => setShowSched(true))} aria-label="Schedule for later"
-                    style={{ ...miniBtn, minHeight: TAP, width: TAP, padding: 0, borderRadius: 14 }}><Icon e="calendar" s={19} /></button>}
+                    : <Btn full onClick={guard(startRequest)} id="send-offer">{schedAt ? `Schedule · $${animPrice}` : `Send offer · $${animPrice}`}</Btn>}
+                  {!needsHazards && <button onClick={() => (schedAt ? setSchedAt(null) : setShowSched(true))} aria-label={schedAt ? "Book now instead" : "Schedule for later"}
+                    style={{ ...miniBtn, minHeight: TAP, width: TAP, padding: 0, borderRadius: 14, ...(schedAt ? { color: C.amber, borderColor: C.amber } : {}) }}>
+                    <Icon e={schedAt ? "close" : "calendar"} s={19} /></button>}
                 </div>
                 <p style={{ font: `400 12.5px/1.5 ${FB}`, color: C.mistDim, textAlign: "center", margin: "10px 6px 4px" }}>
                   You're only charged once it's done. Booking connects you with an independent operator under our{" "}
@@ -2090,6 +2173,7 @@ function RiderHome({ go }) {
 
       {/* ---- secondary: quieter, below the fold ---- */}
       <div style={{ marginTop: 28 }}>
+        <div id="other-services" />
         <Eyebrow>Other services</Eyebrow>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
           <ServiceTile icon="car" title="Dig out my car" sub={`Buried by the berm · $${quickQuote("digout").riderTotal}`} onClick={guard(emergencyDigout)} disabled={!prop} />
@@ -2098,6 +2182,20 @@ function RiderHome({ go }) {
       </div>
 
       {showSched && <ScheduleSheet price={q.riderTotal} onClose={() => setShowSched(false)} onPick={schedule} />}
+      {prop && !needsOutline && !needsHazards && !sendVisible && !showSched && (
+        <div style={{ position: "fixed", left: 0, right: 0, bottom: "calc(65px + env(safe-area-inset-bottom))", zIndex: 19,
+          background: C.glassStrong, backdropFilter: "saturate(180%) blur(18px)", WebkitBackdropFilter: "saturate(180%) blur(18px)",
+          borderTop: `1px solid ${C.line}`, animation: "fadeIn .15s ease" }}>
+          <div style={{ maxWidth: 440, margin: "0 auto", padding: "10px 20px", display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ font: `800 26px/1 ${FD}`, color: C.ice }}>${q.riderTotal}</div>
+              <div style={{ font: `400 12px ${FB}`, color: C.mist, marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {schedAt ? schedAt.label : jt.label}{q.depthMult > 1 ? ` · ${q.depthLabel}` : ""}</div>
+            </div>
+            <Btn full onClick={guard(startRequest)} style={{ minHeight: 50 }}>{schedAt ? "Schedule" : "Send offer"}</Btn>
+          </div>
+        </div>
+      )}
       {gate && <ConsentGate role="customer" onClose={() => setGate(null)}
         onAgree={(rec) => { acceptLegal(dispatch, rec, state.userId); const run = gate; setGate(null); run(); }} />}
       {doc && <LegalReader docId={doc} onClose={() => setDoc(null)} />}
@@ -2106,73 +2204,63 @@ function RiderHome({ go }) {
 }
 
 // ---- Schedule sheet: pick when to plow ------------------------------------
+// 2-hour windows, up to 6 days out (card holds last about a week).
+const SCHED_WINDOWS = [5, 7, 9, 11, 13, 15, 17]; // start hours
+const hourLabel = (h) => `${((h + 11) % 12) + 1}${h < 12 ? " AM" : " PM"}`;
+const windowLabel = (h) => { const a = hourLabel(h), b = hourLabel(h + 2); return a.slice(-2) === b.slice(-2) ? `${a.slice(0, -3)}–${b}` : `${a}–${b}`; };
+const dayWord = (d, i) => i === 0 ? "Today" : i === 1 ? "Tomorrow" : d.toLocaleDateString(undefined, { weekday: "short" });
+function fmtWindowLocal(ms) {
+  if (!ms) return "";
+  const d = new Date(ms), today = new Date(); today.setHours(0, 0, 0, 0);
+  const day0 = new Date(d); day0.setHours(0, 0, 0, 0);
+  const i = Math.round((day0 - today) / 864e5);
+  return `${i === 0 ? "Today" : i === 1 ? "Tomorrow" : d.toLocaleDateString(undefined, { weekday: "short" })} ${windowLabel(d.getHours())}`;
+}
+
 function ScheduleSheet({ onClose, onPick, price }) {
-  const days = useMemo(() => {
-    const out = [];
-    const now = new Date();
-    for (let i = 0; i < 5; i++) {
-      const d = new Date(now); d.setDate(now.getDate() + i);
-      out.push(d);
-    }
-    return out;
-  }, []);
-  const [day, setDay] = useState(0);
+  const days = useMemo(() => Array.from({ length: 7 }, (_, i) => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + i); return d; }), []);
+  const ok = (dayIdx, h) => { const t = new Date(days[dayIdx]); t.setHours(h, 0, 0, 0); return t.getTime() >= Date.now() + 60 * 60 * 1000; };
+  const firstDay = SCHED_WINDOWS.some((h) => ok(0, h)) ? 0 : 1;
+  const [day, setDay] = useState(firstDay);
   const [slot, setSlot] = useState(null);
-  const SLOTS = [
-    { id: "early", label: "Before 7 AM", hint: "Cleared before you leave", h: 6 },
-    { id: "am", label: "Morning", hint: "7 AM – 12 PM", h: 9 },
-    { id: "noon", label: "Midday", hint: "12 – 4 PM", h: 13 },
-    { id: "pm", label: "Evening", hint: "4 – 8 PM", h: 17 },
-  ];
-  const dayLabel = (d, i) => i === 0 ? "Today" : i === 1 ? "Tomorrow" : d.toLocaleDateString(undefined, { weekday: "short" });
-
+  useEffect(() => { setSlot(null); }, [day]);
   const confirm = () => {
-    const d = new Date(days[day]);
-    const s = SLOTS.find(x => x.id === slot);
-    d.setHours(s.h, 0, 0, 0);
-    onPick(d.getTime(), `${dayLabel(days[day], day)}, ${s.label}`);
+    const d = new Date(days[day]); d.setHours(slot, 0, 0, 0);
+    onPick(d.getTime(), `${dayWord(days[day], day)} ${windowLabel(slot)}`);
   };
-
   return (
     <Sheet onClose={onClose}>
       <Eyebrow>Schedule a plow</Eyebrow>
-      <h2 style={{ font: `800 31px ${FD}`, textTransform: "uppercase", margin: "8px 0 16px" }}>When should we come?</h2>
-
-      {/* day picker */}
-      <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4, marginBottom: S.lg }}>
-        {days.map((d, i) => (
-          <button key={i} onClick={() => setDay(i)} style={{ flex: "0 0 auto", cursor: "pointer",
-            padding: "11px 15px", borderRadius: 14, textAlign: "center", minWidth: 66, minHeight: 62,
-            background: day === i ? C.amber : C.slate,
-            border: `1px solid ${day === i ? C.amber : C.line}`,
-            color: day === i ? C.onAmber : C.ice, transition: `all .2s ${EASE}`,
-            boxShadow: "none", WebkitTapHighlightColor: "transparent" }}>
-            <div style={{ font: `700 11px ${FB}`, opacity: .85 }}>{dayLabel(d, i)}</div>
-            <div style={{ font: `800 22px ${FD}`, textTransform: "uppercase", marginTop: 2 }}>{d.getDate()}</div>
-          </button>
-        ))}
+      <h2 style={{ font: `800 31px ${FD}`, textTransform: "uppercase", margin: "8px 0 4px" }}>When should we come?</h2>
+      <p style={{ ...sub, marginBottom: 14 }}>Pick a 2-hour window. Your card is held now and charged only after it's plowed.</p>
+      <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4, marginBottom: 14, WebkitOverflowScrolling: "touch" }}>
+        {days.map((d, i) => {
+          const any = SCHED_WINDOWS.some((h) => ok(i, h)), on = day === i;
+          return (
+            <button key={i} disabled={!any} onClick={() => setDay(i)} style={{ flex: "0 0 auto", cursor: any ? "pointer" : "default",
+              padding: "10px 14px", borderRadius: 14, textAlign: "center", minWidth: 64, minHeight: 60, opacity: any ? 1 : .35,
+              background: on ? C.amber : C.slate, border: `1px solid ${on ? C.amber : C.line}`, color: on ? C.onAmber : C.ice,
+              WebkitTapHighlightColor: "transparent" }}>
+              <div style={{ font: `700 11px ${FB}`, opacity: .85 }}>{dayWord(d, i)}</div>
+              <div style={{ font: `800 22px ${FD}`, marginTop: 2 }}>{d.getDate()}</div>
+            </button>
+          );
+        })}
       </div>
-
-      {/* slots */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: S.lg }}>
-        {SLOTS.map(s => (
-          <button key={s.id} onClick={() => setSlot(s.id)} style={{ textAlign: "left", cursor: "pointer",
-            padding: 15, borderRadius: 14, minHeight: 72,
-            background: slot === s.id ? C.amber + "18" : C.slate,
-            border: `1.5px solid ${slot === s.id ? C.amber : C.line}`, transition: `all .2s ${EASE}`,
-            WebkitTapHighlightColor: "transparent" }}>
-            <div style={{ font: `700 14px ${FB}`, color: slot === s.id ? C.amber : C.ice }}>{s.label}</div>
-            <div style={{ font: `500 11px ${FB}`, color: C.mist, marginTop: 4 }}>{s.hint}</div>
-          </button>
-        ))}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
+        {SCHED_WINDOWS.map((h) => {
+          const can = ok(day, h), on = slot === h;
+          return (
+            <button key={h} disabled={!can} onClick={() => setSlot(h)} style={{ cursor: can ? "pointer" : "default", minHeight: 52,
+              borderRadius: 13, font: `700 15px ${FB}`, opacity: can ? 1 : .35,
+              color: on ? C.amber : C.ice, background: on ? C.amber + "18" : C.slate, border: `1.5px solid ${on ? C.amber : C.line}`,
+              WebkitTapHighlightColor: "transparent" }}>{windowLabel(h)}</button>
+          );
+        })}
       </div>
-
-      <Btn full onClick={confirm} disabled={!slot}>
-        {slot ? `Schedule · $${price}` : "Pick a time window"}
-      </Btn>
-      <p style={{ font: `500 11px ${FB}`, color: C.mistDim, textAlign: "center", marginTop: 10 }}>
-        We auto-dispatch in your window · only charged after it's plowed.
-      </p>
+      <Btn full onClick={confirm} disabled={slot == null}>{slot != null ? `Schedule for ${dayWord(days[day], day)} ${windowLabel(slot)}` : "Pick a time window"}</Btn>
+      <p style={{ font: `500 11.5px/1.5 ${FB}`, color: C.mistDim, textAlign: "center", marginTop: 10 }}>
+        Drivers claim scheduled plows ahead of time. Free to cancel until your driver starts.</p>
     </Sheet>
   );
 }
@@ -2182,7 +2270,7 @@ function ScheduleSheet({ onClose, onPick, price }) {
 function autoMatch(dispatch, state, order) {
   // Real accounts: save the offer to the database and let real drivers take it.
   if (isLive(state)) { if (order) persistNewJob(dispatch, order, state.userId); return; }
-  if (state.driverOnline) return;
+  if (state.driverOnline || order?.scheduledFor) return; // demo: scheduled plows wait for their window
   setTimeout(() => {
     dispatch({ type: "ORDER_STATE", patch: {
       state: "accepted", driver: state.driver, eta: 8,
@@ -2197,7 +2285,7 @@ function autoMatch(dispatch, state, order) {
 // ---- Stripe card authorization (real payments, only when keys are set) -----
 // Inner form: renders Stripe's PaymentElement and authorizes (not captures) the
 // card. Manual capture means the hold is only charged when the job is completed.
-function PayForm({ amount, jobId, onAuthorized, onClose }) {
+function PayForm({ amount, jobId, onAuthorized, onClose, scheduled }) {
   const stripe = useStripe();
   const elements = useElements();
   const [busy, setBusy] = useState(false);
@@ -2216,10 +2304,11 @@ function PayForm({ amount, jobId, onAuthorized, onClose }) {
   };
   return (
     <div>
-      <PaymentElement options={{ layout: "tabs" }} />
+      <PaymentElement options={{ layout: "tabs", wallets: { applePay: "auto", googlePay: "auto" },
+        paymentMethodOrder: ["apple_pay", "google_pay", "card"] }} />
       {err && <p style={{ font: `600 12px ${FB}`, color: C.danger, margin: "10px 0 0" }}>{err}</p>}
       <div style={{ marginTop: 16 }}>
-        <Btn full onClick={pay} disabled={busy || !stripe}>{busy ? "Holding…" : `Hold $${amount} and send offer`}</Btn>
+        <Btn full onClick={pay} disabled={busy || !stripe}>{busy ? "Holding…" : scheduled ? `Hold $${amount} and schedule` : `Hold $${amount} and send offer`}</Btn>
       </div>
       <p style={{ font: `500 11px ${FB}`, color: C.mistDim, textAlign: "center", marginTop: 10 }}>
         Charged only when the job is done. Payments secured by Stripe.
@@ -2229,7 +2318,7 @@ function PayForm({ amount, jobId, onAuthorized, onClose }) {
 }
 
 // Outer sheet: fetches a PaymentIntent, then mounts Stripe Elements.
-function PaymentSheet({ amount, jobId, onAuthorized, onClose }) {
+function PaymentSheet({ amount, jobId, onAuthorized, onClose, scheduled }) {
   const [secret, setSecret] = useState(null);
   const [custSecret, setCustSecret] = useState(null);
   const [err, setErr] = useState(null);
@@ -2251,7 +2340,9 @@ function PaymentSheet({ amount, jobId, onAuthorized, onClose }) {
     <Sheet onClose={onClose}>
       <Eyebrow>Hold your card</Eyebrow>
       <h3 style={{ font: `800 31px ${FD}`, textTransform: "uppercase", margin: "8px 0 4px" }}>${amount}</h3>
-      <p style={{ ...sub, marginBottom: 16 }}>Your offer goes to drivers once your card is held. You're only charged after the job is done. If nobody takes it, the hold is released.</p>
+      <p style={{ ...sub, marginBottom: 16 }}>{scheduled
+        ? "Your scheduled plow goes on drivers' routes once your card is held. You're only charged after it's plowed. If no driver makes it, the hold is released."
+        : "Your offer goes to drivers once your card is held. You're only charged after the job is done. If nobody takes it, the hold is released."}</p>
       {err ? (
         <div style={{ padding: "14px 16px", background: C.slate, borderRadius: 12, border: `1px solid ${C.danger}55` }}>
           <p style={{ font: `600 13px ${FB}`, color: C.danger, margin: 0 }}>{err}</p>
@@ -2265,7 +2356,7 @@ function PaymentSheet({ amount, jobId, onAuthorized, onClose }) {
       ) : (
         <Elements stripe={getStripe()} options={{ clientSecret: secret, appearance,
           ...(custSecret ? { customerSessionClientSecret: custSecret } : {}) }}>
-          <PayForm amount={amount} jobId={jobId} onAuthorized={onAuthorized} onClose={onClose} />
+          <PayForm amount={amount} jobId={jobId} onAuthorized={onAuthorized} onClose={onClose} scheduled={scheduled} />
         </Elements>
       )}
     </Sheet>
@@ -2441,20 +2532,22 @@ function RiderTracking() {
     if (!row) return;
     if (row.status === "cancelled" || row.status === "expired") {
       dispatch({ type: "CLEAR_ORDER" });
-      dispatch({ type: "TOAST", msg: row.status === "expired" ? "No plow took this offer — you weren't charged. Try a higher offer."
+      dispatch({ type: "TOAST", msg: row.status === "expired" ? (row.scheduled_for ? "No driver made your scheduled window — you weren't charged." : "No plow took this offer — you weren't charged. Try a higher offer.")
         : "This job was cancelled. You weren't charged." });
       return;
     }
-    const map = { requested: "requested", accepted: "enroute", enroute: "enroute", plowing: "plowing", completed: "arrived_done" };
+    const map = { requested: "requested", scheduled: "scheduled", accepted: "enroute", enroute: "enroute", plowing: "plowing", completed: "arrived_done" };
     const patch = { state: map[row.status] || o.state, driverId: row.driver_id || null, photos: row.photos || o.photos,
+      scheduledFor: row.scheduled_for ? new Date(row.scheduled_for).getTime() : o.scheduledFor || null,
+      checkedInAt: row.checked_in_at ? new Date(row.checked_in_at).getTime() : null,
       paymentStatus: row.payment_status, expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : o.expiresAt,
       exclusiveUntil: row.exclusive_until ? new Date(row.exclusive_until).getTime() : null,
       preferredDriverIds: row.preferred_driver_ids || [] };
     if (row.driver_id && (!o.driver || o.driver.id !== row.driver_id)) {
       const { data: p } = await getProfile(row.driver_id);
       patch.driver = profileToDriver(p) || { id: row.driver_id, name: "Your driver", rating: null, jobs: 0, truck: "Plow truck" };
-      if (o.state === "requested") {
-        notify(dispatch, { kind: "job", title: `${patch.driver.name.split(" ")[0]} accepted your offer`,
+      if (o.state === "requested" || (o.state === "scheduled" && row.status === "scheduled")) {
+        notify(dispatch, { kind: "job", title: o.state === "scheduled" ? `${patch.driver.name.split(" ")[0]} claimed your scheduled plow` : `${patch.driver.name.split(" ")[0]} accepted your offer`,
           body: "Your driver is heading to your property.", role: "rider" }, state.profile?.phone);
       }
     }
@@ -2473,6 +2566,16 @@ function RiderTracking() {
     const iv = setInterval(() => fetchJob(o.jobId).then(({ data }) => applyRow(data)), 10000); // safety net if realtime drops
     return () => { unsub(); clearInterval(iv); };
   }, [LIVE, o.jobId, o.state, o.driver?.id]);
+
+  // Your driver may have a job or two before yours (drivers can line up 3).
+  const [ahead, setAhead] = useState(0);
+  useEffect(() => {
+    if (!LIVE || !o.jobId || !["accepted", "enroute"].includes(o.state)) { setAhead(0); return; }
+    let on = true;
+    const check = () => queuePosition(o.jobId).then((n) => on && setAhead(n));
+    check(); const iv = setInterval(check, 20000);
+    return () => { on = false; clearInterval(iv); };
+  }, [LIVE, o.jobId, o.state]);
 
   // ---- LIVE: offers expire after 20 minutes if nobody takes them ----
   const [now, setNow] = useState(Date.now());
@@ -2566,6 +2669,8 @@ function RiderTracking() {
   };
 
   if (o.state === "arrived_done") return <RiderReceipt />;
+  if (o.state === "scheduled") return <RiderScheduled o={o} d={o.driver} cancelOffer={cancelOffer} needsCard={needsCard}
+    onAuthorized={() => { dispatch({ type: "ORDER_STATE", patch: { paymentStatus: "authorized" } }); dispatch({ type: "TOAST", msg: `Card held — scheduled for ${fmtWindowLocal(o.scheduledFor)}` }); }} />;
 
   const first = d.name.split(" ")[0];
   const finding = o.state === "requested";
@@ -2579,6 +2684,7 @@ function RiderTracking() {
         : `Your $${o.quote?.offer} offer is live for drivers nearby${mmss ? ` · ${mmss} left` : ""}`)
       : "Sent to plows near you — usually under 2 minutes")
     : shownArrived ? `${first} is clearing ${o.property?.label?.toLowerCase() === "home" ? "your driveway" : (o.property?.label || "your property")}`
+    : ahead > 0 ? `${first} is finishing ${ahead} job${ahead > 1 ? "s" : ""} first, then heading to you`
     : `${first} is on the way`;
 
   return (
@@ -2667,6 +2773,42 @@ function RiderTracking() {
       )}
       {reviewsOpen && <ReviewsSheet userId={d.id} name={d.name?.split(" ")[0]} rating={d.rating} count={d.reviews}
         onClose={() => setReviewsOpen(false)} />}
+    </section>
+  );
+}
+
+// A scheduled plow: when it is, who's on it, and the card hold.
+function RiderScheduled({ o, d, cancelOffer, needsCard, onAuthorized }) {
+  const first = d?.name ? d.name.split(" ")[0] : null;
+  const steps = [
+    ["Scheduled", true],
+    [first ? `${first} claimed it` : "Waiting for a driver to claim it", !!first],
+    [first && o.checkedInAt ? `${first} checked in` : "Driver checks in before your window", !!(first && o.checkedInAt)],
+    ["Plowed + photos", false],
+  ];
+  return (
+    <section style={{ paddingTop: 14, paddingBottom: 28 }}>
+      <Eyebrow>Scheduled plow</Eyebrow>
+      <div style={{ font: `800 44px/.95 ${FD}`, textTransform: "uppercase", color: C.ice, marginTop: 8 }}>{fmtWindowLocal(o.scheduledFor)}</div>
+      <div style={{ font: `400 15px ${FB}`, color: C.mist, marginTop: 8 }}>
+        {o.property?.addr || o.property?.label || "Your property"} · ${o.quote?.riderTotal} total · charged only after it's plowed</div>
+      <div style={{ marginTop: 18, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 18, padding: "6px 16px" }}>
+        {steps.map(([label, done], i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderTop: i ? `1px solid ${C.lineSoft}` : "none" }}>
+            <span style={{ width: 24, height: 24, borderRadius: 8, display: "grid", placeItems: "center", flexShrink: 0,
+              background: done ? C.push + "22" : C.night2, color: done ? C.push : C.mistDim }}>
+              {done ? <Icon e="check" s={14} strokeWidth={2.4} /> : <span style={{ font: `700 12px ${FB}` }}>{i + 1}</span>}</span>
+            <span style={{ font: `${done ? 600 : 400} 14.5px ${FB}`, color: done ? C.ice : C.mist }}>{label}</span>
+          </div>
+        ))}
+      </div>
+      <p style={{ font: `400 13px/1.5 ${FB}`, color: C.mistDim, margin: "14px 2px 0" }}>
+        Drivers claim scheduled plows ahead of time and must check in before your window. If a driver drops out, it goes back to every driver nearby. We'll notify you at each step.</p>
+      {needsCard && (STRIPE_ENABLED
+        ? <PaymentSheet amount={o.quote?.riderTotal} jobId={o.jobId} scheduled onClose={() => cancelOffer(true)} onAuthorized={onAuthorized} />
+        : <Sheet onClose={() => cancelOffer(true)}><p style={{ ...sub }}>Card payments aren't switched on yet.</p><Btn full onClick={() => cancelOffer(true)}>Cancel</Btn></Sheet>)}
+      <button onClick={() => cancelOffer()} style={{ display: "block", margin: "20px auto 0", background: "none", border: "none",
+        cursor: "pointer", font: `500 14px ${FB}`, color: C.danger, padding: 8 }}>Cancel scheduled plow</button>
     </section>
   );
 }
@@ -3914,7 +4056,7 @@ function InstallSheet({ onClose }) {
 
 // "Get the app" card: 1) add to Home Screen  2) turn on notifications.
 // Shows until both are done (or they tap Later — then it comes back in a few days).
-function AppSetupCard({ role = "rider" }) {
+function AppSetupCard({ role = "rider", onShown }) {
   const { state, dispatch } = useStore();
   const [, bump] = useState(0);
   const [pushOn, setPushOn] = useState(null); // null = still checking
@@ -3928,7 +4070,9 @@ function AppSetupCard({ role = "rider" }) {
   const installed = isStandalone();
   const needsInstallFirst = isIOS() && !installed;           // iPhone: notifications only work from the Home Screen app
   const canPush = pushSupported() && !needsInstallFirst;
-  if (later || pushOn === null || (installed && pushOn) || (installed && !pushSupported())) return null;
+  const hide = later || pushOn === null || (installed && pushOn) || (installed && !pushSupported());
+  useEffect(() => { onShown?.(!hide); }, [hide]);
+  if (hide) return null;
 
   const install = async () => { if (canPromptInstall()) await promptInstall(); else setHowTo(true); };
   const turnOn = async () => {
@@ -4027,6 +4171,187 @@ function DriverAlertsCard() {
   );
 }
 
+// ---- Driver: nearby jobs, queue (up to 3) and scheduled routes ----------------
+const jobLL = (j) => j?.property?.center?.lat != null ? j.property.center
+  : j?.lat != null ? { lat: j.lat, lng: j.lng } : j?.property?.lat != null ? { lat: j.property.lat, lng: j.property.lng } : null;
+const miText = (mi) => `${mi < 10 ? mi.toFixed(1) : Math.round(mi)} mi`;
+
+function JobRow({ job, here, onClick, right, sub }) {
+  const { state } = useStore();
+  const pay = driverNetPay(job.quote, state.driver);
+  const dr = driveEstimate(here, jobLL(job));
+  const jt = JOB_TYPES[job.jobType || "driveway"];
+  const sqft = job.property?.sqft || job.quote?.sqft;
+  const bits = [sub, dr ? miText(dr.mi) : null, jt.basis === "area" && sqft ? `${sqft.toLocaleString()} sq ft` : jt.label,
+    job.quote?.depthMult > 1 ? `${job.quote.depthLabel} snow` : null].filter(Boolean);
+  return (
+    <div onClick={onClick} role={onClick ? "button" : undefined} style={{ display: "flex", gap: 12, alignItems: "center", padding: "12px 14px",
+      background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, cursor: onClick ? "pointer" : "default", WebkitTapHighlightColor: "transparent" }}>
+      <div style={{ font: `800 26px/1 ${FD}`, color: C.ice, minWidth: 58 }}>${pay}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ font: `600 14.5px ${FB}`, color: C.ice, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {job.property?.addr || job.address || "Nearby"}</div>
+        <div style={{ font: `400 12.5px ${FB}`, color: C.mist, marginTop: 3 }}>{bits.join(" · ")}</div>
+      </div>
+      {right !== undefined ? right : <Icon e="chevronright" s={16} color={C.mistDim} />}
+    </div>
+  );
+}
+
+function JobsMap({ jobs, here, height = 200 }) {
+  const { state } = useStore();
+  const markers = [
+    ...(here ? [{ lng: here.lng, lat: here.lat, size: 28, kind: "truck" }] : []),
+    ...jobs.map((j) => ({ ll: jobLL(j), j })).filter((x) => x.ll).map(({ ll, j }) => ({ lng: ll.lng, lat: ll.lat, label: `$${driverNetPay(j.quote, state.driver)}` })),
+  ];
+  if (!MAP_ENABLED) return null;
+  return <LiveMap center={here || DULUTH_CENTER} height={height} markers={markers} fit />;
+}
+
+// Open jobs near the driver: price-tag pins on a map + a list sorted by distance.
+function NearbyJobs({ pool, here, onOpen, emptyText }) {
+  const sorted = [...pool].sort((a, b) => (driveEstimate(here, jobLL(a))?.mi ?? 99) - (driveEstimate(here, jobLL(b))?.mi ?? 99));
+  return (
+    <div>
+      {sorted.length > 0 && <div style={{ borderRadius: 18, overflow: "hidden", marginBottom: 10 }}><JobsMap jobs={sorted} here={here} /></div>}
+      {sorted.length === 0
+        ? <div style={{ padding: "18px 14px", textAlign: "center", font: `400 14px ${FB}`, color: C.mist, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14 }}>{emptyText || "No open jobs right now."}</div>
+        : <div style={{ display: "grid", gap: 8 }}>{sorted.map((j) => <JobRow key={j.jobId} job={j} here={here} onClick={() => onOpen(j)} />)}</div>}
+    </div>
+  );
+}
+
+// Sheet to add more live jobs while working (up to 3 at a time).
+function NearbySheet({ here, onClose, onAdded, queued }) {
+  const { state, dispatch } = useStore();
+  const [pool, setPool] = useState([]);
+  const [open, setOpen] = useState(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let on = true;
+    const load = () => listOpenJobs().then(({ data }) => on && setPool((data || []).filter((r) => r.customer_id !== state.userId).map((r) => rowToOrder(r))));
+    load(); const unsub = subscribeOpenJobs(load);
+    return () => { on = false; unsub(); };
+  }, []);
+  const take = async (j) => {
+    setBusy(true);
+    const { data, error } = await claimJob(j.jobId);
+    setBusy(false); setOpen(null);
+    if (error || !data) { dispatch({ type: "TOAST", msg: error ? error.message : "Another driver already took this one" }); return; }
+    dispatch({ type: "TOAST", msg: "Added to your queue" });
+    onAdded();
+  };
+  return (
+    <Sheet onClose={onClose}>
+      <Eyebrow>Nearby jobs</Eyebrow>
+      <h3 style={{ font: `800 28px ${FD}`, textTransform: "uppercase", margin: "6px 0 4px" }}>Line up your next job</h3>
+      <p style={{ ...sub, marginBottom: 12 }}>You can hold up to 3 jobs at once ({queued} now). Finish them in order — customers see you're on the way after your current one.</p>
+      <NearbyJobs pool={pool} here={here} onOpen={setOpen} emptyText="No open jobs nearby right now." />
+      {open && <IncomingJob order={open} here={here} browse busy={busy} acceptLabel="Add to queue" onAccept={() => take(open)} onPass={() => setOpen(null)} />}
+    </Sheet>
+  );
+}
+
+// Scheduled plows: build a route ahead of a storm, check in, start each job.
+function RouteBoard({ here }) {
+  const { state, dispatch } = useStore();
+  const [rows, setRows] = useState(null);
+  const [open, setOpen] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [confirmDrop, setConfirmDrop] = useState(null);
+  const [now, setNow] = useState(Date.now());
+  const load = () => listScheduledJobs().then(({ data }) => setRows((data || []).filter((r) => r.customer_id !== state.userId).map((r) => rowToOrder(r))));
+  useEffect(() => { load(); const unsub = subscribeOpenJobs(load); const iv = setInterval(() => setNow(Date.now()), 30000); return () => { unsub(); clearInterval(iv); }; }, []);
+  if (!rows) return <div style={{ display: "grid", gap: 8 }}><Skeleton h={64} r={14} /><Skeleton h={64} r={14} /></div>;
+  const mine = rows.filter((r) => r.driverId === state.userId);
+  const open_ = rows.filter((r) => r.driverId !== state.userId);
+  const soon = mine.filter((r) => r.scheduledFor - now < 12 * 3600e3);
+  const needCheckin = soon.filter((r) => !r.checkedInAt);
+  const firstNeed = needCheckin[0];
+  const deadline = firstNeed ? firstNeed.scheduledFor - 45 * 60e3 : null;
+  const minsLeft = deadline ? Math.max(0, Math.round((deadline - now) / 60e3)) : null;
+  const clock = (ms) => new Date(ms).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+
+  const run = async (key, fn, okMsg) => {
+    setBusy(key);
+    try { const r = await fn(); if (okMsg) dispatch({ type: "TOAST", msg: typeof okMsg === "function" ? okMsg(r) : okMsg }); await load(); return r; }
+    catch (e) { dispatch({ type: "TOAST", msg: e.message }); }
+    finally { setBusy(null); }
+  };
+  const claim = (j) => run(j.jobId, () => schedClaim(j.jobId), "Added to your route").then(() => setOpen(null));
+  const checkIn = () => run("checkin", () => schedCheckin(), (r) => `Checked in for ${r.checkedIn} job${r.checkedIn === 1 ? "" : "s"} — customers have been told`);
+  const drop = (j) => run(j.jobId, () => schedBackout(j.jobId), (r) => r.late ? "Dropped — counted as a late cancel" : "Dropped from your route").then(() => setConfirmDrop(null));
+  const start = async (j) => {
+    const r = await run(j.jobId, () => schedStart(j.jobId));
+    if (!r?.job) return;
+    if (state.order && ["accepted", "enroute", "plowing"].includes(state.order.state)) { dispatch({ type: "TOAST", msg: "Started — it's next in your queue" }); return; }
+    dispatch({ type: "SET_ORDER", order: { ...rowToOrder(r.job, state.driver), state: "accepted", driver: state.driver, timeline: [{ k: "accepted", t: "now", label: "Started scheduled job" }] } });
+  };
+  const byDay = {};
+  open_.forEach((j) => { const k = new Date(j.scheduledFor).toDateString(); (byDay[k] ||= []).push(j); });
+  const lateDrop = (j) => Date.now() > j.scheduledFor - 3 * 3600e3;
+
+  return (
+    <div>
+      {firstNeed && (
+        <div style={{ padding: "16px 16px 14px", borderRadius: 18, marginBottom: 14, background: C.amber + "1A", border: `2px solid ${C.amber}` }}>
+          <div style={{ font: `800 24px/1 ${FD}`, textTransform: "uppercase", color: C.amber }}>Check in by {clock(deadline)}</div>
+          <div style={{ font: `400 14px/1.45 ${FB}`, color: C.ice, marginTop: 8 }}>
+            You have {needCheckin.length} scheduled job{needCheckin.length > 1 ? "s" : ""} starting {fmtWindowLocal(firstNeed.scheduledFor)}.
+            {" "}<b>If you don't check in {minsLeft != null && minsLeft < 180 ? `in the next ${minsLeft} min` : "by then"}, your jobs go to other drivers and it counts as a late cancel.</b></div>
+          <button onClick={checkIn} disabled={busy === "checkin"} style={{ width: "100%", marginTop: 12, minHeight: 56, borderRadius: 16, border: "none",
+            cursor: "pointer", background: C.amber, color: C.onAmber, font: `700 18px ${FB}` }}>{busy === "checkin" ? "Checking in…" : "I'm on it — check in"}</button>
+        </div>
+      )}
+
+      <Eyebrow>My route</Eyebrow>
+      <div style={{ display: "grid", gap: 8, margin: "8px 0 18px" }}>
+        {mine.length === 0 && <div style={{ padding: "16px 14px", font: `400 14px/1.45 ${FB}`, color: C.mist, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14 }}>
+          No scheduled jobs yet. Add some below the night or day before a storm. You'll check in 45 minutes before your first one.</div>}
+        {mine.map((j) => {
+          const canStart = now >= j.scheduledFor - 90 * 60e3;
+          return (
+            <div key={j.jobId}>
+              <JobRow job={j} here={here} sub={fmtWindowLocal(j.scheduledFor)} right={j.checkedInAt
+                ? <Chip color={C.push}>Checked in</Chip> : <Chip color={C.amber}>Check in by {clock(j.scheduledFor - 45 * 60e3)}</Chip>} />
+              <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                {canStart && <Btn sm kind="good" onClick={() => start(j)} disabled={busy === j.jobId} style={{ flex: 1 }}>Start this job</Btn>}
+                <Btn sm kind="dark" onClick={() => openDirections({ lat: jobLL(j)?.lat, lng: jobLL(j)?.lng, addr: j.property?.addr })} style={{ flex: 1 }}>Directions</Btn>
+                <Btn sm kind="danger" onClick={() => setConfirmDrop(j)} style={{ flex: canStart ? "0 0 auto" : 1 }}>Drop</Btn>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <Eyebrow>Open scheduled jobs</Eyebrow>
+      <div style={{ font: `400 13px ${FB}`, color: C.mist, margin: "6px 0 10px" }}>Claim them now to plan your route. Free to drop until 3 hours before.</div>
+      {open_.length > 0 && <div style={{ borderRadius: 18, overflow: "hidden", marginBottom: 10 }}><JobsMap jobs={open_} here={here} /></div>}
+      {open_.length === 0 ? <div style={{ padding: "16px 14px", font: `400 14px ${FB}`, color: C.mist, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, textAlign: "center" }}>
+        No open scheduled jobs right now. We'll notify you when customers book ahead.</div>
+        : Object.entries(byDay).map(([k, js]) => (
+          <div key={k} style={{ marginBottom: 12 }}>
+            <div style={{ font: `600 13px ${FB}`, color: C.ice, margin: "4px 2px 8px" }}>{fmtWindowLocal(js[0].scheduledFor).split(" ")[0]} · {js.length} job{js.length > 1 ? "s" : ""}</div>
+            <div style={{ display: "grid", gap: 8 }}>{js.map((j) => <JobRow key={j.jobId} job={j} here={here} sub={fmtWindowLocal(j.scheduledFor).split(" ").slice(1).join(" ")} onClick={() => setOpen(j)} />)}</div>
+          </div>
+        ))}
+
+      {open && <IncomingJob order={open} here={here} browse busy={busy === open.jobId} acceptLabel="Add to my route" onAccept={() => claim(open)} onPass={() => setOpen(null)} />}
+      {confirmDrop && (
+        <Sheet onClose={() => setConfirmDrop(null)}>
+          <h3 style={{ font: `800 26px ${FD}`, textTransform: "uppercase", margin: "0 0 6px" }}>Drop this job?</h3>
+          <p style={{ ...sub, marginBottom: 14 }}>{lateDrop(confirmDrop)
+            ? <><b style={{ color: C.danger }}>It's less than 3 hours before the window, so this counts as a late cancel</b> on your record. The customer is counting on you — only drop it if you really can't make it.</>
+            : "It's more than 3 hours out, so dropping it is free. It goes back to every driver and the customer is told we're finding someone new."}</p>
+          <Btn full kind="danger" onClick={() => drop(confirmDrop)} disabled={busy === confirmDrop.jobId}>{lateDrop(confirmDrop) ? "Drop anyway (late cancel)" : "Drop it"}</Btn>
+          <div style={{ height: 8 }} />
+          <Btn full kind="dark" onClick={() => setConfirmDrop(null)}>Keep it</Btn>
+        </Sheet>
+      )}
+    </div>
+  );
+}
+
 function DriverDrive() {
   const { state, dispatch } = useStore();
   const LIVE = isLive(state);
@@ -4035,31 +4360,49 @@ function DriverDrive() {
   // Contractor agreement must be signed (current version) before going online.
   const [gate, setGate] = useState(false);
 
+  // Live jobs vs scheduled routes. Tapping a "check in" / scheduled-job alert opens the route.
+  const link = useDeepLink();
+  const [view, setView] = useState(() => (deepLink.route ? "route" : "live"));
+  useEffect(() => { if (link.route) { setView("route"); consumeLink("route"); } }, [link.route]);
+
   // ---- LIVE: the real pool of open offers from customers nearby ----
   const [pool, setPool] = useState([]);
   const [passed, setPassed] = useState(() => new Set());
   const [claiming, setClaiming] = useState(false);
+  const [browseJob, setBrowseJob] = useState(null);
+  // Jobs already open when you go online show in the list; only NEW ones ring.
+  const seen = useRef(new Set()), primed = useRef(false);
   useEffect(() => {
-    if (!LIVE || !online) { setPool([]); return; }
+    if (!LIVE || !online) { setPool([]); primed.current = false; return; }
     let on = true;
     const load = () => listOpenJobs().then(({ data }) => {
-      if (on) setPool((data || []).filter(r => r.customer_id !== state.userId).map(r => rowToOrder(r)));
+      if (!on) return;
+      const rows = (data || []).filter(r => r.customer_id !== state.userId).map(r => rowToOrder(r));
+      if (!primed.current) { rows.forEach(r => seen.current.add(r.jobId)); primed.current = true; }
+      setPool(rows);
     });
     load();
     const unsub = subscribeOpenJobs(load);
     return () => { on = false; unsub(); };
   }, [LIVE, online, state.userId]);
-  // Live: show where the driver actually is (asks for location once they go online).
+  // Live: show where the driver actually is (asks for location once they go online or open the route).
   const [here, setHere] = useState(null);
   useEffect(() => {
-    if (!LIVE || !online || typeof navigator === "undefined" || !navigator.geolocation) return;
+    if (!LIVE || !(online || view === "route") || typeof navigator === "undefined" || !navigator.geolocation) return;
     const id = navigator.geolocation.watchPosition(
       (p) => setHere({ lng: p.coords.longitude, lat: p.coords.latitude }),
       () => {}, { enableHighAccuracy: false, maximumAge: 60000, timeout: 20000 });
     return () => navigator.geolocation.clearWatch(id);
-  }, [LIVE, online]);
-  const liveOffer = LIVE && online && !o
-    ? pool.find(j => !passed.has(j.jobId) && (!j.expiresAt || j.expiresAt > Date.now())) : null;
+  }, [LIVE, online, view]);
+  const liveOffer = LIVE && online && !o && !browseJob && view === "live"
+    ? pool.find(j => !passed.has(j.jobId) && !seen.current.has(j.jobId) && (!j.expiresAt || j.expiresAt > Date.now())) : null;
+  // A tapped "new request" notification opens that job.
+  useEffect(() => {
+    if (!link.offer || !pool.length) return;
+    const j = pool.find(x => x.jobId === link.offer);
+    if (j) { setView("live"); setBrowseJob(j); }
+    consumeLink("offer");
+  }, [link.offer, pool.length]);
 
   // driver "has a job" if there's an order that they've accepted, OR an incoming request while online
   const incoming = LIVE ? !!liveOffer : online && o && o.state === "requested";
@@ -4079,6 +4422,7 @@ function DriverDrive() {
     if (claiming || !job) return;
     setClaiming(true);
     const { data, error } = await claimJob(job.jobId);
+    seen.current.add(job.jobId); setBrowseJob(null);
     if (error || !data) {
       setClaiming(false);
       setPassed(p => new Set(p).add(job.jobId));
@@ -4092,7 +4436,7 @@ function DriverDrive() {
     dispatch({ type: "TOAST", msg: "Job accepted — tap Navigate for directions" });
   };
   const passLive = (job, auto) => {
-    if (job) setPassed(p => new Set(p).add(job.jobId));
+    if (job) { setPassed(p => new Set(p).add(job.jobId)); seen.current.add(job.jobId); }
     dispatch({ type: "TOAST", msg: auto ? "Request passed to the next driver" : "Request passed" });
   };
   const toggle = () => {
@@ -4114,8 +4458,18 @@ function DriverDrive() {
         {online ? (LIVE ? `${pool.length} open request${pool.length === 1 ? "" : "s"} nearby` : `${SNOW_DEPTH_IN}" down · 12 open requests nearby`)
           : LIVE ? "Go online to see requests from customers near you." : `${SNOW_DEPTH_IN}" down in Duluth — demand is high right now.`}</p>
 
+      {/* live jobs vs scheduled routes */}
+      <div role="tablist" style={{ display: "flex", gap: 4, padding: 4, borderRadius: 14, background: C.night2, border: `1px solid ${C.line}`, marginBottom: 14 }}>
+        {[["live", "Live jobs"], ["route", "Scheduled route"]].map(([k, l]) => (
+          <button key={k} role="tab" aria-selected={view === k} onClick={() => setView(k)} style={{ flex: 1, minHeight: 42, borderRadius: 11, border: "none",
+            cursor: "pointer", font: `600 14px ${FB}`, color: view === k ? C.ice : C.mist, background: view === k ? C.slate2 : "transparent",
+            boxShadow: view === k ? E.low : "none", WebkitTapHighlightColor: "transparent" }}>{l}</button>
+        ))}
+      </div>
+
+      {view === "route" ? <RouteBoard here={here} /> : <>
       <div style={{ borderRadius: 20, overflow: "hidden", border: `1px solid ${C.line}` }}>
-        {LIVE ? (MAP_ENABLED ? (
+        {LIVE ? (MAP_ENABLED ? (online && pool.length ? <JobsMap jobs={pool} here={here} height={230} /> :
           <LiveMap center={here || DULUTH_CENTER} height={210}
             markers={here ? [{ lng: here.lng, lat: here.lat, size: 30, kind: "truck", pulse: online }] : []} />
         ) : <StormMap blips={[]} height={1.75} />)
@@ -4153,8 +4507,19 @@ function DriverDrive() {
       <AppSetupCard role="driver" />
       <DriverAlertsCard />
 
+      {/* open jobs nearby — tap one to see the details and accept */}
+      {LIVE && online && pool.length > 0 && (
+        <div style={{ marginTop: 18 }}>
+          <Eyebrow>Open jobs nearby</Eyebrow>
+          <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+            {[...pool].sort((a, b) => (driveEstimate(here, jobLL(a))?.mi ?? 99) - (driveEstimate(here, jobLL(b))?.mi ?? 99))
+              .map(j => <JobRow key={j.jobId} job={j} here={here} onClick={() => setBrowseJob(j)} />)}
+          </div>
+        </div>
+      )}
+
       {/* waiting state — calm, not empty */}
-      {online && !incoming && (
+      {online && !incoming && !(LIVE && pool.length) && (
         <div style={{ marginTop: 18 }}>
           <div style={{ font: `500 13px ${FB}`, color: C.mist, textAlign: "center", marginBottom: 10 }}>
             Listening for nearby requests…</div>
@@ -4182,10 +4547,14 @@ function DriverDrive() {
         </button>
       )}
 
+      </>}
+
       {incoming && (LIVE
         ? <IncomingJob key={liveOffer.jobId} order={liveOffer} busy={claiming} here={here}
             onAccept={() => acceptLive(liveOffer)} onPass={(auto) => passLive(liveOffer, auto)} />
         : <IncomingJob order={o} here={{ lng: state.driver.lng, lat: state.driver.lat }} />)}
+      {browseJob && <IncomingJob key={"b" + browseJob.jobId} order={browseJob} busy={claiming} here={here} browse
+        onAccept={() => acceptLive(browseJob)} onPass={() => setBrowseJob(null)} />}
       {gate && <ConsentGate role="driver" onClose={() => setGate(false)}
         onAgree={async (rec) => {
           setGate(false);
@@ -4219,7 +4588,7 @@ function driveEstimate(from, to) {
   return { mi, mins: Math.max(2, Math.round(1 + (mi / SNOW_MPH) * 60)) };
 }
 
-function IncomingJob({ order, onAccept, onPass, busy, here }) {
+function IncomingJob({ order, onAccept, onPass, busy, here, browse, acceptLabel }) {
   const { state, dispatch } = useStore();
   const q = order.quote;
   const prop = order.property;
@@ -4238,8 +4607,9 @@ function IncomingJob({ order, onAccept, onPass, busy, here }) {
   const plowN = prop?.zones?.filter(z => z.mode === "plow").length || (prop?.features || []).filter(f => f.geometry?.type === "Polygon" && f.properties?.mode !== "push" && f.properties?.mode !== "hazard").length;
   const pushN = prop?.zones?.filter(z => z.mode === "push").length || (prop?.features || []).filter(f => f.properties?.mode === "push").length;
 
-  // Ring loudly (and buzz) until the driver accepts or passes.
+  // Ring loudly (and buzz) until the driver accepts or passes (not when just browsing the list).
   useEffect(() => {
+    if (browse) return;
     startRing();
     localAlert(`New plow request · $${dPay}`, `${jt.label}${prop?.addr ? ` · ${prop.addr}` : ""}`);
     return () => stopRing();
@@ -4248,6 +4618,7 @@ function IncomingJob({ order, onAccept, onPass, busy, here }) {
   // 15s auto-pass countdown (jobs are time-sensitive in a storm)
   const [secs, setSecs] = useState(15);
   useEffect(() => {
+    if (browse) return;
     if (secs <= 0) { decline(true); return; }
     const t = setTimeout(() => setSecs(s => s - 1), 1000);
     return () => clearTimeout(t);
@@ -4270,16 +4641,17 @@ function IncomingJob({ order, onAccept, onPass, busy, here }) {
 
         {/* top: label + countdown */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ font: `600 15px ${FB}`, color: C.amber }}>{(order.preferredDriverIds || []).includes(state.userId)
-            ? "Your regular customer · first dibs" : "New request"}</div>
-          <div style={{ position: "relative", width: 44, height: 44 }} aria-label={`${secs} seconds left`}>
+          <div style={{ font: `600 15px ${FB}`, color: C.amber }}>{order.scheduledFor ? `Scheduled · ${fmtWindowLocal(order.scheduledFor)}`
+            : (order.preferredDriverIds || []).includes(state.userId) ? "Your regular customer · first dibs" : browse ? "Open job" : "New request"}</div>
+          {browse ? <button onClick={() => decline(false)} aria-label="Close" style={{ ...miniBtn, width: 44, height: 44, padding: 0, borderRadius: 14 }}><Icon e="close" s={18} /></button>
+          : <div style={{ position: "relative", width: 44, height: 44 }} aria-label={`${secs} seconds left`}>
             <svg width="44" height="44" style={{ transform: "rotate(-90deg)" }}>
               <circle cx="22" cy="22" r="18" fill="none" stroke={C.line} strokeWidth="3.5" />
               <circle cx="22" cy="22" r="18" fill="none" stroke={secs <= 5 ? C.danger : C.amber} strokeWidth="3.5"
                 strokeDasharray={113} strokeDashoffset={113 * (1 - secs / 15)} strokeLinecap="round" style={{ transition: "stroke-dashoffset 1s linear" }} />
             </svg>
             <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", font: `600 15px ${FB}`, color: secs <= 5 ? C.danger : C.ice }}>{secs}</div>
-          </div>
+          </div>}
         </div>
 
         {/* pay — the number that matters */}
@@ -4363,10 +4735,10 @@ function IncomingJob({ order, onAccept, onPass, busy, here }) {
           style={{ width: "100%", minHeight: 64, borderRadius: 18, border: "none", cursor: toolMatch ? "pointer" : "not-allowed",
             background: toolMatch ? C.push : C.line, color: toolMatch ? C.onPush : C.mistDim,
             font: `700 19px ${FB}`, letterSpacing: "-.01em", WebkitTapHighlightColor: "transparent" }}>
-          {busy ? "Accepting…" : `Accept · $${dPay}`}</button>
+          {busy ? "Accepting…" : acceptLabel ? `${acceptLabel} · $${dPay}` : `Accept · $${dPay}`}</button>
         <button onClick={() => decline(false)}
           style={{ display: "block", margin: "10px auto 0", background: "none", border: "none", cursor: "pointer",
-            font: `500 15px ${FB}`, color: C.mist, padding: 10 }}>Pass</button>
+            font: `500 15px ${FB}`, color: C.mist, padding: 10 }}>{browse ? "Back to the list" : "Pass"}</button>
       </div>
     </div>
   );
@@ -4514,6 +4886,33 @@ function DriverActiveJob() {
       body: `${o.property?.label || "Your driveway"} is clear. Photos are on your receipt.`, role: "rider" });
   };
 
+  // ---- Queue: up to 3 live jobs, done in order ----
+  const [queue, setQueue] = useState([]);
+  const [nearbyOpen, setNearbyOpen] = useState(false);
+  const loadQueue = () => { if (LIVE) listMyQueue(state.userId).then(({ data }) => setQueue((data || []).filter((r) => r.id !== o.jobId))); };
+  useEffect(() => { loadQueue(); const iv = setInterval(loadQueue, 20000); return () => clearInterval(iv); }, [LIVE, o.jobId, o.state]);
+  const startNext = () => {
+    const next = queue[0];
+    if (!next) { dispatch({ type: "CLEAR_ORDER" }); return; }
+    dispatch({ type: "SET_ORDER", order: { ...rowToOrder(next, state.driver), state: "accepted", driver: state.driver,
+      timeline: [{ k: "accepted", t: "now", label: "Next job" }] } });
+  };
+  const queueBlock = LIVE && (
+    <div style={{ marginTop: 14 }}>
+      {queue.length > 0 && <>
+        <Eyebrow>Up next ({queue.length})</Eyebrow>
+        <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+          {queue.map((r, i) => { const j = rowToOrder(r, state.driver); return <JobRow key={j.jobId} job={j} here={meLL} sub={i === 0 ? "Next" : `#${i + 2}`} right={null} />; })}
+        </div>
+      </>}
+      {queue.length < 2 && o.state !== "arrived_done" && (
+        <button onClick={() => setNearbyOpen(true)} style={{ ...miniBtn, width: "100%", minHeight: 46, marginTop: 10, justifyContent: "center", gap: 8 }}>
+          <Icon e="plus" s={16} /> Line up another nearby job ({queue.length + 1}/3)</button>
+      )}
+      {nearbyOpen && <NearbySheet here={meLL} queued={queue.length + 1} onClose={() => setNearbyOpen(false)} onAdded={() => { setNearbyOpen(false); loadQueue(); }} />}
+    </div>
+  );
+
   // driver's own completion screen
   if (o.state === "arrived_done") {
     return (
@@ -4542,7 +4941,10 @@ function DriverActiveJob() {
             })}
           </div>
         ) : null}
-        <Btn full kind="good" onClick={() => dispatch({ type: "CLEAR_ORDER" })}>Back online for more jobs</Btn>
+        {queue.length > 0
+          ? <Btn full kind="good" onClick={startNext}>Next job · {queue[0].address || "up next"}</Btn>
+          : <Btn full kind="good" onClick={() => dispatch({ type: "CLEAR_ORDER" })}>Back online for more jobs</Btn>}
+        {queue.length > 1 && <p style={{ ...sub, textAlign: "center", marginTop: 8 }}>{queue.length} jobs left in your queue</p>}
       </section></Fade>
     );
   }
@@ -4587,6 +4989,7 @@ function DriverActiveJob() {
 
       {/* density routing: cluster of nearby jobs to batch (demo only for now) */}
       {!arrived && !LIVE && <ClusterRoute />}
+      {queueBlock}
 
       {/* chat with the customer */}
       <JobChat jobId={o.jobId} senderId={state.userId} peerName="your customer" seed={[]} />
@@ -5371,6 +5774,8 @@ function Shell({ startEntered = false }) {
         profile: { name: prof.name || "", phone: prof.phone || "", email: prof.email || auth.user.email || "" },
         properties: props });
       loadAccountStats(uid).then((st) => { if (!cancelled && st) dispatch({ type: "ACCOUNT_STATS", ...st }); }).catch(() => {});
+      // Sign-up source (?ref= link they arrived from), saved once.
+      try { const ref = localStorage.getItem("drift.ref"); if (ref && !prof.ref_source) updateMyProfile(uid, { ref_source: ref }); } catch { /* ignore */ }
       // Pick up a job that was in progress (page refresh, dead battery, new phone).
       const { data: row } = await loadActiveJob(uid);
       if (cancelled || !row) return;
@@ -5379,6 +5784,24 @@ function Shell({ startEntered = false }) {
     })();
     return () => { cancelled = true; };
   }, [auth.session, auth.profile, auth.profileReady]);
+
+  // Scheduled plows need a heartbeat (reminders, check-in deadlines, hand-offs). The
+  // server cron does it; any open app also nudges it as a backup (throttled server-side).
+  useEffect(() => {
+    if (!supabaseEnabled || !state.userId) return;
+    schedTick();
+    const iv = setInterval(schedTick, 3 * 60 * 1000);
+    return () => clearInterval(iv);
+  }, [state.userId]);
+
+  // Deep links that belong to the driver side (route / new offer / "Drive" shortcut).
+  const link = useDeepLink();
+  useEffect(() => {
+    if (!state.userId) return;
+    const driverLink = link.route || link.offer || link.go === "drive";
+    if (driverLink && state.driverOnboarded && state.role !== "driver") dispatch({ type: "ROLE", role: "driver" });
+    if (link.go === "drive" || link.go === "book") consumeLink("go");
+  }, [state.userId, link.route, link.offer, link.go]);
 
   // Persist a customer's properties to Supabase whenever they change.
   useEffect(() => {

@@ -60,3 +60,10 @@ export const setDefaultCard = (pm) => pay("card-default", { pm });
 export const removeCard = (pm) => pay("card-remove", { pm });
 // Customer (payments off): tell online drivers about a new offer.
 export const announceJob = (jobId) => pay("announce", { jobId }).catch(() => null);
+// Driver routes (scheduled plows) — the server checks every rule (deadlines, limits).
+export const schedClaim = (jobId) => pay("sched-claim", { jobId });
+export const schedBackout = (jobId) => pay("sched-backout", { jobId });
+export const schedCheckin = () => pay("sched-checkin");
+export const schedStart = (jobId) => pay("sched-start", { jobId });
+// Any open app nudges the scheduler (reminders / hand-offs) — throttled on the server.
+export const schedTick = () => pay("tick").catch(() => null);

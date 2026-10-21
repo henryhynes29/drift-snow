@@ -107,7 +107,7 @@ const ACTIONS = {
   // ---------- drivers ----------
   async drivers() {
     const [drivers, jobs, docs] = await Promise.all([
-      all("profiles", "id, name, email, phone, truck, tools, rating, ratings_count, jobs_count, is_online, suspended, payouts_ready, stripe_account_id, created_at", (q) => q.eq("is_driver", true).order("created_at", { ascending: false })),
+      all("profiles", "id, name, email, phone, truck, tools, rating, ratings_count, jobs_count, late_cancels, is_online, suspended, payouts_ready, stripe_account_id, ref_source, created_at", (q) => q.eq("is_driver", true).order("created_at", { ascending: false })),
       all("jobs", "driver_id, status, driver_pay, tip, payment_status", (q) => q.not("driver_id", "is", null)),
       all("driver_documents", "user_id, kind, status, uploaded_at", (q) => q.order("uploaded_at", { ascending: false })),
     ]);
@@ -144,7 +144,8 @@ const ACTIONS = {
     if (stripe && p.stripe_account_id) {
       try { stripeStatus = await driverPayoutsReady(p.stripe_account_id); } catch (e) { stripeStatus = { error: e.message }; }
     }
-    return { profile: p, documents: docsWithLinks, agreements: legal, jobs, reviews, stripeStatus };
+    const backouts = await all("driver_backouts", "job_id, late, reason, created_at", (q) => q.eq("driver_id", id).order("created_at", { ascending: false }).limit(30));
+    return { profile: p, documents: docsWithLinks, agreements: legal, jobs, reviews, stripeStatus, backouts };
   },
 
   async "review-document"({ id, status, note }) {
@@ -164,7 +165,7 @@ const ACTIONS = {
   // ---------- customers ----------
   async customers() {
     const [people, jobs] = await Promise.all([
-      all("profiles", "id, name, email, phone, created_at", (q) => q.eq("is_driver", false).order("created_at", { ascending: false })),
+      all("profiles", "id, name, email, phone, ref_source, created_at", (q) => q.eq("is_driver", false).order("created_at", { ascending: false })),
       all("jobs", "customer_id, status, price, tip, payment_status"),
     ]);
     return {
@@ -185,6 +186,26 @@ const ACTIONS = {
     const name = (id) => { const p = people.find((x) => x.id === id); return p ? (p.name || p.email) : null; };
     return { jobs: jobs.map((j) => ({ ...j, customer: name(j.customer_id), driver: name(j.driver_id),
       photoCount: (j.photos?.before?.length || 0) + (j.photos?.after?.length || 0) })) };
+  },
+
+  // ---------- where sign-ups come from (?ref= links) ----------
+  async sources() {
+    const [people, jobs] = await Promise.all([
+      all("profiles", "id, is_driver, ref_source, created_at"),
+      all("jobs", "customer_id, status, price, tip, payment_status"),
+    ]);
+    const rows = {};
+    for (const p of people) {
+      const k = p.ref_source || "(no link)";
+      const r = (rows[k] ||= { source: k, signups: 0, customers: 0, drivers: 0, bookedCustomers: 0, revenue: 0, last7: 0 });
+      r.signups += 1;
+      if (p.is_driver) r.drivers += 1; else r.customers += 1;
+      if (Date.now() - new Date(p.created_at).getTime() < 7 * 864e5) r.last7 += 1;
+      const done = jobs.filter((j) => j.customer_id === p.id && j.status === "completed");
+      if (done.length) r.bookedCustomers += 1;
+      r.revenue = round2(r.revenue + done.filter((j) => j.payment_status === "captured").reduce((s, j) => s + num(j.price) + num(j.tip), 0));
+    }
+    return { sources: Object.values(rows).sort((a, b) => b.signups - a.signups) };
   },
 
   // ---------- snow alerts ----------
