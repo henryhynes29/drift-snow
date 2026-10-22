@@ -1,10 +1,12 @@
 // DRIFT — marketing homepage (driftplowing.com front door).
 //
-// Art direction: "storm night on the Twin Ports". A plow's amber beacon cutting
-// through lake-effect snow. Always dark on purpose (it's the brand moment; the
-// app itself still follows the phone's light/dark setting).
-//   Display: Big Shoulders Display — industrial Great-Lakes grotesque.
-//   Body:    Instrument Sans.     Readouts: IBM Plex Mono (dispatch-board feel).
+// Art direction: "storm night on the Twin Ports", kept calm. Always dark on purpose
+// (it's the brand moment; the app itself follows the phone's light/dark setting).
+//   Display: Big Shoulders Display — ONLY for the hero headline and big numbers.
+//   Headings + body: Instrument Sans, sentence case, tight tracking.
+//   Mono: IBM Plex Mono, used sparingly for small readouts.
+// Sections fade up as they scroll in (html.rv-on, set by the page; nothing is
+// hidden if JavaScript doesn't run). Reviews show only once REVIEWS has real quotes.
 // Signature moment: the headline loads buried in snow and a plow blade clears it.
 // Everything here is honest — no invented reviews, counts or ETAs. The forecast
 // strip is real (National Weather Service via /api/weather).
@@ -13,6 +15,7 @@ import EmojiIcon from "./Icon.jsx";
 import { MAP_ENABLED, MAPBOX_TOKEN } from "./mapConfig.js"; // no map library here — it loads on scroll
 import { fetchSnowForecast } from "./lib/weather.js";
 import { SIZES, estimateRange, estimateTotal } from "./lib/estimate.js";
+import { REVIEWS } from "./lib/reviews.js";
 
 // Search pages (static HTML in /public, built by scripts/seo-pages.mjs).
 const CITY_PAGES = [["Duluth", "snow-plowing-duluth-mn"], ["Superior", "snow-removal-superior-wi"], ["Hermantown", "snow-plowing-hermantown-mn"],
@@ -45,6 +48,9 @@ const L = {
 const DISPLAY = '"Big Shoulders Display", Impact, "Arial Narrow", sans-serif';
 const BODY = '"Instrument Sans", -apple-system, system-ui, "Segoe UI", sans-serif';
 const MONO = '"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace';
+const H2 = { font: `600 clamp(34px,4.6vw,56px)/1.04 ${BODY}`, letterSpacing: "-.035em", color: L.ice, margin: 0 };
+const H3 = { font: `600 20px/1.25 ${BODY}`, letterSpacing: "-.015em", color: L.ice, margin: 0 };
+const Kicker = ({ children }) => <div style={{ font: `600 14px ${BODY}`, color: L.amber, marginBottom: 14, letterSpacing: "-.005em" }}>{children}</div>;
 
 // ---------- building blocks ----------
 function Btn({ children, onClick, ghost, big, style }) {
@@ -272,16 +278,18 @@ function MapStart({ onStart, goDrive }) {
   );
 }
 
-// Proof bar: plain facts (never customer or driver counts).
+// Promise strip: plain facts (never customer or driver counts).
 function ProofBar() {
-  const items = [["6", "towns on both sides of the bridge"], ['86"', "of snow in a normal Duluth winter"], ["1 tap", "to book once your driveway is mapped"], ["$0", "contracts, ever"]];
+  const items = [["receipt", "No contracts", "Pay per storm, only when it's done"], ["pin", "6 towns", "Duluth to Superior to Cloquet"],
+    ["camera", "Photo proof", "Before and after on every receipt"], ["pickup", "Local operators", "Neighbors with plows, not a call center"]];
   return (
-    <div style={{ maxWidth: 1120, margin: "0 auto", padding: "46px 22px 0" }}>
-      <div className="lp-proof" style={{ display: "grid", gridTemplateColumns: `repeat(${items.length},1fr)`, borderRadius: 22, border: `1px solid ${L.line}`, background: L.panel }}>
-        {items.map(([v, l], i) => (
-          <div key={l} style={{ padding: "22px 20px", borderLeft: i ? `1px solid ${L.line}` : "none" }}>
-            <div style={{ font: `900 clamp(38px,4.6vw,54px)/1 ${DISPLAY}`, color: i === 0 ? L.amber : L.ice }}>{v}</div>
-            <div style={{ font: `400 14px/1.35 ${BODY}`, color: L.mist, marginTop: 6 }}>{l}</div>
+    <div style={{ borderTop: `1px solid ${L.line}`, borderBottom: `1px solid ${L.line}`, background: L.bg2 }}>
+      <div className="lp-proof" style={{ maxWidth: 1120, margin: "0 auto", padding: "0 22px", display: "grid", gridTemplateColumns: `repeat(${items.length},1fr)` }}>
+        {items.map(([ic, t, d], i) => (
+          <div key={t} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "24px 18px 24px", paddingLeft: i ? 18 : 0, borderLeft: i ? `1px solid ${L.line}` : "none" }}>
+            <span style={{ color: L.amber, marginTop: 1, flexShrink: 0 }}><EmojiIcon e={ic} s={19} /></span>
+            <div><div style={{ font: `600 15px/1.3 ${BODY}`, color: L.ice }}>{t}</div>
+              <div style={{ font: `400 13.5px/1.45 ${BODY}`, color: L.mist, marginTop: 3 }}>{d}</div></div>
           </div>
         ))}
       </div>
@@ -289,11 +297,37 @@ function ProofBar() {
   );
 }
 
+// ---------- reviews (shown only when src/lib/reviews.js has real quotes) ----------
+function Reviews() {
+  if (!REVIEWS.length) return null;
+  return (
+    <Section kicker="From the neighborhood" title="What neighbors say." style={{ paddingTop: 40 }}>
+      <div className="lp-reviews" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14 }}>
+        {REVIEWS.slice(0, 6).map((r, k) => (
+          <figure key={k} className="rv" style={{ margin: 0, background: L.panel, border: `1px solid ${L.line}`, borderRadius: 20, padding: "24px 22px",
+            display: "flex", flexDirection: "column", gap: 18, transitionDelay: `${(k % 3) * 80}ms` }}>
+            <div aria-label={`${r.stars || 5} out of 5 stars`} style={{ display: "flex", gap: 3, color: L.amber }}>
+              {Array.from({ length: r.stars || 5 }, (_, i) => <svg key={i} width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M12 2.5l2.9 6.1 6.6.8-4.9 4.6 1.3 6.6L12 17.3 6.1 20.6l1.3-6.6L2.5 9.4l6.6-.8z" /></svg>)}
+            </div>
+            <blockquote style={{ margin: 0, font: `400 17px/1.55 ${BODY}`, color: L.ice, letterSpacing: "-.005em", flex: 1 }}>“{r.quote}”</blockquote>
+            <figcaption style={{ display: "flex", alignItems: "center", gap: 11 }}>
+              <span aria-hidden style={{ width: 36, height: 36, borderRadius: "50%", display: "grid", placeItems: "center", background: L.panel2,
+                border: `1px solid ${L.line}`, font: `600 14px ${BODY}`, color: L.amber }}>{r.name.trim()[0]}</span>
+              <span><span style={{ display: "block", font: `600 14.5px ${BODY}`, color: L.ice }}>{r.name}</span>
+                <span style={{ display: "block", font: `400 13px ${BODY}`, color: L.dim }}>{[r.area, r.service].filter(Boolean).join(" · ")}</span></span>
+            </figcaption>
+          </figure>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
 // ---------- phone demo (three real app screens) ----------
 const DEMO = [
-  { key: "map", tag: "01 · Map it", title: "Outline your driveway" },
-  { key: "price", tag: "02 · Book it", title: "One tap per storm" },
-  { key: "track", tag: "03 · Track it", title: "Watch your plow arrive" },
+  { key: "map", tag: "Step 1 · Map it", title: "Outline your driveway" },
+  { key: "price", tag: "Step 2 · Book it", title: "One tap per storm" },
+  { key: "track", tag: "Step 3 · Track it", title: "Watch your plow arrive" },
 ];
 function PhoneDemo() {
   const [i, setI] = useState(0);
@@ -313,14 +347,14 @@ function PhoneDemo() {
         background: `radial-gradient(closest-side, ${L.amber}38, transparent 70%)`, zIndex: 0 }} />
       <div style={{ position: "relative", zIndex: 1, borderRadius: 46, padding: 10, background: "linear-gradient(160deg,#2A313D,#12161E 40%,#0B0E14)",
         border: `1px solid ${L.lineHard}`, boxShadow: "0 40px 80px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.08)", transform: "rotate(-2.5deg)" }}>
-        <div style={{ borderRadius: 37, overflow: "hidden", background: "#0A0A0B", aspectRatio: "9/18.5", position: "relative" }}>
+        <div style={{ borderRadius: 37, overflow: "hidden", background: "#0A0A0B", aspectRatio: "9/17.4", position: "relative" }}>
           <div style={{ position: "absolute", top: 9, left: "50%", transform: "translateX(-50%)", width: 86, height: 22, background: "#000", borderRadius: 12, zIndex: 5 }} />
           <div style={{ display: "flex", justifyContent: "space-between", padding: "12px 22px 0", font: `600 10px ${BODY}`, color: L.ice }}>
             <span>9:41</span><span style={{ color: L.mist }}>DRIFT</span>
           </div>
-          <div key={i} style={{ padding: "20px 15px 16px", animation: "lp-fadeUp .5s ease" }}>
-            <Mono style={{ color: L.amber, fontSize: 10 }}>{DEMO[i].tag}</Mono>
-            <div style={{ font: `800 25px/1 ${DISPLAY}`, textTransform: "uppercase", color: L.ice, margin: "8px 0 14px" }}>{DEMO[i].title}</div>
+          <div key={i} style={{ padding: "18px 15px 34px", animation: "lp-fadeUp .5s ease" }}>
+            <div style={{ font: `600 11px ${BODY}`, color: L.amber }}>{DEMO[i].tag}</div>
+            <div style={{ font: `600 20px/1.15 ${BODY}`, letterSpacing: "-.02em", color: L.ice, margin: "8px 0 14px" }}>{DEMO[i].title}</div>
             {key === "map" ? <DemoMap /> : key === "price" ? <DemoPrice /> : <DemoTrack />}
           </div>
           <div style={{ position: "absolute", bottom: 4, left: 0, right: 0, display: "flex", gap: 0, justifyContent: "center" }}>
@@ -351,6 +385,16 @@ function DemoMap() {
           <Mono style={{ color: L.ice, fontSize: 9 }}>620 sq ft</Mono></div>
       </div>
       <div style={{ font: `400 11px/1.45 ${BODY}`, color: L.mist, marginTop: 10 }}>Tap the corners of your drive. No measuring, no phone calls.</div>
+      <div style={{ display: "grid", gap: 6, marginTop: 12 }}>
+        {[["Driveway", "620 sq ft", L.amber], ["Snow goes", "Left side of the yard", L.steel], ["Hazards", "Curb at the street", L.mist]].map(([k, v, c]) => (
+          <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 9, background: "#14181F", border: "1px solid #20252E" }}>
+            <span style={{ width: 7, height: 7, borderRadius: 2, background: c }} />
+            <span style={{ font: `500 10px ${BODY}`, color: L.mist, flex: 1 }}>{k}</span>
+            <span style={{ font: `600 10px ${BODY}`, color: L.ice }}>{v}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 12, background: L.amber, color: L.onAmber, borderRadius: 999, padding: "10px 0", textAlign: "center", font: `700 12px ${BODY}` }}>Save my driveway</div>
     </div>
   );
 }
@@ -385,6 +429,13 @@ function DemoPrice() {
       <div style={{ font: `400 9px ${BODY}`, color: L.mist, marginTop: 6 }}>~20 min on site · charged when it's done · <span style={{ color: L.good }}>no contract</span></div>
       <div style={{ marginTop: 10, background: L.amber, color: L.onAmber, borderRadius: 999, padding: "11px 0", textAlign: "center", font: `700 12.5px ${BODY}` }}>Plow my driveway · ${EX.total}</div>
       <div style={{ textAlign: "center", font: `500 9.5px ${BODY}`, color: L.mist, marginTop: 8 }}>Change price or schedule for later ▾</div>
+      <div style={{ marginTop: 14, borderRadius: 12, background: "#14181F", border: "1px solid #20252E", padding: "4px 11px" }}>
+        {[["Your offer", `$${EX.offer}`], ["Driver call-out", "$10"], ["Booking fee", "$5"]].map(([k, v], i) => (
+          <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", borderTop: i ? "1px solid #20252E" : "none",
+            font: `500 10px ${BODY}`, color: L.mist }}><span>{k}</span><span style={{ color: L.ice }}>{v}</span></div>
+        ))}
+      </div>
+      <div style={{ font: `400 9px ${BODY}`, color: L.dim, marginTop: 8, textAlign: "center" }}>Card held now, charged only when it's done</div>
     </div>
   );
 }
@@ -415,26 +466,19 @@ function DemoTrack() {
           </div>
         ))}
       </div>
-    </div>
-  );
-}
-
-// ---------- scrolling hazard band ----------
-function Marquee() {
-  const words = ["No contracts", "Pay per storm", "Name your price", "Track it live", "Photo proof", "Local drivers"];
-  const run = [...words, ...words];
-  return (
-    <div aria-hidden style={{ position: "relative", background: L.amber, color: L.onAmber, overflow: "hidden", transform: "rotate(-1.2deg)",
-      margin: "0 -2%", boxShadow: `0 0 60px ${L.amber}33`, borderTop: "3px solid #111", borderBottom: "3px solid #111" }}>
-      <div className="lp-marquee" style={{ display: "flex", width: "max-content", padding: "14px 0" }}>
-        {[0, 1].map((dup) => (
-          <div key={dup} style={{ display: "flex", flexShrink: 0 }}>
-            {run.map((w, k) => (
-              <span key={`${dup}-${k}`} style={{ display: "inline-flex", alignItems: "center", gap: 26, paddingRight: 26,
-                font: `900 clamp(22px,3vw,34px)/1 ${DISPLAY}`, textTransform: "uppercase", letterSpacing: ".01em" }}>
-                {w}<EmojiIcon e="snowflake" s={20} color={L.onAmber} strokeWidth={2.4} />
-              </span>
-            ))}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 16, padding: "10px 11px", borderRadius: 12, background: "#14181F", border: "1px solid #20252E" }}>
+        <span style={{ width: 30, height: 30, borderRadius: "50%", background: L.panel2, border: `1px solid ${L.amber}55`, display: "grid", placeItems: "center", color: L.amber }}>
+          <EmojiIcon e="pickup" s={15} /></span>
+        <div style={{ flex: 1 }}><div style={{ font: `600 11px ${BODY}`, color: L.ice }}>Your driver is on the way</div>
+          <div style={{ font: `400 9.5px ${BODY}`, color: L.mist, marginTop: 2 }}>Pickup with a plow · local operator</div></div>
+        <span style={{ font: `600 9.5px ${BODY}`, color: L.ice, padding: "6px 9px", borderRadius: 99, border: "1px solid #2A303A" }}>Message</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 8 }}>
+        {[["Before", "#3A4250"], ["After", "#26303C"]].map(([t, c]) => (
+          <div key={t} style={{ position: "relative", aspectRatio: "1.5", borderRadius: 9, overflow: "hidden", border: "1px solid #20252E",
+            background: t === "Before" ? "linear-gradient(160deg,#E9EEF4,#C3CDD8)" : "linear-gradient(160deg,#4B5563,#2E3742)" }}>
+            {t === "After" && <div style={{ position: "absolute", left: "30%", right: "30%", top: 0, bottom: 0, background: "#1C222B" }} />}
+            <span style={{ position: "absolute", left: 6, bottom: 5, font: `600 8.5px ${BODY}`, color: t === "Before" ? "#1A1F27" : "#fff" }}>{t}</span>
           </div>
         ))}
       </div>
@@ -445,12 +489,14 @@ function Marquee() {
 // ---------- section shell ----------
 function Section({ id, kicker, title, lead, children, style }) {
   return (
-    <section id={id} className="lp-section" style={{ padding: "112px 22px", position: "relative", ...style }}>
+    <section id={id} className="lp-section" style={{ padding: "92px 22px", position: "relative", ...style }}>
       <div style={{ maxWidth: 1120, margin: "0 auto" }}>
-        {kicker && <Mono style={{ color: L.amber }}>{kicker}</Mono>}
-        {title && <h2 style={{ font: `900 clamp(44px,6.4vw,80px)/.9 ${DISPLAY}`, textTransform: "uppercase", letterSpacing: "-.005em",
-          margin: "14px 0 18px", color: L.ice, maxWidth: 820 }}>{title}</h2>}
-        {lead && <p style={{ color: L.mist, maxWidth: 560, margin: "0 0 52px", font: `400 18px/1.55 ${BODY}` }}>{lead}</p>}
+        <div className="rv">
+          {kicker && <Kicker>{kicker}</Kicker>}
+          {title && <h2 style={{ ...H2, maxWidth: 760, margin: "0 0 16px" }}>{title}</h2>}
+          {lead && <p style={{ color: L.mist, maxWidth: 560, margin: "0 0 44px", font: `400 18px/1.55 ${BODY}` }}>{lead}</p>}
+          {!lead && title && <div style={{ height: 28 }} />}
+        </div>
         {children}
       </div>
     </section>
@@ -588,34 +634,24 @@ function ServiceMap({ bare }) {
   );
 }
 
-// ---------- Aerial Lift Bridge (final band art) ----------
-function LiftBridge() {
-  const braces = (bx, w, y0, y1, n) => Array.from({ length: n }, (_, k) => {
-    const a = y0 + k * ((y1 - y0) / n), b = a + (y1 - y0) / n;
-    return <path key={`${bx}-${k}`} d={`M${bx} ${a} L${bx + w} ${b} M${bx + w} ${a} L${bx} ${b}`} />;
-  });
-  return (
-    <svg aria-hidden viewBox="120 96 960 390" preserveAspectRatio="xMidYMax meet"
-      style={{ display: "block", width: "100%", maxWidth: 760, height: "auto", margin: "0 auto", pointerEvents: "none" }}>
-      <g stroke={L.steel} strokeWidth="2" fill="none" opacity=".42">
-        <path d="M120 470 L1080 470" strokeWidth="2.6" />
-        <rect x="300" y="120" width="86" height="350" />{braces(300, 86, 130, 460, 7)}
-        <rect x="814" y="120" width="86" height="350" />{braces(814, 86, 130, 460, 7)}
-        <path d="M300 120 L900 120" strokeWidth="2.6" /><path d="M300 150 L900 150" />{braces(300, 600, 120, 150, 12)}
-        <path d="M386 250 L814 250" strokeWidth="3" /><path d="M386 276 L814 276" />{braces(386, 428, 250, 276, 10)}
-        {[430, 520, 600, 680, 770].map((bx) => <path key={bx} d={`M${bx} 150 L${bx} 250`} strokeWidth="1.4" />)}
-      </g>
-      {[[343, 118], [857, 118], [343, 250], [857, 250], [600, 122]].map(([cx, cy], k) => (
-        <circle key={k} cx={cx} cy={cy} r="4" fill={L.amber} className="lp-strobe" style={{ animationDelay: `${k * .4}s` }} />
-      ))}
-    </svg>
-  );
-}
-
 // ============================================================
 export default function Landing({ onStart, onLegal }) {
   const goDrive = () => { if (typeof window !== "undefined") window.location.href = "/drive.html"; };
   const [faqOpen, setFaqOpen] = useState(0);
+
+  // Fade sections up as they scroll in. Only turns on once this runs, so nothing is
+  // ever hidden without JavaScript; anything already on screen is shown right away.
+  useEffect(() => {
+    const root = document.documentElement;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches || !("IntersectionObserver" in window)) return;
+    const els = [...document.querySelectorAll(".rv")];
+    els.forEach((el) => { if (el.getBoundingClientRect().top < window.innerHeight * 0.92) el.classList.add("in"); });
+    root.classList.add("rv-on");
+    const io = new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } }),
+      { rootMargin: "0px 0px -8% 0px" });
+    els.forEach((el) => !el.classList.contains("in") && io.observe(el));
+    return () => { io.disconnect(); root.classList.remove("rv-on"); };
+  }, []);
 
   // FAQ copy matches the JSON-LD in index.html (rich results) — keep them in sync.
   const FAQ = [
@@ -640,6 +676,9 @@ export default function Landing({ onStart, onLegal }) {
       {/* dangerouslySetInnerHTML so the pre-rendered HTML matches exactly (no escaped quotes) */}
       <style dangerouslySetInnerHTML={{ __html: `
         html{scroll-behavior:smooth}
+        @view-transition{navigation:auto}
+        html.rv-on .rv:not(.in){opacity:0;transform:translateY(18px)}
+        .rv{transition:opacity .8s cubic-bezier(.16,1,.3,1),transform .8s cubic-bezier(.16,1,.3,1)}
         .lp-btn{transition:transform .18s cubic-bezier(.2,.8,.2,1),box-shadow .25s ease,background .2s ease}
         .lp-btn:not(.lp-btn-ghost):hover{transform:translateY(-2px);box-shadow:0 12px 34px ${L.amber}55}
         .lp-btn-ghost:hover{background:rgba(255,255,255,.06)!important;transform:translateY(-2px)}
@@ -657,7 +696,6 @@ export default function Landing({ onStart, onLegal }) {
         @keyframes lp-spray{0%{transform:translate(0,0);opacity:.95}100%{transform:translate(var(--sx),var(--sy));opacity:0}}
         @keyframes lp-strobe{0%,100%{opacity:1}50%{opacity:.25}}
         @keyframes lp-beacon{0%,100%{opacity:.55;transform:scale(1)}50%{opacity:1;transform:scale(1.06)}}
-        @keyframes lp-marquee{to{transform:translateX(-50%)}}
         @keyframes lp-ping{0%{transform:scale(1);opacity:.35}100%{transform:scale(2.8);opacity:0}}
         @keyframes lp-live{0%,100%{box-shadow:0 0 0 0 rgba(255,176,32,.6)}50%{box-shadow:0 0 0 6px rgba(255,176,32,0)}}
         .lp-rise{animation:lp-rise .9s cubic-bezier(.16,1,.3,1) both}
@@ -669,7 +707,6 @@ export default function Landing({ onStart, onLegal }) {
         .lp-truck{left:calc(100% + .5em);opacity:0;animation:lp-drive 2.3s cubic-bezier(.45,.05,.4,1) .5s both}
         .lp-strobe{animation:lp-strobe 1.1s ease-in-out infinite}
         .lp-beacon{animation:lp-beacon 2.6s ease-in-out infinite}
-        .lp-marquee{animation:lp-marquee 38s linear infinite}
         .lp-ping{transform-box:fill-box;transform-origin:center;animation:lp-ping 2.4s ease-out infinite}
         .lp-live{animation:lp-live 2s ease-in-out infinite}
         .lp-mk{display:flex;align-items:center;gap:8px;pointer-events:none}
@@ -682,8 +719,8 @@ export default function Landing({ onStart, onLegal }) {
         .lp-map .mapboxgl-ctrl-attrib{background:rgba(10,14,21,.7)!important}
         .lp-map .mapboxgl-ctrl-attrib a{color:${L.dim}!important}
         @media(max-width:640px){.lp-mk-lbl{font-size:15px}.lp-mk-hq .lp-mk-lbl{font-size:20px}.lp-mk-lbl em{display:none}}
-        .lp-step{transition:transform .3s cubic-bezier(.2,.8,.2,1),border-color .3s}
-        .lp-step:hover{transform:translateY(-6px);border-color:${L.amber}66!important}
+        .lp-step{transition:opacity .8s cubic-bezier(.16,1,.3,1),transform .8s cubic-bezier(.16,1,.3,1),border-color .3s}
+        .lp-step:hover{border-color:${L.amber}66!important}
         .lp-svc{transition:transform .3s cubic-bezier(.2,.8,.2,1),background .3s,border-color .3s}
         .lp-svc:focus-visible,.lp-chip:focus-visible{outline:2px solid ${L.amberHot};outline-offset:3px}
         .lp-chip{display:inline-flex;align-items:center;gap:8px;padding:10px 15px;border-radius:999px;border:1px solid ${L.line};background:${L.panel};color:${L.ice};text-decoration:none;font:500 14.5px ${BODY};transition:border-color .2s,background .2s}
@@ -702,6 +739,11 @@ export default function Landing({ onStart, onLegal }) {
           .lp-driver{grid-template-columns:1fr!important}
           .lp-money{grid-template-columns:1fr!important}
           .lp-guides{grid-template-columns:1fr!important}
+          .lp-reviews{grid-template-columns:1fr!important}
+          .lp-cta{grid-template-columns:1fr!important;padding:44px 26px!important;align-items:start!important}
+          .lp-proof{grid-template-columns:1fr 1fr!important}
+          .lp-proof>div:nth-child(3){border-left:none!important;padding-left:0!important}
+          .lp-proof>div:nth-child(n+3){border-top:1px solid ${L.line}}
           .lp-nav-links{display:none!important}
         }
         @media(max-width:640px){
@@ -713,15 +755,15 @@ export default function Landing({ onStart, onLegal }) {
           .lp-ctas>button{width:100%}
           .lp-svcs{grid-template-columns:1fr!important}
           .lp-svc{min-height:170px!important}
-          .lp-step-h{margin-top:44px!important}
+          .lp-step-h{margin-top:26px!important}
           .lp-pill{font-size:10px;letter-spacing:.03em}
           .lp-town{transform:scale(1.8)}
           .lp-st{display:none}
           .lp-lake{font-size:20px!important}
-          .lp-proof{grid-template-columns:1fr 1fr!important}
           .lp-msteps{grid-template-columns:1fr!important}
-          .lp-proof>div:nth-child(3){border-left:none!important}
-          .lp-proof>div:nth-child(n+3){border-top:1px solid ${L.line}}
+          .lp-proof{grid-template-columns:1fr!important}
+          .lp-proof>div{border-left:none!important;padding-left:0!important}
+          .lp-proof>div:nth-child(n+2){border-top:1px solid ${L.line}}
         }
       ` }} />
 
@@ -775,8 +817,7 @@ export default function Landing({ onStart, onLegal }) {
         </div>
       </header>
 
-      {/* ============ MARQUEE ============ */}
-      <div style={{ position: "relative", zIndex: 3, padding: "10px 0 0" }}><Marquee /></div>
+      {/* ============ PROMISES ============ */}
       <ProofBar />
 
       {/* ============ HOW IT WORKS ============ */}
@@ -784,14 +825,15 @@ export default function Landing({ onStart, onLegal }) {
         lead="Set your place up once. After that, every storm is one tap away.">
         <div className="lp-steps" style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, position: "relative" }}>
           {STEPS.map(([ic, t, d], k) => (
-            <div key={t} className="lp-step" style={{ position: "relative", background: L.panel, border: `1px solid ${L.line}`, borderRadius: 22,
-              padding: "26px 22px 28px", overflow: "hidden" }}>
-              <div aria-hidden style={{ position: "absolute", right: -6, top: -18, font: `900 128px/1 ${DISPLAY}`, color: "transparent",
-                WebkitTextStroke: `1.5px ${k === 0 ? L.amber : L.lineHard}`, opacity: k === 0 ? .55 : 1 }}>{String(k + 1).padStart(2, "0")}</div>
-              <div style={{ position: "relative", width: 46, height: 46, borderRadius: 14, background: `${L.amber}16`, border: `1px solid ${L.amber}40`,
-                display: "grid", placeItems: "center" }}><EmojiIcon e={ic} s={23} color={L.amber} /></div>
-              <h3 className="lp-step-h" style={{ position: "relative", font: `800 28px/1 ${DISPLAY}`, textTransform: "uppercase", margin: "74px 0 10px", color: L.ice }}>{t}</h3>
-              <p style={{ position: "relative", margin: 0, color: L.mist, font: `400 15px/1.55 ${BODY}` }}>{d}</p>
+            <div key={t} className="lp-step rv" style={{ position: "relative", background: L.panel, border: `1px solid ${L.line}`, borderRadius: 20,
+              padding: "22px 22px 26px", transitionDelay: `${k * 70}ms` }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ width: 42, height: 42, borderRadius: 12, background: `${L.amber}14`, border: `1px solid ${L.amber}38`,
+                  display: "grid", placeItems: "center" }}><EmojiIcon e={ic} s={21} color={L.amber} /></span>
+                <span style={{ font: `500 13px ${BODY}`, color: L.dim }}>Step {k + 1}</span>
+              </div>
+              <h3 className="lp-step-h" style={{ ...H3, margin: "40px 0 8px" }}>{t}</h3>
+              <p style={{ margin: 0, color: L.mist, font: `400 15px/1.55 ${BODY}` }}>{d}</p>
             </div>
           ))}
         </div>
@@ -800,12 +842,12 @@ export default function Landing({ onStart, onLegal }) {
       {/* ============ PRICING / WHERE THE MONEY GOES ============ */}
       <Section id="pricing" kicker="Pricing" title={<>You set the price.<br /><span style={{ color: L.amber }}>Your driver keeps most of it.</span></>}
         style={{ background: `linear-gradient(180deg, ${L.bg}, ${L.bg2} 30%, ${L.bg2} 70%, ${L.bg})` }}>
-        <div className="lp-money" style={{ display: "grid", gridTemplateColumns: "1fr 1.1fr", gap: 22, alignItems: "stretch" }}>
+        <div className="lp-money rv" style={{ display: "grid", gridTemplateColumns: "1fr 1.1fr", gap: 22, alignItems: "stretch" }}>
           {/* receipt */}
           <div style={{ background: L.snow, color: "#10141B", borderRadius: 22, padding: "30px 28px 26px", position: "relative",
             boxShadow: "0 30px 70px rgba(0,0,0,.45)", transform: "rotate(-1deg)" }}>
-            <Mono style={{ color: "#566170" }}>Example · 2-car driveway, suggested price</Mono>
-            <div style={{ font: `900 44px/1 ${DISPLAY}`, textTransform: "uppercase", margin: "10px 0 18px" }}>Your receipt</div>
+            <div style={{ font: `500 13px ${BODY}`, color: "#566170" }}>Example · 2-car driveway, suggested price</div>
+            <div style={{ font: `600 30px/1.1 ${BODY}`, letterSpacing: "-.03em", margin: "10px 0 16px" }}>Your receipt</div>
             {[["Your offer", `$${EX.offer}`], ["Driver call-out fee", "$10"], ["DRIFT booking fee", "$5"]].map(([l, v]) => (
               <div key={l} style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px dashed #C9D2DD",
                 font: `500 16px ${BODY}` }}><span>{l}</span><span style={{ font: `500 16px ${MONO}` }}>{v}</span></div>
@@ -822,7 +864,7 @@ export default function Landing({ onStart, onLegal }) {
           </div>
           {/* split */}
           <div style={{ background: L.panel, border: `1px solid ${L.line}`, borderRadius: 22, padding: "30px 28px", display: "flex", flexDirection: "column" }}>
-            <Mono style={{ color: L.dim }}>Where your ${EX.total} goes</Mono>
+            <div style={{ font: `500 14px ${BODY}`, color: L.mist }}>Where your ${EX.total} goes</div>
             <div style={{ display: "flex", height: 64, borderRadius: 14, overflow: "hidden", margin: "18px 0 22px", border: `1px solid ${L.line}` }}>
               <div style={{ flex: DRV, background: `linear-gradient(90deg, ${L.amber}, ${L.amberHot})`, display: "flex", alignItems: "center", padding: "0 16px" }}>
                 <span style={{ font: `900 30px ${DISPLAY}`, color: L.onAmber }}>${DRV}</span></div>
@@ -848,8 +890,8 @@ export default function Landing({ onStart, onLegal }) {
       </Section>
 
       {/* ============ SERVICES ============ */}
-      <Section kicker="Services" title="Built for the whole storm." lead="Plowing comes first — with backup for everything else a Duluth winter throws at you.">
-        <div className="lp-svcs" style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", gap: 14 }}>
+      <Section kicker="Services" title="Built for the whole storm." lead="Plowing comes first, with backup for everything else a Duluth winter throws at you.">
+        <div className="lp-svcs rv" style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", gap: 14 }}>
           {[
             ["plowtruck", "Driveway plowing", "Cleared edge to edge, exactly how you mapped it.", "Priced from your map", "snow-plowing-duluth-mn", true],
             ["broom", "Sidewalks", "Walks and steps, before the city's 24-hour deadline.", "Priced by length", "sidewalk-snow-removal-duluth"],
@@ -863,7 +905,7 @@ export default function Landing({ onStart, onLegal }) {
                 background: hero ? `${L.amber}22` : "rgba(255,255,255,.05)", border: `1px solid ${hero ? L.amber + "55" : L.line}` }}>
                 <EmojiIcon e={ic} s={hero ? 28 : 23} color={hero ? L.amber : L.ice} /></span>
               <div>
-                <h3 style={{ font: `800 ${hero ? 36 : 26}px/1 ${DISPLAY}`, textTransform: "uppercase", color: L.ice, margin: 0 }}>{t}</h3>
+                <h3 style={{ ...H3, fontSize: hero ? 26 : 20 }}>{t}</h3>
                 <div style={{ font: `400 14px/1.5 ${BODY}`, color: L.mist, marginTop: 8 }}>{d}</div>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14, font: `600 13.5px ${BODY}` }}>
                   <span style={{ color: hero ? L.amber : L.ice }}>{price}</span><span aria-hidden style={{ color: L.mist }}>→</span></div>
@@ -873,16 +915,16 @@ export default function Landing({ onStart, onLegal }) {
         </div>
       </Section>
 
+      {/* ============ REVIEWS (hidden until real quotes are added) ============ */}
+      <Reviews />
+
       {/* ============ DRIVERS ============ */}
       <section className="lp-section" style={{ padding: "40px 22px 112px" }}>
-        <div className="lp-driver" style={{ maxWidth: 1120, margin: "0 auto", display: "grid", gridTemplateColumns: "1.1fr .9fr", gap: 0,
-          borderRadius: 28, overflow: "hidden", border: `1px solid ${L.amber}44`, background: L.panel }}>
+        <div className="lp-driver rv" style={{ maxWidth: 1120, margin: "0 auto", display: "grid", gridTemplateColumns: "1.1fr .9fr", gap: 0,
+          borderRadius: 28, overflow: "hidden", border: `1px solid ${L.line}`, background: L.panel }}>
           <div style={{ padding: "54px 44px", position: "relative" }}>
-            {/* hazard stripe */}
-            <div aria-hidden style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 8,
-              background: `repeating-linear-gradient(-45deg, ${L.amber} 0 10px, #111 10px 20px)` }} />
-            <Mono style={{ color: L.amber }}>For drivers</Mono>
-            <h2 style={{ font: `900 clamp(44px,6vw,76px)/.88 ${DISPLAY}`, textTransform: "uppercase", margin: "14px 0 18px" }}>
+            <Kicker>For drivers</Kicker>
+            <h2 style={{ ...H2, fontSize: "clamp(34px,4.4vw,52px)", margin: "0 0 18px" }}>
               Got a plow?<br /><span style={{ color: L.amber }}>Get paid for it.</span></h2>
             <p style={{ font: `400 17px/1.55 ${BODY}`, color: L.mist, maxWidth: 440, margin: "0 0 30px" }}>
               Already clearing your own drive? Take jobs from your neighbors when it snows. Go online when you want, pick the offers you like, get paid through Stripe.</p>
@@ -891,7 +933,7 @@ export default function Landing({ onStart, onLegal }) {
           <div style={{ background: L.bg2, borderLeft: `1px solid ${L.line}`, padding: "44px 36px", display: "grid", gap: 14, alignContent: "center" }}>
             {[["80%", "of every offer you accept"], ["+$10", "call-out fee on every job"], ["100%", "of your tips"], ["$0", "to sign up · you're your own boss"]].map(([big, small]) => (
               <div key={small} style={{ display: "flex", alignItems: "baseline", gap: 16, paddingBottom: 14, borderBottom: `1px solid ${L.line}` }}>
-                <span style={{ font: `900 52px/1 ${DISPLAY}`, color: L.amber, minWidth: 118 }}>{big}</span>
+                <span style={{ font: `800 46px/1 ${DISPLAY}`, color: L.amber, minWidth: 108 }}>{big}</span>
                 <span style={{ font: `500 16px/1.35 ${BODY}`, color: L.ice }}>{small}</span>
               </div>
             ))}
@@ -902,7 +944,7 @@ export default function Landing({ onStart, onLegal }) {
       {/* ============ SERVICE AREA ============ */}
       <Section id="area" kicker="Service area" title="Head of the Lakes." lead="On-demand snow removal across the Twin Ports and the towns around them."
         style={{ paddingTop: 40 }}>
-        <MapboxServiceArea />
+        <div className="rv"><MapboxServiceArea /></div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 16 }}>
           {CITY_PAGES.map(([n, slug]) => (
             <a key={slug} href={`/${slug}/`} className="lp-chip">Snow plowing in {n} <span aria-hidden>→</span></a>
@@ -913,12 +955,12 @@ export default function Landing({ onStart, onLegal }) {
       {/* ============ LOCAL KNOW-HOW (guides) ============ */}
       <Section kicker="Duluth winter, handled" title="Know the rules. Skip the ticket." style={{ paddingTop: 40 }}
         lead="Duluth gives you 24 hours to clear your sidewalk, moves cars for snow emergencies and gets around 86 inches of snow a winter. Here's what to know.">
-        <div className="lp-guides" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14 }}>
+        <div className="lp-guides rv" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14 }}>
           {GUIDE_PAGES.map(([t, slug, d], k) => (
             <a key={slug} href={`/${slug}/`} className="lp-svc" style={{ display: "block", textDecoration: "none", color: "inherit", borderRadius: 22, padding: "24px 22px",
               background: L.panel, border: `1px solid ${L.line}` }}>
-              <Mono style={{ color: L.amber }}>Guide {String(k + 1).padStart(2, "0")}</Mono>
-              <h3 style={{ font: `800 28px/1 ${DISPLAY}`, textTransform: "uppercase", color: L.ice, margin: "14px 0 10px" }}>{t}</h3>
+              <div style={{ font: `500 13px ${BODY}`, color: L.dim }}>Local guide</div>
+              <h3 style={{ ...H3, margin: "10px 0 8px" }}>{t}</h3>
               <p style={{ font: `400 14.5px/1.5 ${BODY}`, color: L.mist, margin: "0 0 16px" }}>{d}</p>
               <span style={{ font: `600 14px ${BODY}`, color: L.amber }}>Read the guide →</span>
             </a>
@@ -929,21 +971,20 @@ export default function Landing({ onStart, onLegal }) {
 
       {/* ============ FAQ ============ */}
       <Section kicker="FAQ" title="Questions, answered." style={{ paddingTop: 40 }}>
-        <div style={{ maxWidth: 820, borderTop: `1px solid ${L.lineHard}` }}>
+        <div className="rv" style={{ maxWidth: 820, borderTop: `1px solid ${L.lineHard}` }}>
           {FAQ.map(([q, a], k) => {
             const open = faqOpen === k;
             return (
               <div key={k} style={{ borderBottom: `1px solid ${L.lineHard}` }}>
                 <button onClick={() => setFaqOpen(open ? -1 : k)} aria-expanded={open} style={{ width: "100%", display: "flex", alignItems: "center", gap: 18,
                   background: "none", border: "none", cursor: "pointer", padding: "24px 0", textAlign: "left", color: L.ice }}>
-                  <Mono style={{ color: open ? L.amber : L.dim, flexShrink: 0 }}>{String(k + 1).padStart(2, "0")}</Mono>
                   <span style={{ flex: 1, font: `600 clamp(17px,2vw,20px)/1.3 ${BODY}` }}>{q}</span>
                   <span aria-hidden style={{ width: 34, height: 34, borderRadius: "50%", border: `1px solid ${open ? L.amber : L.lineHard}`, flexShrink: 0,
                     display: "grid", placeItems: "center", color: open ? L.amber : L.mist, fontSize: 20, fontWeight: 300,
                     transform: open ? "rotate(45deg)" : "none", transition: "transform .25s, border-color .25s" }}>+</span>
                 </button>
                 {/* always in the HTML (search engines read the answers); shown when open */}
-                <div hidden={!open} style={{ padding: "0 52px 26px 50px", font: `400 16px/1.6 ${BODY}`, color: L.mist, animation: open ? "lp-fadeUp .3s ease" : undefined }}>{a}</div>
+                <div hidden={!open} style={{ padding: "0 52px 26px 0", font: `400 16px/1.6 ${BODY}`, color: L.mist, animation: open ? "lp-fadeUp .3s ease" : undefined }}>{a}</div>
               </div>
             );
           })}
@@ -952,21 +993,20 @@ export default function Landing({ onStart, onLegal }) {
       </Section>
 
       {/* ============ FINAL CTA ============ */}
-      <section style={{ padding: "20px 22px 96px" }}>
-        <div style={{ position: "relative", overflow: "hidden", maxWidth: 1120, margin: "0 auto", borderRadius: 30, minHeight: 460,
-          background: `radial-gradient(60% 70% at 50% 0%, ${L.amber}1F, transparent 70%), linear-gradient(180deg, #0B1220, #06080C)`,
-          border: `1px solid ${L.line}`, textAlign: "center", padding: "80px 24px 0" }}>
-          <Snow count={36} />
-          <div style={{ position: "relative", zIndex: 2, maxWidth: 720, margin: "0 auto" }}>
-            <Mono style={{ color: L.amber }}>Duluth, MN</Mono>
-            <h2 style={{ font: `900 clamp(52px,9vw,112px)/.86 ${DISPLAY}`, textTransform: "uppercase", margin: "14px 0 18px" }}>
-              Snow's coming.<br /><span style={{ color: L.amber }}>Beat the rush.</span></h2>
-            <p style={{ color: L.mist, font: `400 18px/1.55 ${BODY}`, margin: "0 auto 32px", maxWidth: 480 }}>
-              Set up your property in two minutes. It's free until you book your first plow.</p>
-            <Btn big onClick={onStart}>Get started <span aria-hidden>→</span></Btn>
+      <section style={{ padding: "8px 22px 96px" }}>
+        <div className="lp-cta rv" style={{ position: "relative", overflow: "hidden", maxWidth: 1120, margin: "0 auto", borderRadius: 28,
+          background: `radial-gradient(80% 120% at 100% 0%, ${L.amber}1A, transparent 60%), linear-gradient(180deg, #0D1522, #090C12)`,
+          border: `1px solid ${L.line}`, padding: "64px 56px", boxSizing: "border-box", display: "grid", gridTemplateColumns: "1.3fr .7fr", gap: 40, alignItems: "end" }}>
+          <div>
+            <Kicker>Before the next storm</Kicker>
+            <h2 style={{ ...H2, fontSize: "clamp(36px,5vw,60px)" }}>Snow's coming.<br /><span style={{ color: L.amber }}>Beat the rush.</span></h2>
+            <p style={{ color: L.mist, font: `400 18px/1.55 ${BODY}`, margin: "18px 0 0", maxWidth: 480 }}>
+              Map your driveway in two minutes. It's free until you book your first plow.</p>
           </div>
-          <div style={{ position: "relative", zIndex: 1, marginTop: 56 }}><LiftBridge /></div>
-          <div aria-hidden style={{ height: 34, background: "#0B1728", borderTop: `1px solid ${L.steel}55`, margin: "0 -24px" }} />
+          <div className="lp-ctas" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <Btn big onClick={onStart}>Map my driveway <span aria-hidden>→</span></Btn>
+            <Btn big ghost onClick={goDrive}>I have a plow</Btn>
+          </div>
         </div>
       </section>
 

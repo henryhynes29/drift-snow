@@ -35,9 +35,10 @@ const CSS = `
 --ice:#EEF3F8;--mist:#9BA7B7;--dim:#8693A6;--amber:#FFB020;--amberHot:#FFD166;--onAmber:#1A1204;--steel:#7FA7D6;--good:#3DDC84;
 --fd:"Big Shoulders Display",Impact,"Arial Narrow Bold","Arial Narrow",sans-serif;--fb:"Instrument Sans",-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif;--fm:"IBM Plex Mono",ui-monospace,Menlo,monospace}
 *{box-sizing:border-box}html{scroll-behavior:smooth}
+@view-transition{navigation:auto}
 body{margin:0;background:var(--bg);color:var(--ice);font-family:var(--fb);-webkit-font-smoothing:antialiased;line-height:1.55}
 a{color:inherit}.wrap{max-width:1040px;margin:0 auto;padding:0 20px}
-.mono{font-family:var(--fm);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--mist)}
+.mono{font-family:var(--fb);font-weight:600;font-size:14px;letter-spacing:-.005em;color:var(--amber)}
 nav{position:sticky;top:0;z-index:10;background:rgba(6,8,12,.82);backdrop-filter:saturate(160%) blur(18px);-webkit-backdrop-filter:saturate(160%) blur(18px);border-bottom:1px solid var(--line)}
 nav .wrap{display:flex;align-items:center;justify-content:space-between;height:60px;gap:16px}
 .logo{display:flex;align-items:center;gap:10px;font-family:var(--fd);font-weight:900;font-size:24px;letter-spacing:.05em;text-decoration:none}
@@ -58,7 +59,7 @@ h1 em,h2 em{font-style:normal;color:var(--amber)}
 .ctas{display:flex;gap:10px;flex-wrap:wrap}
 .ticks{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:22px;color:var(--ice);font-size:14.5px}.ticks span{display:inline-flex;align-items:center;gap:7px}.ticks svg{color:var(--good)}
 section{padding:52px 0}
-h2{font-family:var(--fd);font-weight:900;text-transform:uppercase;font-size:clamp(34px,5.4vw,54px);line-height:.95;margin:10px 0 14px}
+h2{font-weight:600;font-size:clamp(30px,4.2vw,46px);line-height:1.06;letter-spacing:-.035em;margin:10px 0 14px}
 h3{font-size:18px;margin:0 0 6px}
 .sub{color:var(--mist);font-size:17px;max-width:640px;margin:0 0 26px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:22px}
@@ -87,7 +88,7 @@ a.chip:hover{border-color:var(--amber)}
 .svcs{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .svc{display:block;background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:18px;text-decoration:none;transition:border-color .2s,transform .2s}
 .svc:hover{border-color:rgba(255,176,32,.5);transform:translateY(-3px)}
-.svc .t{font-family:var(--fd);font-weight:800;font-size:24px;text-transform:uppercase;line-height:1}
+.svc .t{font-weight:600;font-size:20px;letter-spacing:-.015em;line-height:1.25}
 .svc .d{font-size:14px;color:var(--mist);margin-top:8px}.svc .p{font-size:13.5px;color:var(--amber);font-weight:600;margin-top:10px}
 details{border-bottom:1px solid var(--lineHard)}details:first-of-type{border-top:1px solid var(--lineHard)}
 summary{cursor:pointer;list-style:none;padding:20px 40px 20px 0;font-weight:600;font-size:18px;position:relative}
@@ -103,7 +104,7 @@ footer .fh{font-family:var(--fm);font-size:11.5px;letter-spacing:.1em;text-trans
 footer a{display:block;color:var(--mist);text-decoration:none;margin:6px 0}footer a:hover{color:var(--ice)}
 .sources{font-size:13px;color:var(--dim)}.sources a{color:var(--mist)}
 .updated{font-size:13px;color:var(--dim);margin-top:14px}
-.article .prose h2{font-size:clamp(28px,4vw,40px);margin:38px 0 12px;scroll-margin-top:80px}.article .prose h2:first-child{margin-top:0}
+.article .prose h2{font-size:clamp(26px,3.4vw,34px);margin:38px 0 12px;scroll-margin-top:80px}.article .prose h2:first-child{margin-top:0}
 .article .prose h3{font-size:19px;margin:22px 0 8px}.article .prose p,.article .prose li{font-size:17px;line-height:1.65}
 .article .prose table{width:100%;border-collapse:collapse;margin:8px 0 20px;font-size:15px}.article .prose th,.article .prose td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);color:#C9D3DE}.article .prose th{color:var(--ice);font-weight:600}
 .callout{border-left:3px solid var(--amber);background:var(--panel);border-radius:0 14px 14px 0;padding:14px 18px;margin:18px 0}.callout p{margin:0!important}
@@ -117,7 +118,7 @@ const DRIVE = "/drive.html";
 const by = (all, kind) => all.filter((p) => p.kind === kind);
 const toc = (html) => [...html.matchAll(/<h2 id="([^"]+)">([^<]+)<\/h2>/g)].map((m) => [m[1], m[2]]);
 const words = (html) => html.replace(/<[^>]+>/g, " ").split(/\s+/).filter(Boolean).length;
-const card = (p) => `<a class="svc" href="/${p.slug}/"><div class="mono" style="color:var(--amber);font-size:11px">${esc(p.cat || (p.kind === "guide" ? "Local rules" : p.kind === "faq" ? "FAQ" : "Guide"))}</div><div class="t" style="font-size:24px;margin-top:10px">${esc(p.short)}</div><div class="d">${esc(p.cardText || p.description)}</div></a>`;
+const card = (p) => `<a class="svc" href="/${p.slug}/"><div class="mono" style="color:var(--amber);font-size:11px">${esc(p.cat || (p.kind === "guide" ? "Local rules" : p.kind === "faq" ? "FAQ" : "Guide"))}</div><div class="t" style="margin-top:10px">${esc(p.short)}</div><div class="d">${esc(p.cardText || p.description)}</div></a>`;
 
 function jsonLd(page, crumbs, all) {
   const ld = [{
@@ -391,7 +392,7 @@ for (const page of PAGES) {
   ];
   const grid = `<section><div class="wrap"><div class="svcs">${picks.map(([slug, k, t]) => {
     const pg = PAGES.find((x) => x.slug === slug);
-    return `<a class="svc" href="/${slug}/"><div class="mono" style="color:var(--amber);font-size:11px">${k}</div><div class="t" style="font-size:24px;margin-top:10px">${t}</div><div class="d">${esc(pg?.cardText || pg?.description || "")}</div></a>`;
+    return `<a class="svc" href="/${slug}/"><div class="mono" style="color:var(--amber);font-size:11px">${k}</div><div class="t" style="margin-top:10px">${t}</div><div class="d">${esc(pg?.cardText || pg?.description || "")}</div></a>`;
   }).join("")}</div></div></section>`;
   const html = [head(nf, []), hero(nf, [["Home", "/"], ["Page not found", null]]), grid, footer(PAGES)].join("\n\n")
     .replace(/<link rel="canonical"[^>]*>\n/, "")
