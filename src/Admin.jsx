@@ -94,6 +94,41 @@ function SnowAlerts() {
   );
 }
 
+// ---------- problems drivers/customers reported on jobs (hidden when there are none) ----------
+const ISSUE_LABEL = { blocked: "Something in the way", no_access: "Can't get to the property", damage: "Damage", unsafe: "Unsafe conditions", other: "Other problem" };
+function Issues() {
+  const [rows, setRows] = useState(null);
+  const load = () => api("issues").then((d) => setRows(d.issues)).catch(() => setRows([]));
+  useEffect(() => { load(); }, []);
+  if (!rows || !rows.length) return null;
+  const resolve = async (id) => { await api("resolve-issue", { id }); load(); };
+  return (
+    <section>
+      <h2 style={{ font: `700 20px ${FD}`, margin: "0 0 12px", color: C.amber }}>Needs a look · {rows.length}</h2>
+      <div style={{ display: "grid", gap: 10 }}>
+        {rows.map((r) => (
+          <div key={r.id} style={{ ...card(), borderColor: r.kind === "damage" || r.kind === "unsafe" ? C.danger + "88" : C.amber + "66", display: "flex", gap: 14, alignItems: "flex-start", flexWrap: "wrap" }}>
+            <div style={{ flex: "1 1 260px", minWidth: 0 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ font: `600 15px ${FB}`, color: C.ice }}>{ISSUE_LABEL[r.kind] || r.kind}</span>
+                {r.released && <Chip tone="warn">Job given back</Chip>}
+                <span style={{ font: `400 13px ${FB}`, color: C.mistDim }}>{date(r.created_at)}</span>
+              </div>
+              {r.note && <div style={{ font: `400 14px/1.45 ${FB}`, color: C.ice, marginTop: 6 }}>“{r.note}”</div>}
+              <div style={{ font: `400 13px/1.5 ${FB}`, color: C.mist, marginTop: 6 }}>
+                {r.address || "No address"} · reported by {r.byDriver ? "driver" : "customer"} {r.reporter?.name || ""}<br />
+                Customer: {r.customer?.name || "—"}{r.customer?.phone ? ` · ${r.customer.phone}` : ""}
+                {r.driver ? <> · Driver: {r.driver.name}{r.driver.phone ? ` · ${r.driver.phone}` : ""}</> : null}
+              </div>
+            </div>
+            <button onClick={() => resolve(r.id)} style={{ ...btn(), alignSelf: "center" }}>Mark handled</button>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function Overview() {
   const [d, setD] = useState(null);
   const [range, setRange] = useState("last30");
@@ -105,6 +140,7 @@ function Overview() {
   const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(190px,1fr))", gap: 12 };
   return (
     <div style={{ display: "grid", gap: 22 }}>
+      <Issues />
       <section>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
           <h2 style={{ font: `700 20px ${FD}`, margin: 0, color: C.ice }}>Money</h2>
@@ -142,7 +178,7 @@ function Overview() {
           <Tile label="Completed" value={d.jobs.completed} tone="good" />
           <Tile label="Cancelled / expired" value={d.jobs.cancelled} />
           <Tile label="Owed to drivers" value={money(d.jobs.owedToDrivers)} sub="Waiting on driver payout setup" tone="amber" />
-          <Tile label="Problems" value={d.jobs.failedPayments + d.jobs.disputes} sub={`${d.jobs.failedPayments} failed charges · ${d.jobs.disputes} disputes`} />
+          <Tile label="Problems" value={d.jobs.failedPayments + d.jobs.disputes + (d.jobs.openIssues || 0)} sub={`${d.jobs.openIssues || 0} reported on jobs · ${d.jobs.failedPayments} failed charges · ${d.jobs.disputes} disputes`} tone={d.jobs.openIssues ? "amber" : undefined} />
         </div>
       </section>
       <SnowAlerts />
@@ -334,6 +370,8 @@ function Drivers() {
         ["Registration", (r) => <Chip tone={docTone(r.registration)}>{r.registration}</Chip>],
         ["Payouts", (r) => <Chip tone={r.payouts_ready ? "good" : "warn"}>{r.payouts_ready ? "set up" : "not set up"}</Chip>],
         ["Jobs", (r) => r.jobsDone],
+        ["Level", (r) => <Chip tone={r.level === "elite" ? "warn" : r.level === "pro" ? "info" : undefined}>{r.level || "rookie"}</Chip>],
+        ["Zone", (r) => r.home_radius_mi ? `${r.home_radius_mi} mi` : "any"],
         ["Late cancels", (r) => r.late_cancels ? <Chip tone={r.late_cancels >= 3 ? "bad" : "warn"}>{r.late_cancels}</Chip> : "0"],
         ["Earned", (r) => money(r.earned)],
         ["Status", (r) => r.suspended ? <Chip tone="bad">suspended</Chip> : r.is_online ? <Chip tone="good">online</Chip> : <Chip>offline</Chip>],

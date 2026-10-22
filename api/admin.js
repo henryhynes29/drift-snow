@@ -4,7 +4,7 @@
 // (comma-separated). Everyone else gets 403, even if signed in.
 // Uses the service-role key, so it can read across all accounts — which is
 // exactly why every action checks the owner list first.
-import { admin, stripe, HttpError, requireUser, readJson, send, driverPayoutsReady, getProfile } from "./_lib.js";
+import { admin, stripe, HttpError, requireUser, readJson, send, driverPayoutsReady, getProfile, driverLevel } from "./_lib.js";
 import { forecastSnow, sendSnowAlert } from "./_weather.js";
 
 const OWNERS = (process.env.OWNER_EMAILS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
@@ -46,9 +46,10 @@ async function signed(bucket, path) {
 const ACTIONS = {
   // ---------- headline numbers ----------
   async summary() {
-    const [profiles, jobs] = await Promise.all([
+    const [profiles, jobs, openIssues] = await Promise.all([
       all("profiles", "id, role, is_driver, is_online, suspended, payouts_ready, created_at"),
       all("jobs", "id, status, payment_status, payout_status, price, driver_pay, platform_fee, tip, created_at, completed_at"),
+      all("job_issues", "id", (q) => q.eq("status", "open")).catch(() => []),
     ]);
     const now = Date.now(), day = 864e5;
     const since = (j, days) => new Date(j.created_at).getTime() > now - days * day;
@@ -93,6 +94,7 @@ const ACTIONS = {
         cancelled: jobs.filter((j) => ["cancelled", "expired"].includes(j.status)).length,
         failedPayments: jobs.filter((j) => j.payment_status === "failed").length,
         disputes: jobs.filter((j) => j.payment_status === "disputed").length,
+        openIssues: openIssues.length,
         owedToDrivers: round2(jobs.filter((j) => j.payout_status === "owed").reduce((s, j) => s + num(j.driver_pay), 0)),
       },
       money: {
@@ -160,10 +162,29 @@ const ACTIONS = {
     };
   },
 
+  // ---------- problems reported on jobs ----------
+  async issues({ all: everything } = {}) {
+    let rows = await all("job_issues", "id, job_id, reporter_id, kind, note, released, status, created_at, resolved_at",
+      (q) => (everything ? q : q.eq("status", "open")).order("created_at", { ascending: false }).limit(100));
+    if (!rows.length) return { issues: [] };
+    const jobs = await all("jobs", "id, address, status, customer_id, driver_id", (q) => q.in("id", [...new Set(rows.map((r) => r.job_id))]));
+    const ids = [...new Set([...rows.map((r) => r.reporter_id), ...jobs.flatMap((j) => [j.customer_id, j.driver_id])].filter(Boolean))];
+    const people = await all("profiles", "id, name, email, phone", (q) => q.in("id", ids));
+    const who = (id) => { const p = people.find((x) => x.id === id); return p ? { name: p.name || p.email, phone: p.phone || null } : null; };
+    return { issues: rows.map((r) => { const j = jobs.find((x) => x.id === r.job_id) || {};
+      return { ...r, address: j.address || null, jobStatus: j.status || null, reporter: who(r.reporter_id),
+        byDriver: r.reporter_id && r.reporter_id === j.driver_id || r.released, customer: who(j.customer_id), driver: who(j.driver_id) }; }) };
+  },
+  async "resolve-issue"({ id }) {
+    const { error } = await admin.from("job_issues").update({ status: "resolved", resolved_at: new Date().toISOString() }).eq("id", id);
+    if (error) throw new HttpError(500, error.message);
+    return { ok: true };
+  },
+
   // ---------- drivers ----------
   async drivers() {
     const [drivers, jobs, docs] = await Promise.all([
-      all("profiles", "id, name, email, phone, truck, tools, rating, ratings_count, jobs_count, late_cancels, is_online, suspended, payouts_ready, stripe_account_id, ref_source, created_at", (q) => q.eq("is_driver", true).order("created_at", { ascending: false })),
+      all("profiles", "id, name, email, phone, truck, tools, rating, ratings_count, jobs_count, late_cancels, is_online, suspended, payouts_ready, stripe_account_id, ref_source, home_radius_mi, created_at", (q) => q.eq("is_driver", true).order("created_at", { ascending: false })),
       all("jobs", "driver_id, status, driver_pay, tip, payment_status", (q) => q.not("driver_id", "is", null)),
       all("driver_documents", "user_id, kind, status, uploaded_at", (q) => q.order("uploaded_at", { ascending: false })),
     ]);
@@ -173,6 +194,7 @@ const ACTIONS = {
         const latest = (kind) => docs.find((x) => x.user_id === d.id && x.kind === kind);
         return {
           ...d,
+          level: driverLevel(d),
           jobsDone: mine.filter((j) => j.status === "completed").length,
           earned: round2(mine.filter((j) => j.payment_status === "captured").reduce((s, j) => s + num(j.driver_pay) + num(j.tip), 0)),
           license: latest("license")?.status || "missing",

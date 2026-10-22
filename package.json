@@ -6,7 +6,7 @@
   "description": "DRIFT — two-sided on-demand snowplow marketplace (prototype)",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/prerender.mjs && node scripts/indexnow.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

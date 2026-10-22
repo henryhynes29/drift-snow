@@ -114,6 +114,58 @@ export async function payDriverForJob(job, accountId) {
 
 export const OFFER_MINUTES = 20;      // how long an offer stays open for drivers
 export const FIRST_DIBS_MINUTES = 2;  // favorite drivers see it alone for this long
+export const ELITE_DIBS_MINUTES = 1;  // no favorites online? Elite drivers nearby get a 1-minute head start
+
+// ---------- driver levels (same rules as src/lib/levels.js) ----------
+//   Rookie -> Pro: 5 jobs, 4.5★+     Pro -> Elite: 20 jobs, 4.8★+, at most 1 late cancel
+export function driverLevel(p) {
+  const jobs = Number(p?.jobs_count || 0), rating = Number(p?.rating || 0), rated = Number(p?.ratings_count || 0);
+  const late = Number(p?.late_cancels || 0);
+  const ratingOk = (min) => rated === 0 || rating >= min;
+  if (jobs >= 20 && rated >= 5 && rating >= 4.8 && late <= 1) return "elite";
+  if (jobs >= 5 && ratingOk(4.5)) return "pro";
+  return "rookie";
+}
+
+// ---------- home zone: only alert drivers whose zone covers the job ----------
+export function milesBetween(a, b) {
+  if (!a || !b || a.lat == null || b.lat == null || a.lng == null || b.lng == null) return null;
+  const R = 3958.8, rad = (d) => (d * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+export function inZone(driver, job) {
+  if (!driver?.home_radius_mi || driver.home_lat == null || job?.lat == null) return true; // no zone set, or job has no pin
+  const d = milesBetween({ lat: driver.home_lat, lng: driver.home_lng }, { lat: job.lat, lng: job.lng });
+  return d == null || d <= driver.home_radius_mi;
+}
+const ZONE_COLS = "id, home_lat, home_lng, home_radius_mi";
+// Drivers to alert about a job: active (and online, unless anyOnline=false), not the customer, zone covers it.
+async function driversFor(job, { online = true } = {}) {
+  let q = admin.from("profiles").select(ZONE_COLS + ", jobs_count, rating, ratings_count, late_cancels")
+    .eq("is_driver", true).eq("suspended", false);
+  if (online) q = q.eq("is_online", true);
+  if (job.customer_id) q = q.neq("id", job.customer_id);
+  const { data } = await q;
+  return (data || []).filter((d) => inZone(d, job));
+}
+
+// Online Elite drivers whose zone covers this job.
+export async function onlineElites(job) {
+  try {
+    if (!admin) return [];
+    return (await driversFor(job)).filter((d) => driverLevel(d) === "elite").map((d) => d.id);
+  } catch { return []; }
+}
+
+// Owner accounts (OWNER_EMAILS) — for "a driver reported a problem" alerts.
+export async function ownerIds() {
+  const emails = (process.env.OWNER_EMAILS || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+  if (!admin || !emails.length) return [];
+  const { data } = await admin.from("profiles").select("id, email");
+  return (data || []).filter((p) => emails.includes((p.email || "").toLowerCase())).map((p) => p.id);
+}
 
 // Card is held -> record it, give drivers a fresh 20 minutes to accept, and if
 // the customer has favorite drivers online, give them first dibs.
@@ -126,13 +178,17 @@ export async function markAuthorized(job, pi) {
     await announceScheduled(updated);
     return { authorized: true, job: updated };
   }
+  // First dibs: the customer's favorite drivers (2 min). If none are online, Elite drivers nearby (1 min).
   const favs = await onlineFavorites(job.customer_id);
+  const elites = favs.length ? [] : await onlineElites(job);
+  const dibs = favs.length ? favs : elites;
+  const dibsMin = favs.length ? FIRST_DIBS_MINUTES : ELITE_DIBS_MINUTES;
   const updated = await updateJob(job.id, {
     payment_status: "authorized",
     payment_method_id: pm,
     expires_at: new Date(Date.now() + OFFER_MINUTES * 60 * 1000).toISOString(),
-    ...(favs.length ? { preferred_driver_ids: favs,
-      exclusive_until: new Date(Date.now() + FIRST_DIBS_MINUTES * 60 * 1000).toISOString() } : {}),
+    ...(dibs.length ? { preferred_driver_ids: dibs,
+      exclusive_until: new Date(Date.now() + dibsMin * 60 * 1000).toISOString() } : {}),
   });
   await announceJob(updated); // the offer is now visible — ring the drivers
   return { authorized: true, job: updated };
@@ -201,8 +257,15 @@ export async function announceJob(job) {
       const { data: claimed } = await admin.from("jobs").update({ announced_at: new Date().toISOString() })
         .eq("id", job.id).is("announced_at", null).select("id");
       if (!claimed?.length) return 0;
-      return await pushTo(favs, { title: `Your regular customer needs you · $${pay}`,
+      const { data: favRows } = await admin.from("favorite_drivers").select("driver_id").eq("customer_id", job.customer_id);
+      const isFav = new Set((favRows || []).map((f) => f.driver_id));
+      const regulars = favs.filter((id) => isFav.has(id)), elites = favs.filter((id) => !isFav.has(id));
+      let n = 0;
+      if (regulars.length) n += await pushTo(regulars, { title: `Your regular customer needs you · $${pay}`,
         body: `${kind}${where} — you get first dibs for ${FIRST_DIBS_MINUTES} minutes`, tag: `job-${job.id}`, url: `/?offer=${job.id}` });
+      if (elites.length) n += await pushTo(elites, { title: `Elite first look · $${pay}`,
+        body: `${kind}${where} — yours for the next minute before other drivers see it`, tag: `job-${job.id}`, url: `/?offer=${job.id}` });
+      return n;
     }
 
     if (job.announced_all_at) return 0;
@@ -210,9 +273,8 @@ export async function announceJob(job) {
       ...(job.announced_at ? {} : { announced_at: new Date().toISOString() }) })
       .eq("id", job.id).is("announced_all_at", null).select("id");
     if (!claimed?.length) return 0; // someone else already announced it
-    const { data: drivers } = await admin.from("profiles").select("id")
-      .eq("is_driver", true).eq("is_online", true).eq("suspended", false).neq("id", job.customer_id);
-    const ids = (drivers || []).map((d) => d.id).filter((id) => !favs.includes(id)); // favorites already heard
+    const drivers = await driversFor(job); // online, and their home zone covers this job
+    const ids = drivers.map((d) => d.id).filter((id) => !favs.includes(id)); // first-dibs drivers already heard
     return await pushTo(ids, { title: `New plow request · $${pay}`,
       body: `${kind}${where} — open DRIFT to accept`, tag: `job-${job.id}`, url: `/?offer=${job.id}` });
   } catch (e) {
@@ -248,9 +310,8 @@ export async function announceScheduled(job) {
       .eq("status", "scheduled").is("driver_id", null).gt("window_end", new Date().toISOString())
       .in("payment_status", ["authorized", "not_required"]);
     const n = (open || []).length;
-    const { data: drivers } = await admin.from("profiles").select("id")
-      .eq("is_driver", true).eq("suspended", false).neq("id", job.customer_id);
-    return await pushTo((drivers || []).map((d) => d.id), {
+    const drivers = await driversFor(job, { online: false });
+    return await pushTo(drivers.map((d) => d.id), {
       title: `New scheduled plow · $${Math.round(Number(job.driver_pay || 0))} · ${fmtWindow(job.scheduled_for, job.window_end)}`,
       body: n > 1 ? `${n} scheduled jobs open — add them to your route before the storm.` : `${job.address || "Nearby"} — add it to your route.`,
       tag: "sched-board", url: "/?route=1", sticky: false }, { ttl: 6 * 3600, urgency: "normal" });
@@ -262,9 +323,8 @@ export async function announceScheduled(job) {
 export async function announceOpenScheduled(job, why = "") {
   try {
     if (!admin || !job) return 0;
-    const { data: drivers } = await admin.from("profiles").select("id")
-      .eq("is_driver", true).eq("is_online", true).eq("suspended", false).neq("id", job.customer_id);
-    const ids = (drivers || []).map((d) => d.id).filter((id) => id !== job.driver_id);
+    const drivers = await driversFor(job);
+    const ids = drivers.map((d) => d.id).filter((id) => id !== job.driver_id);
     return await pushTo(ids, {
       title: `Open now · $${Math.round(Number(job.driver_pay || 0))} · ${fmtWindow(job.scheduled_for, job.window_end)}`,
       body: `${JOB_KIND[job.job_type] || "Snow job"}${job.address ? " · " + job.address : ""}${why ? " — " + why : ""}`,

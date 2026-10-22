@@ -4,78 +4,134 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Drive with DRIFT — Plow driveways in Duluth on your own schedule</title>
-<meta name="description" content="Have a plow? Customers around Duluth and Superior name a price for their driveway. You see the offer, the property map and your pay before you accept. 80% of the offer plus a $10 call-out on every job, and all your tips." />
+<meta name="description" content="Have a plow? Pick up paid driveway jobs around Duluth and Superior. See open jobs and pay before you sign up. 80% of the offer + $10 call-out + all tips." />
 <link rel="canonical" href="https://driftplowing.com/drive.html" />
-<meta name="theme-color" content="#0B0B0C" />
+<meta name="theme-color" content="#06080C" />
+<meta property="og:title" content="Drive with DRIFT — your plow, your schedule" />
+<meta property="og:description" content="Plow driveways around Duluth when it snows. Pick your jobs, keep 80% plus a $10 call-out, all tips." />
+<link rel="preload" href="/fonts/big-shoulders-display-latin-900-normal.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="preload" href="/fonts/instrument-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+<link rel="stylesheet" href="/fonts/fonts.css" />
 <style>
   :root{
-    --bg:#0B0B0C; --bg2:#131315; --card:#1A1A1D; --line:#2A2A30;
-    --text:#F5F5F7; --mist:#A1A1AA; --dim:#6E6E77;
-    --amber:#FFB020; --onAmber:#1A1204; --green:#32D74B;
-    --glass:rgba(11,11,12,.82);
-    --f:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display",system-ui,"Segoe UI",Roboto,sans-serif;
-  }
-  @media (prefers-color-scheme: light){
-    :root{ --bg:#F2F2F7; --bg2:#F8F8FA; --card:#FFFFFF; --line:#E2E2E7;
-      --text:#111114; --mist:#5C5C66; --dim:#8A8A93; --amber:#C47A00; --onAmber:#FFFFFF; --green:#248A3D;
-      --glass:rgba(242,242,247,.85); }
+    --bg:#06080C; --bg2:#0B0F16; --panel:#10151E; --panel2:#151B26;
+    --line:rgba(170,195,230,.13); --lineHard:rgba(170,195,230,.22);
+    --ice:#EEF3F8; --mist:#9BA7B7; --dim:#6E7B8E;
+    --amber:#FFB020; --amberHot:#FFD166; --onAmber:#1A1204; --steel:#7FA7D6; --good:#3DDC84;
+    --fd:"Big Shoulders Display",Impact,"Arial Narrow",sans-serif;
+    --fb:"Instrument Sans",-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",sans-serif;
+    --fm:"IBM Plex Mono",ui-monospace,Menlo,monospace;
   }
   *{box-sizing:border-box}
   html{scroll-behavior:smooth}
-  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--f);-webkit-font-smoothing:antialiased;line-height:1.5}
+  body{margin:0;background:var(--bg);color:var(--ice);font-family:var(--fb);-webkit-font-smoothing:antialiased;line-height:1.5}
   a{color:inherit;text-decoration:none}
-  .wrap{max-width:1000px;margin:0 auto;padding:0 20px}
-  nav{position:sticky;top:0;z-index:10;background:var(--glass);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);border-bottom:1px solid var(--line)}
-  nav .wrap{display:flex;align-items:center;justify-content:space-between;height:58px}
-  .logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:18px;letter-spacing:.04em}
-  .mark{width:30px;height:30px;border-radius:8px;background:var(--amber);color:var(--onAmber);display:grid;place-items:center}
-  .signin{font-weight:600;font-size:14px;color:var(--mist);padding:8px 4px}
-  .btn{display:inline-flex;align-items:center;justify-content:center;min-height:54px;padding:0 28px;border-radius:14px;
-    background:var(--amber);color:var(--onAmber);font-weight:700;font-size:17px;letter-spacing:-.01em;border:none;cursor:pointer}
-  .btn:active{transform:scale(.98)}
-  .ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
-  .hero{padding:64px 0 40px}
-  .eyebrow{font-weight:600;font-size:14px;color:var(--amber)}
-  h1{font-size:clamp(38px,7.4vw,64px);line-height:1.04;letter-spacing:-.03em;margin:12px 0 16px;font-weight:700;max-width:760px}
-  .sub{font-size:clamp(17px,2.2vw,20px);color:var(--mist);max-width:600px;margin:0 0 28px}
+  .wrap{max-width:1040px;margin:0 auto;padding:0 20px}
+  .mono{font-family:var(--fm);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--mist)}
+  nav{position:sticky;top:0;z-index:10;background:rgba(6,8,12,.8);backdrop-filter:saturate(160%) blur(18px);-webkit-backdrop-filter:saturate(160%) blur(18px);border-bottom:1px solid var(--line)}
+  nav .wrap{display:flex;align-items:center;justify-content:space-between;height:60px}
+  .logo{display:flex;align-items:center;gap:10px;font-family:var(--fd);font-weight:900;font-size:24px;letter-spacing:.04em}
+  .mark{width:32px;height:32px;border-radius:9px;background:var(--amber);color:var(--onAmber);display:grid;place-items:center}
+  .signin{font-weight:600;font-size:15px;color:var(--mist);padding:10px 4px}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:58px;padding:0 30px;border-radius:999px;
+    background:var(--amber);color:var(--onAmber);font-weight:700;font-size:17px;letter-spacing:-.01em;border:none;cursor:pointer;transition:transform .15s}
+  .btn:active{transform:scale(.97)}
+  .ghost{background:transparent;color:var(--ice);border:1px solid var(--lineHard)}
+  /* hero */
+  .hero{position:relative;overflow:hidden;padding:72px 0 44px;
+    background:radial-gradient(60% 70% at 85% 10%,rgba(255,176,32,.16),transparent 60%),radial-gradient(90% 80% at 0% 100%,#0E1A2B,transparent 70%),var(--bg)}
+  .snow{position:absolute;inset:0;pointer-events:none;opacity:.35;
+    background:radial-gradient(circle at 30% 40%,rgba(255,255,255,.95) 1.1px,transparent 1.7px) 0 0/29px 31px,
+      radial-gradient(circle at 70% 70%,rgba(255,255,255,.7) .8px,transparent 1.3px) 11px 7px/43px 37px;
+    -webkit-mask-image:linear-gradient(180deg,#000,transparent 85%);mask-image:linear-gradient(180deg,#000,transparent 85%);animation:fall 14s linear infinite}
+  @keyframes fall{to{background-position:0 186px,11px 192px}}
+  @media (prefers-reduced-motion:reduce){.snow{animation:none}}
+  h1{font-family:var(--fd);font-weight:900;text-transform:uppercase;font-size:clamp(52px,10vw,104px);line-height:.9;letter-spacing:.005em;margin:14px 0 18px;max-width:820px}
+  h1 em{font-style:normal;color:var(--amber)}
+  .sub{font-size:clamp(17px,2.2vw,20px);color:var(--mist);max-width:600px;margin:0 0 26px}
   .ctas{display:flex;gap:10px;flex-wrap:wrap}
-  section{padding:48px 0}
-  h2{font-size:clamp(26px,4vw,36px);letter-spacing:-.02em;line-height:1.1;margin:0 0 10px;font-weight:700}
-  .lead{color:var(--mist);font-size:17px;max-width:560px;margin:0 0 28px}
-  .pay{display:grid;grid-template-columns:1.1fr 1fr;gap:16px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:24px}
-  .ex .row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line);font-size:16px}
+  .live{display:grid;grid-template-columns:repeat(3,1fr);max-width:620px;margin-top:34px;border:1px solid var(--line);border-radius:18px;background:rgba(16,21,30,.7);backdrop-filter:blur(8px)}
+  .live div{padding:16px 14px;text-align:center}
+  .live div+div{border-left:1px solid var(--line)}
+  .live b{display:block;font-family:var(--fd);font-weight:900;font-size:40px;line-height:1}
+  .live span{display:block;font-size:13px;color:var(--mist);margin-top:6px}
+  .live .hot b{color:var(--good)}
+  .livecap{display:flex;align-items:center;gap:8px;margin-top:10px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--good);box-shadow:0 0 0 0 rgba(61,220,132,.6);animation:pulse 1.8s infinite}
+  @keyframes pulse{70%{box-shadow:0 0 0 8px rgba(61,220,132,0)}100%{box-shadow:0 0 0 0 rgba(61,220,132,0)}}
+  section{padding:56px 0}
+  h2{font-family:var(--fd);font-weight:900;text-transform:uppercase;font-size:clamp(36px,6vw,56px);line-height:.95;letter-spacing:.005em;margin:10px 0 12px}
+  .lead{color:var(--mist);font-size:17px;max-width:580px;margin:0 0 28px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:22px;padding:24px}
+  /* calculator */
+  .calc{display:grid;grid-template-columns:1.1fr 1fr;gap:16px;align-items:stretch}
+  .field{margin-bottom:22px}
+  .field:last-child{margin-bottom:0}
+  .field label{display:flex;justify-content:space-between;align-items:baseline;font-weight:600;font-size:16px;margin-bottom:10px}
+  .field label output{font-family:var(--fd);font-weight:900;font-size:30px;color:var(--amber)}
+  .field small{display:block;color:var(--dim);font-size:13px;margin-top:6px}
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:8px;border-radius:8px;background:rgba(170,195,230,.18);outline:none}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:30px;height:30px;border-radius:50%;background:var(--amber);border:4px solid var(--bg);box-shadow:0 0 0 1px var(--amber);cursor:pointer}
+  input[type=range]::-moz-range-thumb{width:26px;height:26px;border-radius:50%;background:var(--amber);border:4px solid var(--bg);cursor:pointer}
+  input[type=range]:focus-visible{box-shadow:0 0 0 3px rgba(255,176,32,.35)}
+  .result{display:flex;flex-direction:column;justify-content:center;background:linear-gradient(160deg,rgba(255,176,32,.14),var(--panel) 55%);border-color:rgba(255,176,32,.35)}
+  .big{font-family:var(--fd);font-weight:900;font-size:clamp(72px,12vw,112px);line-height:.88;color:var(--ice)}
+  .result .per{font-size:16px;color:var(--mist);margin-top:8px}
+  .result .season{margin-top:22px;padding-top:18px;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  .result .season b{font-family:var(--fd);font-weight:900;font-size:40px;color:var(--good)}
+  .result .fine{font-size:12.5px;color:var(--dim);margin-top:14px}
+  /* pay split */
+  .pay{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .ex .row{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--line);font-size:16px}
   .ex .row span:first-child{color:var(--mist)}
   .ex .total{display:flex;justify-content:space-between;align-items:baseline;padding-top:14px}
-  .ex .total b{font-size:44px;letter-spacing:-.03em;color:var(--green)}
-  .ex .cap{font-size:13px;color:var(--dim);margin-top:6px}
-  .facts{display:grid;gap:12px}
-  .fact{display:flex;gap:14px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px}
+  .ex .total b{font-family:var(--fd);font-weight:900;font-size:56px;color:var(--good);line-height:1}
+  .ex .cap{font-size:13px;color:var(--dim);margin-top:8px}
+  .facts{display:grid;gap:10px}
+  .fact{display:flex;gap:14px;align-items:flex-start;background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:18px}
   .fact svg{flex-shrink:0;color:var(--amber);margin-top:2px}
   .fact h3{margin:0 0 3px;font-size:16px}
   .fact p{margin:0;color:var(--mist);font-size:14.5px}
-  .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;counter-reset:s}
-  .step{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:20px}
-  .step .n{width:30px;height:30px;border-radius:9px;background:var(--bg2);border:1px solid var(--line);display:grid;place-items:center;font-weight:700;font-size:14px;margin-bottom:12px}
+  /* perks */
+  .perks{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .perk{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:20px}
+  .perk .ic{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:rgba(255,176,32,.12);color:var(--amber);margin-bottom:14px}
+  .perk h3{margin:0 0 5px;font-size:17px}
+  .perk p{margin:0;color:var(--mist);font-size:14.5px}
+  /* fleet */
+  .fleet{display:grid;grid-template-columns:1.3fr 1fr;gap:16px;align-items:center;background:linear-gradient(120deg,#0E1A2B,var(--panel));border:1px solid var(--lineHard);border-radius:24px;padding:30px}
+  .fleet ul{margin:0;padding:0;list-style:none;display:grid;gap:10px}
+  .fleet li{display:flex;gap:10px;font-size:15px;color:var(--ice)}
+  .fleet li:before{content:"";flex-shrink:0;width:8px;height:8px;border-radius:2px;background:var(--steel);margin-top:8px}
+  /* steps */
+  .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .step{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:20px}
+  .step .n{font-family:var(--fd);font-weight:900;font-size:40px;line-height:1;color:var(--amber);margin-bottom:10px}
   .step h3{margin:0 0 4px;font-size:16px}
   .step p{margin:0;color:var(--mist);font-size:14px}
-  .know{background:var(--bg2);border:1px solid var(--line);border-radius:20px;padding:24px}
-  .know ul{margin:0;padding:0;list-style:none;display:grid;gap:12px}
+  .know{background:var(--bg2);border:1px solid var(--line);border-radius:22px;padding:26px}
+  .know ul{margin:0;padding:0;list-style:none;display:grid;gap:14px}
   .know li{display:flex;gap:10px;color:var(--mist);font-size:15px}
-  .know li b{color:var(--text);font-weight:600}
+  .know li b{color:var(--ice);font-weight:600}
+  .know li a{color:var(--amber);font-weight:600}
   .know li:before{content:"";flex-shrink:0;width:6px;height:6px;border-radius:50%;background:var(--dim);margin-top:9px}
-  .final{text-align:center;padding:56px 0 72px}
-  .final .lead{margin:0 auto 24px}
+  .final{text-align:center;padding:70px 0 84px;background:radial-gradient(50% 70% at 50% 100%,rgba(255,176,32,.14),transparent 70%)}
+  .final .lead{margin:0 auto 26px}
   footer{border-top:1px solid var(--line);padding:26px 0 calc(26px + env(safe-area-inset-bottom));color:var(--dim);font-size:13px}
   footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
   footer a{color:var(--mist)}
-  @media (max-width:760px){
-    .pay{grid-template-columns:1fr}
+  @media (max-width:820px){
+    .calc,.pay,.fleet{grid-template-columns:1fr}
+    .perks{grid-template-columns:1fr 1fr}
     .steps{grid-template-columns:1fr 1fr}
-    .hero{padding:44px 0 28px}
-    .btn{width:100%}
   }
-  @media (max-width:420px){ .steps{grid-template-columns:1fr} }
+  @media (max-width:560px){
+    .hero{padding:48px 0 32px}
+    .btn{width:100%}
+    .perks,.steps{grid-template-columns:1fr}
+    .live b{font-size:34px}
+    .fleet{padding:22px}
+  }
 </style>
 </head>
 <body>
@@ -83,22 +139,64 @@
   <a class="logo" href="/"><span class="mark">
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v20M4.9 6l14.2 12M4.9 18L19.1 6M9 3.5l3 2.5 3-2.5M9 20.5l3-2.5 3 2.5"/></svg>
   </span>DRIFT</a>
-  <a class="signin" href="/?drive=1">Sign in</a>
+  <a class="signin" data-app href="/?drive=1">Sign in</a>
 </div></nav>
 
-<header class="hero"><div class="wrap">
-  <div class="eyebrow">Drive with DRIFT · Duluth &amp; Superior</div>
-  <h1>Your plow. Your schedule. Your call.</h1>
-  <p class="sub">Customers name a price for their driveway. You see the offer, the property map and your pay before you accept. Take the jobs worth it to you and skip the rest.</p>
+<header class="hero"><div class="snow"></div><div class="wrap" style="position:relative">
+  <div class="mono">Drive with DRIFT · Duluth &amp; Superior</div>
+  <h1>Your plow.<br />Your schedule.<br /><em>Your call.</em></h1>
+  <p class="sub">Customers name a price for their driveway. You see the job, the property map and your pay before you tap Accept. Take the ones worth it and skip the rest.</p>
   <div class="ctas">
-    <a class="btn" href="/?drive=1">Start driving</a>
-    <a class="btn ghost" href="#pay">How pay works</a>
+    <a class="btn" data-app href="/?drive=1">See open jobs and pay</a>
+    <a class="btn ghost" href="#calc">What could I make?</a>
   </div>
+  <div class="live" id="live" hidden>
+    <div class="hot"><b id="m-open">—</b><span>open jobs right now</span></div>
+    <div><b id="m-pay">—</b><span>waiting to be earned</span></div>
+    <div><b>80%</b><span>+ $10 call-out per job</span></div>
+  </div>
+  <div class="livecap mono" id="livecap" hidden><span class="dot"></span>Live from the DRIFT app</div>
 </div></header>
 
+<section id="calc"><div class="wrap">
+  <div class="mono">Earnings calculator</div>
+  <h2>What one storm is worth</h2>
+  <p class="lead">Slide to match how you'd work. You see real offers before you accept, so this is just to get a feel for it.</p>
+  <div class="calc">
+    <div class="card">
+      <div class="field">
+        <label for="hours">Hours you'd plow in a storm <output id="o-hours">6</output></label>
+        <input type="range" id="hours" min="2" max="14" step="1" value="6" />
+      </div>
+      <div class="field">
+        <label for="rate">Driveways per hour <output id="o-rate">2</output></label>
+        <input type="range" id="rate" min="1" max="4" step="0.5" value="2" />
+        <small>Including the drive between them. Jobs close together go faster.</small>
+      </div>
+      <div class="field">
+        <label for="pay">Your average take-home per job <output id="o-pay">$45</output></label>
+        <input type="range" id="pay" min="30" max="80" step="1" value="45" />
+        <small>A typical Duluth driveway pays about $42–$50 after DRIFT's cut, before tips.</small>
+      </div>
+      <div class="field">
+        <label for="storms">Storms you'd work this winter <output id="o-storms">12</output></label>
+        <input type="range" id="storms" min="1" max="30" step="1" value="12" />
+      </div>
+    </div>
+    <div class="card result" aria-live="polite">
+      <div class="mono">One storm</div>
+      <div class="big" id="r-storm">$540</div>
+      <div class="per" id="r-jobs">12 driveways · about $90 an hour</div>
+      <div class="season"><span class="mono">This winter</span><b id="r-season">$6,480</b></div>
+      <div class="fine">An estimate, not a promise. Real pay depends on how many customers book and which jobs you take. Tips are extra. Fuel and costs are yours.</div>
+    </div>
+  </div>
+</div></section>
+
 <section id="pay"><div class="wrap">
-  <h2>How pay works</h2>
-  <p class="lead">No tiers to climb and no surprises. The same split on every job, shown before you tap Accept.</p>
+  <div class="mono">How pay works</div>
+  <h2>Same split, every job</h2>
+  <p class="lead">No tiers to climb and no surprises. You see your exact pay before you accept.</p>
   <div class="pay">
     <div class="card ex">
       <div class="row"><span>Customer offers</span><span>$40</span></div>
@@ -118,44 +216,115 @@
       </div>
       <div class="fact">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21.2l8.8-8.8a5.5 5.5 0 0 0 0-7.8z"/></svg>
-        <div><h3>All of your tips</h3><p>DRIFT never takes a cut of tips.</p></div>
+        <div><h3>All of your tips</h3><p>DRIFT never takes a cut of tips. Payouts go to your bank through Stripe.</p></div>
       </div>
     </div>
   </div>
 </div></section>
 
 <section><div class="wrap">
-  <h2>How it works</h2>
-  <p class="lead">Set up in a few minutes, then go online whenever it snows.</p>
+  <div class="mono">Built for plow guys</div>
+  <h2>The app does the busywork</h2>
+  <p class="lead">Everything you need on a storm night, and nothing you don't.</p>
+  <div class="perks">
+    <div class="perk"><div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1"/></svg></div>
+      <h3>Your home zone</h3><p>Set how far you'll drive. You only get pinged for jobs inside it.</p></div>
+    <div class="perk"><div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M4.9 6l14.2 12M4.9 18L19.1 6"/></svg></div>
+      <h3>Storm mode</h3><p>The night before a storm you see how many plows are booked and build your route.</p></div>
+    <div class="perk"><div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21.2l8.8-8.8a5.5 5.5 0 0 0 0-7.8z"/></svg></div>
+      <h3>Build regulars</h3><p>Customers can favorite you. Next storm, their job comes to you first.</p></div>
+    <div class="perk"><div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></svg></div>
+      <h3>Level up to Elite</h3><p>Great ratings and no flaking earn you a head start on new jobs.</p></div>
+    <div class="perk"><div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16M6 15l4-4 3 3 5-6"/></svg></div>
+      <h3>Miles logged for taxes</h3><p>Miles on each job are tracked for you. Download the year as a spreadsheet.</p></div>
+    <div class="perk"><div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg></div>
+      <h3>Problem? One tap</h3><p>Car in the driveway or can't get in? Report it, and give the job back with no penalty.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="fleet">
+    <div>
+      <div class="mono" style="color:var(--steel)">Run a plow company?</div>
+      <h2 style="margin-bottom:10px">Fill the gaps in your route</h2>
+      <p class="lead" style="margin:0">Your trucks are already out. Pick up paying driveways between your contract stops, on your terms.</p>
+    </div>
+    <ul>
+      <li>Each driver gets their own login and picks their own jobs</li>
+      <li>Get paid as your business: choose "My business" when you set up payouts</li>
+      <li>No contracts with DRIFT, no monthly fee, no minimums</li>
+      <li>Questions? <a href="mailto:support@driftplowing.com" style="color:var(--amber);font-weight:600">support@driftplowing.com</a></li>
+    </ul>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="mono">Getting started</div>
+  <h2>Ready in minutes</h2>
+  <p class="lead">Look around before you commit to anything.</p>
   <div class="steps">
-    <div class="step"><div class="n">1</div><h3>Create an account</h3><p>Name, phone and email.</p></div>
-    <div class="step"><div class="n">2</div><h3>Add your gear</h3><p>Plow truck, snowblower, shovel. You only see jobs your gear can do.</p></div>
-    <div class="step"><div class="n">3</div><h3>Sign the agreement</h3><p>A plain-English independent contractor agreement.</p></div>
+    <div class="step"><div class="n">1</div><h3>Create an account</h3><p>Name, email and a password.</p></div>
+    <div class="step"><div class="n">2</div><h3>See open jobs</h3><p>Browse what's booked and what it pays before any paperwork.</p></div>
+    <div class="step"><div class="n">3</div><h3>Quick setup</h3><p>License photo, your truck and gear, and the agreement. About 3 minutes.</p></div>
     <div class="step"><div class="n">4</div><h3>Go online</h3><p>Accept a job, get directions, snap before and after photos, done.</p></div>
   </div>
 </div></section>
 
 <section><div class="wrap">
   <div class="know">
-    <h2 style="font-size:24px;margin-bottom:16px">Good to know</h2>
+    <h2 style="font-size:32px;margin:0 0 16px">Good to know</h2>
     <ul>
       <li><span><b>You work for yourself.</b> Drivers are independent contractors, not DRIFT employees. You decide when you're online and which jobs you take.</span></li>
       <li><span><b>You bring the gear.</b> Your own truck, plow, fuel and tools.</span></li>
-      <li><span><b>Insurance is on you.</b> DRIFT doesn't insure drivers. Check with your insurance agent that you're covered for plowing for pay.</span></li>
-      <li><span><b>Taxes.</b> You'll get a 1099. Payouts go to your bank through Stripe.</span></li>
+      <li><span><b>Insurance is on you.</b> DRIFT doesn't insure drivers, and most personal auto policies don't cover plowing for pay. Check with your agent, or compare snow-plowing business coverage at <a href="https://www.nextinsurance.com/" target="_blank" rel="noopener noreferrer">NEXT Insurance</a>.</span></li>
+      <li><span><b>Taxes.</b> You'll get a 1099 through Stripe. The app logs your miles on jobs so tax time is easier.</span></li>
     </ul>
   </div>
 </div></section>
 
 <section class="final"><div class="wrap">
-  <h2>Ready when the snow is.</h2>
-  <p class="lead">Set up now so you're ready for the next storm.</p>
-  <a class="btn" href="/?drive=1">Start driving</a>
+  <div class="mono">The next storm is coming</div>
+  <h2>Be ready when it hits</h2>
+  <p class="lead">Set up now and your phone rings when customers near you book.</p>
+  <a class="btn" data-app href="/?drive=1">Start driving</a>
 </div></section>
 
 <footer><div class="wrap">
   <span>DRIFT · Duluth, MN</span>
   <a href="/">Need a plow instead?</a>
 </div></footer>
+
+<script>
+(function () {
+  // Keep the ?ref= tag (who sent them) on the links into the app.
+  var ref = new URLSearchParams(location.search).get("ref");
+  if (ref) {
+    ref = ref.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 40);
+    document.querySelectorAll("a[data-app]").forEach(function (a) { a.href = "/?drive=1&ref=" + encodeURIComponent(ref); });
+  }
+
+  // Calculator
+  var $ = function (id) { return document.getElementById(id); };
+  var money = function (v) { return "$" + Math.round(v).toLocaleString("en-US"); };
+  function calc() {
+    var h = +$("hours").value, r = +$("rate").value, p = +$("pay").value, s = +$("storms").value;
+    $("o-hours").textContent = h; $("o-rate").textContent = r; $("o-pay").textContent = "$" + p; $("o-storms").textContent = s;
+    var jobs = Math.round(h * r), storm = jobs * p;
+    $("r-storm").textContent = money(storm);
+    $("r-jobs").textContent = jobs + " driveway" + (jobs === 1 ? "" : "s") + " · about " + money(storm / h) + " an hour";
+    $("r-season").textContent = money(storm * s);
+  }
+  ["hours", "rate", "pay", "storms"].forEach(function (id) { $(id).addEventListener("input", calc); });
+  calc();
+
+  // Live numbers from the app (hidden if they can't load)
+  fetch("/api/pay?action=market").then(function (r) { return r.ok ? r.json() : null; }).then(function (m) {
+    if (!m || m.openNow == null) return;
+    $("m-open").textContent = (m.openNow || 0) + (m.openScheduled || 0);
+    $("m-pay").textContent = "$" + (m.openPay || 0).toLocaleString("en-US");
+    $("live").hidden = false; $("livecap").hidden = false;
+  }).catch(function () {});
+})();
+</script>
 </body>
 </html>

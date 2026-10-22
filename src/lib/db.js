@@ -233,7 +233,8 @@ export async function getProfile(userId) {
 export function profileToDriver(p) {
   if (!p) return null;
   return { id: p.id, name: p.name || "Your driver", truck: p.truck || "Plow truck",
-    tools: p.tools || [], rating: p.rating == null ? null : Number(p.rating).toFixed(1), reviews: p.ratings_count || 0, jobs: p.jobs_count || 0, tier: p.tier || "" };
+    tools: p.tools || [], rating: p.rating == null ? null : Number(p.rating).toFixed(1), reviews: p.ratings_count || 0, jobs: p.jobs_count || 0, tier: p.tier || "",
+    lateCancels: p.late_cancels || 0, home: p.home_lat != null ? { lat: p.home_lat, lng: p.home_lng } : null, homeRadius: p.home_radius_mi ?? null };
 }
 
 // Switch a driver online/offline (and mark them as a driver after they sign the
@@ -454,6 +455,38 @@ export async function recordLegalAcceptance(userId, rec) {
 export async function updateMyProfile(userId, patch) {
   if (!supabaseEnabled || !isUuid(userId)) return { data: null };
   const allowed = {};
-  for (const k of ["name", "phone", "truck", "tools", "ref_source"]) if (k in patch) allowed[k] = patch[k];
+  for (const k of ["name", "phone", "truck", "tools", "ref_source", "home_lat", "home_lng", "home_radius_mi"]) if (k in patch) allowed[k] = patch[k];
   return supabase.from("profiles").update(allowed).eq("id", userId);
+}
+
+// ---- driver tools ----
+// Customers who made this driver a favorite ("regulars"), with how often you've plowed for them.
+export async function listRegulars(driverId) {
+  if (!supabaseEnabled || !isUuid(driverId)) return { data: [] };
+  const { data: favs } = await supabase.from("favorite_drivers").select("customer_id, created_at").eq("driver_id", driverId);
+  const ids = (favs || []).map((f) => f.customer_id);
+  if (!ids.length) return { data: [] };
+  const [{ data: people }, { data: jobs }] = await Promise.all([
+    supabase.from("profiles").select("id, name").in("id", ids),
+    supabase.from("jobs").select("customer_id, address, completed_at, status").eq("driver_id", driverId).in("customer_id", ids).eq("status", "completed"),
+  ]);
+  return { data: ids.map((id) => {
+    const mine = (jobs || []).filter((j) => j.customer_id === id).sort((a, b) => new Date(b.completed_at) - new Date(a.completed_at));
+    const p = (people || []).find((x) => x.id === id);
+    return { id, name: (p?.name || "Customer").split(" ")[0], jobs: mine.length, last: mine[0]?.completed_at || null, address: mine[0]?.address || null };
+  }).sort((a, b) => b.jobs - a.jobs) };
+}
+
+// Every completed job this driver did in a calendar year — for the tax summary + CSV.
+export async function driverYear(driverId, year = new Date().getFullYear()) {
+  if (!supabaseEnabled || !isUuid(driverId)) return { data: [] };
+  const from = new Date(year, 0, 1).toISOString(), to = new Date(year + 1, 0, 1).toISOString();
+  return supabase.from("jobs").select("id, job_type, address, driver_pay, tip, driver_miles, completed_at, payment_status")
+    .eq("driver_id", driverId).eq("status", "completed").gte("completed_at", from).lt("completed_at", to)
+    .order("completed_at", { ascending: true });
+}
+
+export async function saveJobMiles(jobId, miles) {
+  if (!supabaseEnabled || !isUuid(jobId) || !(miles >= 0)) return { data: null };
+  return supabase.from("jobs").update({ driver_miles: Math.min(300, Math.round(miles * 10) / 10) }).eq("id", jobId);
 }

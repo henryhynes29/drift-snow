@@ -17,12 +17,12 @@
 import {
   stripe, admin, HttpError, cents, requireUser, getJob, updateJob, getProfile,
   updateProfile, readJson, send, driverPayoutsReady, payDriverForJob, markAuthorized, announceJob,
-  onlineFavorites, FIRST_DIBS_MINUTES, pushTo, announceScheduled, announceOpenScheduled, fmtWindow, fmtTime, JOB_KIND,
+  onlineFavorites, onlineElites, FIRST_DIBS_MINUTES, ELITE_DIBS_MINUTES, ownerIds, pushTo, announceScheduled, announceOpenScheduled, fmtWindow, fmtTime, JOB_KIND,
 } from "./_lib.js";
 import { snowCheck } from "./_weather.js";
 
 const OPEN = ["requested", "scheduled"];
-const NO_STRIPE_OK = ["announce", "tick", "sched-claim", "sched-backout", "sched-checkin", "sched-start"];
+const NO_STRIPE_OK = ["announce", "tick", "sched-claim", "sched-backout", "sched-checkin", "sched-start", "market", "preview-jobs", "report-issue", "release-job"];
 const H = 3600e3, MIN = 60e3;
 const FREE_BACKOUT_HOURS = 3;     // drivers can drop a scheduled job for free until 3 hrs before
 const CHECKIN_DEADLINE_MIN = 45;  // ...and must check in by 45 min before the window
@@ -40,6 +40,11 @@ export default async function handler(req, res) {
     // Every few minutes (Supabase cron, or any signed-in app as a backup): scheduled-plow reminders & hand-offs.
     // No secret needed: it only does what's already due, and it's throttled to once per 90 seconds.
     if (action === "tick" && req.method === "GET") return send(res, 200, await throttledTick());
+    // Public: how busy DRIFT is (the Drive page and the driver sign-up screen show this). Counts only.
+    if (action === "market" && req.method === "GET") {
+      res.setHeader("Cache-Control", "public, s-maxage=300, stale-while-revalidate=600");
+      return send(res, 200, await marketStats());
+    }
     if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
     const body = await readJson(req);
     const user = await requireUser(req);
@@ -112,8 +117,9 @@ const ACTIONS = {
     if (job.status !== "requested" || !["not_required", "authorized"].includes(job.payment_status)) return { sent: 0 };
     if (job.payment_status === "not_required" && !job.announced_at && !job.exclusive_until) {
       const favs = await onlineFavorites(job.customer_id);
-      if (favs.length) job = await updateJob(job.id, { preferred_driver_ids: favs,
-        exclusive_until: new Date(Date.now() + FIRST_DIBS_MINUTES * 60 * 1000).toISOString() });
+      const dibs = favs.length ? favs : await onlineElites(job);
+      if (dibs.length) job = await updateJob(job.id, { preferred_driver_ids: dibs,
+        exclusive_until: new Date(Date.now() + (favs.length ? FIRST_DIBS_MINUTES : ELITE_DIBS_MINUTES) * 60 * 1000).toISOString() });
     }
     return { sent: await announceJob(job), exclusiveUntil: job.exclusive_until || null };
   },
@@ -316,6 +322,57 @@ const ACTIONS = {
 
   // Backup for the cron: any signed-in app can nudge the scheduler (at most every 90 seconds).
   async tick() { return await throttledTick(); },
+
+  // ---------- drivers: look at open jobs before finishing setup ----------
+  // Any signed-in user. Approximate spots only (rounded ~half a mile), no address
+  // or customer — enough to see what the work pays, not who it's for.
+  async "preview-jobs"() {
+    const now = new Date().toISOString();
+    const { data } = await admin.from("jobs")
+      .select("id, status, job_type, lat, lng, driver_pay, quote, scheduled_for, window_end, expires_at, payment_status, driver_id")
+      .in("status", ["requested", "scheduled"]).in("payment_status", ["authorized", "not_required"])
+      .order("created_at", { ascending: false }).limit(60);
+    const rows = (data || []).filter((j) => j.status === "requested" ? !j.driver_id && j.expires_at > now : !j.driver_id && j.window_end > now);
+    const r2 = (v) => (v == null ? null : Math.round(v * 100) / 100);
+    return {
+      jobs: rows.map((j) => ({ id: j.id, kind: j.job_type || "driveway", lat: r2(j.lat), lng: r2(j.lng),
+        pay: Math.round(Number(j.driver_pay || 0)), sqft: j.quote?.sqft || null, depth: j.quote?.depthLabel || null,
+        scheduledFor: j.status === "scheduled" ? j.scheduled_for : null })),
+      market: await marketStats(),
+    };
+  },
+
+  // ---------- a problem on a job (driver or customer) ----------
+  // kinds: blocked (car/object in the way), no_access (can't reach it), damage, unsafe, other
+  // release: the driver gives the job back so another driver can take it (only before plowing starts).
+  async "report-issue"(user, { jobId, kind, note, release }) {
+    const KINDS = { blocked: "Something's in the way", no_access: "Can't get to the property", damage: "Damage happened", unsafe: "Unsafe conditions", other: "A problem" };
+    if (!KINDS[kind]) throw new HttpError(400, "Pick what's wrong");
+    const job = await getJob(jobId);
+    const isDriver = job.driver_id === user.id, isCustomer = job.customer_id === user.id;
+    if (!isDriver && !isCustomer) throw new HttpError(403, "Not your job");
+    const text = String(note || "").trim().slice(0, 500);
+    let released = false;
+    if (release) {
+      if (!isDriver) throw new HttpError(403, "Only the driver can give a job back");
+      await releaseLiveJob(job, user.id);
+      released = true;
+    }
+    const { data: issue, error } = await admin.from("job_issues")
+      .insert({ job_id: job.id, reporter_id: user.id, kind, note: text || null, released }).select().single();
+    if (error) throw new HttpError(500, error.message);
+    // Put it in the job's chat so the other person sees it right away.
+    const who = isDriver ? "Driver" : "Customer";
+    await admin.from("messages").insert({ job_id: job.id, sender_id: user.id,
+      body: `⚠ ${KINDS[kind]}${text ? ` — ${text}` : ""}${released ? " (I can't finish this one — DRIFT is finding you another driver.)" : ""}` });
+    const other = isDriver ? job.customer_id : job.driver_id;
+    if (other && !released) await pushTo([other], { title: `${who} reported: ${KINDS[kind]}`, body: text || "Open DRIFT to see the message.",
+      tag: `job-${job.id}`, url: `/?job=${job.id}` });
+    await pushTo(await ownerIds(), { title: `Problem on a job · ${KINDS[kind]}`, body: `${who}${job.address ? " at " + job.address : ""}${text ? ": " + text : ""}${released ? " · job given back" : ""}`,
+      tag: `issue-${issue.id}`, url: "/?admin=1" }, { urgency: "normal" });
+    return { issue, released };
+  },
+
 
   // ---------- 5. driver payouts (Stripe Connect, Accounts v2) ----------
   // Creates the driver's Stripe account once, then returns a short-lived
@@ -522,6 +579,40 @@ async function payOwedJobs(driverId, accountId) {
 }
 
 // Runs the scheduler at most once every 90 seconds, no matter who asks.
+// A driver gives back a live job (before plowing starts): it goes back to every
+// driver with a fresh 20 minutes and the customer's card hold stays in place.
+async function releaseLiveJob(job, driverId) {
+  if (!["accepted", "enroute"].includes(job.status)) throw new HttpError(409, job.status === "plowing" ? "You've already started — finish it or report the problem without giving it back" : "This job can't be given back");
+  const { data: got } = await admin.from("jobs").update({ driver_id: null, status: "requested", accepted_at: null,
+    expires_at: new Date(Date.now() + 20 * MIN).toISOString(), announced_at: null, announced_all_at: null,
+    preferred_driver_ids: null, exclusive_until: null })
+    .eq("id", job.id).eq("driver_id", driverId).in("status", ["accepted", "enroute"]).select().maybeSingle();
+  if (!got) throw new HttpError(409, "This job isn't yours anymore");
+  await admin.from("driver_backouts").insert({ job_id: job.id, driver_id: driverId, late: false, reason: "released" });
+  await pushTo([job.customer_id], { title: "Finding you a new driver",
+    body: "Your driver couldn't finish this one. Your request is back open to every driver nearby.", tag: `job-${job.id}`, url: `/?job=${job.id}` });
+  await announceJob(got);
+  return got;
+}
+
+// How much work is open right now — safe to show publicly (no customer/driver counts).
+let marketCache = null;
+async function marketStats() {
+  if (marketCache && Date.now() - marketCache.at < 60e3) return marketCache.data;
+  const now = new Date().toISOString();
+  // Open work only. Customer and driver counts are never public (owner dashboard only).
+  const [{ data: open }] = await Promise.all([
+    admin.from("jobs").select("status, driver_pay, driver_id, expires_at, window_end")
+      .in("status", ["requested", "scheduled"]).in("payment_status", ["authorized", "not_required"]).limit(500),
+  ]);
+  const live = (open || []).filter((j) => j.status === "requested" && !j.driver_id && j.expires_at > now);
+  const sched = (open || []).filter((j) => j.status === "scheduled" && !j.driver_id && j.window_end > now);
+  const data = { openNow: live.length, openScheduled: sched.length,
+    openPay: Math.round([...live, ...sched].reduce((t, j) => t + Number(j.driver_pay || 0), 0)), at: now };
+  marketCache = { at: Date.now(), data };
+  return data;
+}
+
 async function throttledTick() {
   const { data: row } = await admin.from("app_settings").select("last_tick").eq("id", 1).maybeSingle();
   const prev = row?.last_tick || null;

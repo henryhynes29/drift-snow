@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#0B0B0C" />
+    <meta name="theme-color" content="#06080C" />
     <!-- Installable app (Add to Home Screen) -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/png" href="/favicon-64.png" />
@@ -13,95 +13,68 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="DRIFT" />
 
+    <!-- Brand fonts (self-hosted, shared with the city pages so they're cached once) -->
+    <link rel="preload" href="/fonts/big-shoulders-display-latin-900-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/instrument-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <style>
+      @font-face{font-family:"Big Shoulders Display";font-style:normal;font-weight:800;font-display:swap;src:url(/fonts/big-shoulders-display-latin-800-normal.woff2) format("woff2")}
+      @font-face{font-family:"Big Shoulders Display";font-style:normal;font-weight:900;font-display:swap;src:url(/fonts/big-shoulders-display-latin-900-normal.woff2) format("woff2")}
+      @font-face{font-family:"Instrument Sans";font-style:normal;font-weight:400;font-display:swap;src:url(/fonts/instrument-sans-latin-400-normal.woff2) format("woff2")}
+      @font-face{font-family:"Instrument Sans";font-style:normal;font-weight:500;font-display:swap;src:url(/fonts/instrument-sans-latin-500-normal.woff2) format("woff2")}
+      @font-face{font-family:"Instrument Sans";font-style:normal;font-weight:600;font-display:swap;src:url(/fonts/instrument-sans-latin-600-normal.woff2) format("woff2")}
+      @font-face{font-family:"Instrument Sans";font-style:normal;font-weight:700;font-display:swap;src:url(/fonts/instrument-sans-latin-700-normal.woff2) format("woff2")}
+      @font-face{font-family:"IBM Plex Mono";font-style:normal;font-weight:500;font-display:swap;src:url(/fonts/ibm-plex-mono-latin-500-normal.woff2) format("woff2")}
+    </style>
+
     <!-- Primary SEO -->
-    <title>DRIFT — On-Demand Snow Removal in Duluth, MN | Driveway Plowing, No Contracts</title>
-    <meta name="description" content="DRIFT is an app that connects Duluth-area homeowners with independent local plow operators for driveway plowing, sidewalk clearing and car dig-outs in Duluth, Hermantown, Cloquet, Esko and Superior. No contracts — pay per storm. Map your property, track your plow live, pay only when it snows." />
-    <meta name="keywords" content="snow removal Duluth, driveway plowing Duluth MN, snow plowing Hermantown, snow removal Superior WI, on demand snow removal, sidewalk shoveling Duluth, car dig out, snow plow app Duluth, Cloquet Esko snow plowing" />
+    <title>DRIFT | On-Demand Snow Plowing in Duluth, Superior &amp; Hermantown</title>
+    <meta name="description" content="On-demand snow plowing in Duluth, Superior and Hermantown. Map your driveway, get a recommended price, track your plow live and pay per storm. No contract." />
     <link rel="canonical" href="https://driftplowing.com/" />
-    <meta name="robots" content="index, follow" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
 
     <!-- Open Graph / social -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="DRIFT" />
-    <meta property="og:title" content="DRIFT — On-Demand Snow Removal in Duluth, MN" />
+    <meta property="og:title" content="Snow plowing in Duluth, MN — on demand, no contract | DRIFT" />
     <meta property="og:description" content="Get your driveway plowed without a contract. Map your property, name your price, track your driver live, and pay only when it snows." />
     <meta property="og:url" content="https://driftplowing.com/" />
     <meta property="og:image" content="https://driftplowing.com/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="DRIFT — Your driveway, plowed. No contracts, pay per storm." />
+    <meta name="geo.region" content="US-MN" />
+    <meta name="geo.placename" content="Duluth" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="DRIFT — On-Demand Snow Removal in Duluth, MN" />
     <meta name="twitter:description" content="Driveway plowing on demand. No contracts. Pay per storm. Track your driver live." />
 
-    <!-- Structured data: local snow-removal service -->
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "LocalBusiness",
-      "name": "DRIFT",
-      "description": "An app that connects homeowners with independent local plow operators for driveway plowing, sidewalk clearing, car dig-outs and roadside jump-starts. No contracts — pay per storm.",
-      "url": "https://driftplowing.com/",
-      "areaServed": [
-        { "@type": "City", "name": "Duluth", "addressRegion": "MN" },
-        { "@type": "City", "name": "Hermantown", "addressRegion": "MN" },
-        { "@type": "City", "name": "Cloquet", "addressRegion": "MN" },
-        { "@type": "City", "name": "Esko", "addressRegion": "MN" },
-        { "@type": "City", "name": "Proctor", "addressRegion": "MN" },
-        { "@type": "City", "name": "Superior", "addressRegion": "WI" }
-      ],
-      "address": { "@type": "PostalAddress", "addressLocality": "Duluth", "addressRegion": "MN", "addressCountry": "US" },
-      "priceRange": "$$",
-      "makesOffer": [
-        { "@type": "Offer", "itemOffered": { "@type": "Service", "name": "Driveway snow plowing" } },
-        { "@type": "Offer", "itemOffered": { "@type": "Service", "name": "Sidewalk snow clearing" } },
-        { "@type": "Offer", "itemOffered": { "@type": "Service", "name": "Car dig-out" } },
-        { "@type": "Offer", "itemOffered": { "@type": "Service", "name": "Roadside jump-start" } }
-      ]
-    }
-    </script>
+    <!-- Structured data: who we are + what we do (no street address: DRIFT is an app, drivers come to you) -->
+    <script type="application/ld+json">{"@context": "https://schema.org", "@graph": [{"@type": "Organization", "@id": "https://driftplowing.com/#org", "name": "DRIFT", "url": "https://driftplowing.com/", "logo": "https://driftplowing.com/icon-512.png", "email": "support@driftplowing.com", "description": "An app that connects homeowners in the Twin Ports with independent local plow operators for on-demand snow removal."}, {"@type": "WebSite", "@id": "https://driftplowing.com/#site", "url": "https://driftplowing.com/", "name": "DRIFT", "publisher": {"@id": "https://driftplowing.com/#org"}}, {"@type": "Service", "name": "On-demand snow plowing", "serviceType": "Snow removal", "url": "https://driftplowing.com/", "provider": {"@id": "https://driftplowing.com/#org"}, "description": "Book a local plow operator for driveway plowing, sidewalk clearing, car dig-outs and jump-starts. No contracts \u2014 pay per storm.", "areaServed": [{"@type": "City", "name": "Duluth", "containedInPlace": {"@type": "State", "name": "Minnesota"}}, {"@type": "City", "name": "Superior", "containedInPlace": {"@type": "State", "name": "Wisconsin"}}, {"@type": "City", "name": "Hermantown", "containedInPlace": {"@type": "State", "name": "Minnesota"}}, {"@type": "City", "name": "Proctor", "containedInPlace": {"@type": "State", "name": "Minnesota"}}, {"@type": "City", "name": "Esko", "containedInPlace": {"@type": "State", "name": "Minnesota"}}, {"@type": "City", "name": "Cloquet", "containedInPlace": {"@type": "State", "name": "Minnesota"}}], "hasOfferCatalog": {"@type": "OfferCatalog", "name": "Snow removal services", "itemListElement": [{"@type": "Offer", "itemOffered": {"@type": "Service", "name": "Driveway snow plowing", "url": "https://driftplowing.com/snow-plowing-duluth-mn/"}}, {"@type": "Offer", "itemOffered": {"@type": "Service", "name": "Sidewalk snow removal", "url": "https://driftplowing.com/sidewalk-snow-removal-duluth/"}}, {"@type": "Offer", "itemOffered": {"@type": "Service", "name": "Car dig-out", "url": "https://driftplowing.com/car-dig-out-duluth/"}}, {"@type": "Offer", "itemOffered": {"@type": "Service", "name": "Jump-start", "url": "https://driftplowing.com/jump-start-duluth/"}}]}}]}</script>
 
-    <!-- FAQ structured data — eligible for Google rich results -->
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "FAQPage",
-      "mainEntity": [
-        { "@type": "Question", "name": "Do I need a contract or subscription for snow removal?",
-          "acceptedAnswer": { "@type": "Answer", "text": "No. DRIFT is pay-per-storm — you're only charged when a plow actually clears your driveway. No contracts, no monthly fees, no commitment." } },
-        { "@type": "Question", "name": "How much does it cost to plow a driveway in Duluth?",
-          "acceptedAnswer": { "@type": "Answer", "text": "You name your price. For a typical Duluth driveway we suggest an offer of about $30–$50 based on its size, plus a $10 call-out fee that goes to your driver and a $5 DRIFT booking fee. Offer more for a faster pickup mid-storm. You're only charged when it's done." } },
-        { "@type": "Question", "name": "How fast can someone come plow my driveway?",
-          "acceptedAnswer": { "@type": "Answer", "text": "During a storm you can book on demand and track your driver live, usually within the hour. You can also set an auto-plow trigger so it happens automatically once snow reaches a depth you choose." } },
-        { "@type": "Question", "name": "What areas does DRIFT serve?",
-          "acceptedAnswer": { "@type": "Answer", "text": "Duluth, Hermantown, Cloquet, Esko, Proctor, and Superior, Wisconsin — the greater Twin Ports and Northland." } },
-        { "@type": "Question", "name": "Who does the plowing?",
-          "acceptedAnswer": { "@type": "Answer", "text": "Independent local plow operators who use DRIFT to find jobs. They're not DRIFT employees — DRIFT is the app that connects you, handles booking and payment, and gives you live tracking and photos." } }
-      ]
-    }
+    <!-- FAQ structured data — must match the FAQ on the page (src/Landing.jsx) -->
+    <script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Do I need a contract or subscription?", "acceptedAnswer": {"@type": "Answer", "text": "No. DRIFT is pay-per-storm — you're only charged when a plow actually clears your driveway. No contracts, no monthly fees, no commitment."}}, {"@type": "Question", "name": "How much does it cost to plow a driveway in Duluth?", "acceptedAnswer": {"@type": "Answer", "text": "You outline your driveway once and we recommend a price from its size, slope and the snow depth. You can offer more or less. Most single-car driveways come in around $49–$54 and most two-car driveways around $58–$64 per storm, including the $10 call-out fee that goes to your driver and the $5 DRIFT booking fee. Offer more for a faster pickup mid-storm. You're only charged when it's done."}}, {"@type": "Question", "name": "How fast can someone come plow?", "acceptedAnswer": {"@type": "Answer", "text": "Book whenever you need it. Your offer goes out to local drivers right away, and once one accepts you can watch them head over live. Arrival depends on who's out and how busy the storm is — raising your offer helps during big storms."}}, {"@type": "Question", "name": "What areas do you serve?", "acceptedAnswer": {"@type": "Answer", "text": "Duluth, Hermantown, Cloquet, Esko, Proctor, and Superior, Wisconsin — the greater Twin Ports and Northland."}}, {"@type": "Question", "name": "Can I schedule a plow before a storm?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. Pick a day and a 2-hour window up to 6 days ahead. Your card is held when you book and only charged once the job is done."}}, {"@type": "Question", "name": "When do I have to clear my sidewalk in Duluth?", "acceptedAnswer": {"@type": "Answer", "text": "Within 24 hours after the snowfall ends, across the full width of the walk. You can add sidewalk clearing to the same booking as your driveway."}}, {"@type": "Question", "name": "Who does the plowing?", "acceptedAnswer": {"@type": "Answer", "text": "Independent local plow operators who use DRIFT to find jobs. They're not DRIFT employees — DRIFT is the app that connects you, handles booking and payment, and gives you live tracking and photos."}}]}</script>
+    <script>
+      (function () {
+        try {
+          var q = location.search, app = location.pathname !== "/" ||
+            /access_token=|type=recovery|error_description=/.test(location.hash) ||
+            /[?&](code|drive|admin|ops|demo|reset|job|offer|route|go|rebook)(=|&|$)/.test(q);
+          if (!app) for (var i = 0; i < localStorage.length; i++) {
+            var k = localStorage.key(i);
+            if (k && k.indexOf("sb-") === 0 && /-auth-token$/.test(k)) { app = true; break; }
+          }
+          if (app) document.documentElement.className += " app-boot";
+        } catch (e) { /* private mode */ }
+      })();
     </script>
   </head>
-  <body style="margin:0;background:#0B0B0C;">
-    <!-- Crawlable fallback: shown to crawlers that don't run JS; React replaces it on load. -->
-    <div id="root">
-      <div style="max-width:820px;margin:0 auto;padding:40px 22px;color:#F5F5F7;font-family:-apple-system,'SF Pro Text',system-ui,'Segoe UI',Roboto,sans-serif;">
-        <h1 style="font-size:34px;line-height:1.1;margin:0 0 14px;">On-demand snow removal in Duluth, MN</h1>
-        <p style="color:#A1A1AA;font-size:17px;line-height:1.5;">
-          DRIFT is an app that connects homeowners with independent local plow operators — no contract needed.
-          Map your property, name your price, track your plow live, and pay only when it snows. Serving Duluth, Hermantown, Cloquet, Esko, Proctor and Superior.
-        </p>
-        <h2 style="font-size:20px;margin:26px 0 8px;">What you can book</h2>
-        <p style="color:#A1A1AA;line-height:1.6;">
-          Driveway plowing, sidewalk clearing, car dig-outs, and roadside jump-starts.
-        </p>
-        <h2 style="font-size:20px;margin:26px 0 8px;">How it works</h2>
-        <p style="color:#A1A1AA;line-height:1.6;">
-          Outline your driveway on a satellite map, set a snow-depth trigger for automatic plowing (or book on demand),
-          and a nearby independent operator accepts the job and clears it. No contracts, no hidden fees, before &amp; after photos on every job.
-        </p>
-        <p style="margin-top:26px;">
-          <a href="/drive.html" style="color:#FFB020;font-weight:700;">Have a plow? Drive with DRIFT and earn &rsaquo;</a>
-        </p>
-        <p style="color:#6E6E77;margin-top:20px;">Loading the app…</p>
-      </div>
-    </div>
+  <body style="margin:0;background:#06080C;">
+    <!-- The homepage is pre-rendered into #root at build time (scripts/prerender.mjs). -->
+    <div id="root"><!--app-html--></div>
+    <script>
+      // Signed-in users and app links skip the homepage: clear it before it paints.
+      if (document.documentElement.className.indexOf("app-boot") > -1) document.getElementById("root").innerHTML = "";
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

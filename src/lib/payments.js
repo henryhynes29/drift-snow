@@ -67,3 +67,10 @@ export const schedCheckin = () => pay("sched-checkin");
 export const schedStart = (jobId) => pay("sched-start", { jobId });
 // Any open app nudges the scheduler (reminders / hand-offs) — throttled on the server.
 export const schedTick = () => pay("tick").catch(() => null);
+// Driver tools
+export const previewJobs = () => pay("preview-jobs");
+export const reportIssue = (jobId, kind, note, release = false) => pay("report-issue", { jobId, kind, note, release });
+// Public counts (customers, drivers, open jobs) — no sign-in needed.
+export async function marketStats() {
+  try { const r = await fetch("/api/pay?action=market"); return r.ok ? await r.json() : null; } catch { return null; }
+}

@@ -1,12 +1,5 @@
 import React, { Suspense, lazy, useState, useEffect } from 'react'
 import ReactDOM from 'react-dom/client'
-import '@fontsource/big-shoulders-display/800'
-import '@fontsource/big-shoulders-display/900'
-import '@fontsource/instrument-sans/400'
-import '@fontsource/instrument-sans/500'
-import '@fontsource/instrument-sans/600'
-import '@fontsource/instrument-sans/700'
-import '@fontsource/ibm-plex-mono/500'
 import Landing from './Landing.jsx'
 
 // Speed: first-time visitors on the homepage only download the landing page.
@@ -56,4 +49,7 @@ function Root() {
   )
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<Root />)
+// The homepage HTML is pre-rendered at build time — hydrate it instead of redrawing.
+const container = document.getElementById('root')
+if (!startInApp && container.firstElementChild) ReactDOM.hydrateRoot(container, <Root />)
+else { container.innerHTML = ''; ReactDOM.createRoot(container).render(<Root />) }

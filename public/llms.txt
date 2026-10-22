@@ -1,0 +1,51 @@
+# DRIFT
+
+> DRIFT is an on-demand snow plowing app for homes in the Twin Ports: Duluth, Hermantown, Proctor, Cloquet and Esko in Minnesota, and Superior, Wisconsin. Homeowners map their driveway on a satellite view, get a recommended price, name their offer, track a local plow live and pay per storm. No seasonal contract.
+
+Key facts:
+- Services: residential driveway plowing, sidewalk snow clearing, car dig-outs and jump-starts. DRIFT does not offer salting, roof snow removal, or commercial lots.
+- Pricing: the customer's price comes from mapping their driveway. They pay their offer plus a $10 call-out fee (goes to the driver) and a $5 booking fee. The card is held, then charged only when the job is done.
+- Drivers are independent local plow operators, not DRIFT employees. They keep 80% of the offer, the full $10 call-out and 100% of tips, and are paid through Stripe.
+- Customers can book now or schedule a day and 2-hour window up to 6 days ahead.
+- Website: https://driftplowing.com/ · Support: support@driftplowing.com
+
+## Service areas
+- [Snow plowing in Duluth, MN](https://driftplowing.com/snow-plowing-duluth-mn/): On-demand snow plowing in Duluth, MN. Map your driveway, name your price, track a local plow live and pay only when it's done. No seasonal contract.
+- [Snow removal in Superior, WI](https://driftplowing.com/snow-removal-superior-wi/): On-demand snow removal in Superior, WI. Book a local plow for your driveway, garage apron or sidewalk, name your price, and pay only when it's done. No contract.
+- [Snow plowing in Hermantown, MN](https://driftplowing.com/snow-plowing-hermantown-mn/): Driveway snow plowing in Hermantown, MN on demand. Long driveway? Outline it once, name your price each storm, track your plow live, pay only when it's done.
+- [Snow plowing in Cloquet, MN](https://driftplowing.com/snow-plowing-cloquet-mn/): On-demand driveway snow plowing in Cloquet, MN. Name your price, track your local plow live and pay only when it's done. No contract.
+- [Snow plowing in Proctor, MN](https://driftplowing.com/snow-plowing-proctor-mn/): On-demand driveway snow plowing in Proctor, MN. Local plow operators, your price, live tracking, pay only when it's done. No contract.
+- [Snow plowing in Esko, MN](https://driftplowing.com/snow-plowing-esko-mn/): On-demand snow plowing for Esko, MN driveways, including long, rural and gravel drives. Name your price, track your plow, pay only when it's done.
+- [Snow plowing on Park Point](https://driftplowing.com/snow-plowing-duluth-mn/park-point/): On-demand driveway plowing on Park Point (Minnesota Point) in Duluth. Map your driveway once, book any storm, track your plow over the bridge.
+- [Snow plowing in the Hillside](https://driftplowing.com/snow-plowing-duluth-mn/hillside/): Driveway and sidewalk snow plowing in Duluth's Central and East Hillside, built for steep driveways, alleys and the 24-hour sidewalk rule.
+- [Snow plowing in Duluth Heights](https://driftplowing.com/snow-plowing-duluth-mn/duluth-heights/): On-demand driveway plowing in Duluth Heights and over the hill. Map your driveway once, name your price, track your plow live.
+- [Snow plowing in Lakeside and Lester Park](https://driftplowing.com/snow-plowing-duluth-mn/lakeside/): On-demand driveway and sidewalk plowing in Lakeside and Lester Park in Duluth's east end. Map it once, book any storm, pay when it's done.
+- [Snow plowing in West Duluth](https://driftplowing.com/snow-plowing-duluth-mn/west-duluth/): On-demand driveway plowing in West Duluth, Spirit Valley, Denfeld and nearby. Map your driveway, name your price, pay only when it's done.
+- [Snow plowing in Woodland and Hunters Park](https://driftplowing.com/snow-plowing-duluth-mn/woodland/): On-demand driveway plowing in Woodland and Hunters Park in Duluth. Steep and long driveways welcome. Map it once, book any storm.
+
+## Services
+- [Sidewalk snow removal in Duluth](https://driftplowing.com/sidewalk-snow-removal-duluth/): Sidewalk snow shoveling and blowing in Duluth and Superior. Clear your walk before the 24-hour deadline. Book in a minute, pay only when it's done.
+- [Car dig-outs in Duluth](https://driftplowing.com/car-dig-out-duluth/): Snowed in on a Duluth street? Book a local driver to dig out your car and clear the plow berm. Flat price, pay when you're free.
+- [Jump-starts in Duluth](https://driftplowing.com/jump-start-duluth/): Dead battery in the cold? Book a local driver with jumper cables or a jump pack in Duluth, Superior and Hermantown. Flat price, track them live.
+
+## Guides and local rules
+- [Duluth sidewalk snow rules](https://driftplowing.com/guides/duluth-sidewalk-snow-rules/): How Duluth's sidewalk snow removal rule works: 24 hours after snow ends, full width, corner curb cuts, what happens if you don't, and Superior's rule too.
+- [Duluth winter parking and snow emergencies](https://driftplowing.com/guides/duluth-winter-parking/): Duluth's alternate side parking changeover, what happens in a snow emergency, the free parking lots, and how to avoid a ticket or tow.
+- [What snow plowing costs in Duluth](https://driftplowing.com/snow-plowing-cost-duluth/): Real per-storm snow plowing prices in Duluth, MN by driveway size, plus what makes it cost more, and per-storm vs. seasonal contracts.
+- [How to start a snow plow business in Duluth, MN](https://driftplowing.com/learn/how-to-start-a-snow-plow-business-duluth-mn/): Step-by-step: how to start a snow plowing business in Duluth, Minnesota. Equipment, forming an LLC ($155 online), insurance, taxes, pricing and finding customers.
+- [How much do snow plow drivers make in Duluth?](https://driftplowing.com/learn/how-much-do-snow-plow-drivers-make-duluth/): What a snow plow driver can make per job and per storm in Duluth with DRIFT: 80% of the offer plus a $10 call-out and all tips, with real examples and costs.
+- [Snow plow insurance in Minnesota](https://driftplowing.com/learn/snow-plow-insurance-minnesota/): Plowing for pay in Minnesota? Many personal auto policies exclude it. What commercial auto and general liability cover, and what to ask your insurance agent.
+- [How to price snow plowing jobs](https://driftplowing.com/learn/how-to-price-snow-plowing-jobs/): How to price residential snow plowing jobs fairly: square footage, slope, snow depth, drive time and minimums, with DRIFT's pricing model as a worked example.
+- [Snow plowing taxes in Minnesota and Wisconsin](https://driftplowing.com/learn/snow-plowing-taxes-minnesota-wisconsin/): Do you charge sales tax on snow plowing in Minnesota or Wisconsin? What income and self-employment tax you owe, 1099s, quarterly payments and the 2026 mileage rate.
+- [Per-storm vs seasonal snow plowing contract](https://driftplowing.com/learn/per-storm-vs-seasonal-snow-plowing-contract/): Seasonal snow plowing contract or pay per storm? How to compare them in Duluth, where snowfall swings from light winters to 100+ inches.
+- [How to get your driveway ready for snow plowing](https://driftplowing.com/learn/get-your-driveway-ready-for-winter/): A pre-winter checklist for Duluth homeowners: mark driveway edges, flag hazards, plan where the snow goes and avoid plow damage to curbs, lawns and landscaping.
+- [When should you plow your driveway during a snowstorm?](https://driftplowing.com/learn/when-to-plow-during-a-snowstorm/): Should you plow during a snowstorm or wait until it's over? Timing tips for Duluth's long lake-effect storms, deep snow, city plow berms and sidewalks.
+- [Snowblower vs plow service](https://driftplowing.com/learn/snowblower-vs-plow-service/): Buy a snowblower or pay for a plow service? Compare time, effort, hills, storage, upkeep and cost for a Duluth driveway.
+
+## Help
+- [DRIFT frequently asked questions](https://driftplowing.com/faq/): Answers on booking a snow plow with DRIFT in the Twin Ports: prices, fees, scheduling, payments, hazards, cancellations, local snow rules and driving.
+- [DRIFT learning center](https://driftplowing.com/learn/): Guides for Twin Ports homeowners and plow operators: plowing prices, contracts vs per storm, snow rules, starting a plow business, insurance and taxes.
+
+## For plow operators
+- [Snow plow jobs in Duluth, MN](https://driftplowing.com/plow-jobs-duluth-mn/): Have a plow? Pick up paid driveway plowing jobs in Duluth, Superior and Hermantown with DRIFT. See the pay before you accept. 80% of the offer + $10 call-out + tips.
+- [Drive with DRIFT](https://driftplowing.com/drive.html): Sign up to plow, see open jobs and pay first.

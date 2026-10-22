@@ -75,11 +75,23 @@ export async function snowCheck({ force = false } = {}) {
   const r = await sendSnowAlert({
     customers: { title: `Snow's coming · ${rangeText(f.next24)} expected`,
       body: "Book your plow now to get in line before the rush. You only pay once it's done." },
-    drivers: { title: `Busy night ahead · ${rangeText(f.next24)} of snow`,
-      body: "Customers will be booking. Go online in DRIFT when it starts to pile up." },
+    drivers: await stormDriverAlert(f),
   });
   await admin.from("snow_alerts").update({ sent: r.customers + r.drivers }).eq("day", day);
   return { forecast: f, ...r };
+}
+
+// Storm mode: tell drivers how much work is waiting so they plan their night.
+async function stormDriverAlert(f) {
+  const now = new Date().toISOString();
+  const { data: sched } = await admin.from("jobs").select("id").eq("status", "scheduled").is("driver_id", null).gt("window_end", now)
+    .in("payment_status", ["authorized", "not_required"]);
+  const n = (sched || []).length;
+  return {
+    title: `Storm tonight · ${rangeText(f.next24)} of snow`,
+    body: n ? `${n} scheduled plow${n > 1 ? "s" : ""} open now. Build your route before it starts.`
+      : "Customers will be booking. Set your route and go online when it starts to pile up.",
+  };
 }
 
 // Send an alert to customers and/or drivers. Used by the daily check and by the

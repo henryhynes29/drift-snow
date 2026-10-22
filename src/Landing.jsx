@@ -9,15 +9,20 @@
 // Everything here is honest — no invented reviews, counts or ETAs. The forecast
 // strip is real (National Weather Service via /api/weather).
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import "@fontsource/big-shoulders-display/800";
-import "@fontsource/big-shoulders-display/900";
-import "@fontsource/instrument-sans/400";
-import "@fontsource/instrument-sans/500";
-import "@fontsource/instrument-sans/600";
-import "@fontsource/ibm-plex-mono/500";
 import EmojiIcon from "./Icon.jsx";
 import { MAP_ENABLED, MAPBOX_TOKEN } from "./mapConfig.js"; // no map library here — it loads on scroll
 import { fetchSnowForecast } from "./lib/weather.js";
+import { SIZES, estimateRange, estimateTotal } from "./lib/estimate.js";
+
+// Search pages (static HTML in /public, built by scripts/seo-pages.mjs).
+const CITY_PAGES = [["Duluth", "snow-plowing-duluth-mn"], ["Superior", "snow-removal-superior-wi"], ["Hermantown", "snow-plowing-hermantown-mn"],
+  ["Proctor", "snow-plowing-proctor-mn"], ["Esko", "snow-plowing-esko-mn"], ["Cloquet", "snow-plowing-cloquet-mn"]];
+const GUIDE_PAGES = [
+  ["What plowing costs in Duluth", "snow-plowing-cost-duluth", "Per-storm prices by driveway size, and why hills and deep snow cost more."],
+  ["Duluth's 24-hour sidewalk rule", "guides/duluth-sidewalk-snow-rules", "How much you have to clear, by when, and what happens if you don't."],
+  ["Winter parking & snow emergencies", "guides/duluth-winter-parking", "Alternate-side changeover, free lots, and how to stay out of the impound lot."]];
+const EX = estimateTotal(650); // the 2-car example used on this page
+const DRV = Math.round(EX.offer * 0.8) + 10; // driver: 80% of the offer + the $10 call-out
 
 // ---------- tokens (fixed dark: lake-night) ----------
 const L = {
@@ -29,7 +34,7 @@ const L = {
   lineHard: "rgba(170,195,230,.22)",
   ice: "#EEF3F8",
   mist: "#9BA7B7",
-  dim: "#5F6C7E",
+  dim: "#7C899B",
   amber: "#FFB020",
   amberHot: "#FFD166",
   onAmber: "#1A1204",
@@ -180,10 +185,114 @@ function ForecastStrip() {
   );
 }
 
+// ---------- start mapping (hero) ----------
+// No instant price: customers get their recommended price by outlining their
+// driveway on the map. Typing an address here checks we cover it and opens the
+// app's map right on their house.
+const milesApart = (a, b, c, d) => {
+  const r = (x) => (x * Math.PI) / 180, h = Math.sin(r(c - a) / 2) ** 2 + Math.cos(r(a)) * Math.cos(r(c)) * Math.sin(r(d - b) / 2) ** 2;
+  return 7917.6 * Math.asin(Math.sqrt(h));
+};
+function MapStart({ onStart, goDrive }) {
+  const [q, setQ] = useState("");
+  const [sugs, setSugs] = useState([]);
+  const [place, setPlace] = useState(null);
+  useEffect(() => {
+    if (!MAP_ENABLED || q.trim().length < 4 || place?.address === q) { setSugs([]); return; }
+    const t = setTimeout(async () => {
+      try {
+        const u = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json?access_token=${MAPBOX_TOKEN}` +
+          "&autocomplete=true&types=address&country=us&proximity=-92.1,46.78&bbox=-92.9,46.45,-91.7,47.1&limit=5";
+        const j = await (await fetch(u)).json();
+        setSugs((j.features || []).map((f) => {
+          const ctx = (k) => (f.context || []).find((c) => c.id.startsWith(k))?.text;
+          return { address: f.place_name.replace(/, United States$/, ""), lng: f.center[0], lat: f.center[1], town: ctx("place"), hood: ctx("neighborhood") };
+        }));
+      } catch { setSugs([]); }
+    }, 220);
+    return () => clearTimeout(t);
+  }, [q]);
+  const pick = (s) => {
+    const inArea = TOWNS.some(([, lat, lng]) => milesApart(lat, lng, s.lat, s.lng) < 12);
+    setPlace({ ...s, inArea }); setQ(s.address); setSugs([]);
+  };
+  const start = () => {
+    if (place?.inArea) { try { localStorage.setItem("drift.prefill", JSON.stringify({ address: place.address, center: { lat: place.lat, lng: place.lng } })); } catch { /* private mode */ } }
+    onStart();
+  };
+  const where = place ? [place.hood, place.town].filter(Boolean).join(", ") : "";
+  const steps = [["pin", "Find your house"], ["edit", "Outline the driveway"], ["cash", "Get your recommended price"]];
+  return (
+    <div className="lp-rise lp-pc" style={{ animationDelay: "1.3s", maxWidth: 560, borderRadius: 24, padding: "20px 20px 18px",
+      background: "linear-gradient(160deg, rgba(21,27,38,.92), rgba(12,16,23,.92))", border: `1px solid ${L.lineHard}`,
+      boxShadow: "0 30px 70px rgba(0,0,0,.45)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+        <Mono style={{ color: L.amber }}>Your price in 2 minutes</Mono>
+        <Mono style={{ color: L.dim, fontSize: 10.5 }}>Free to set up</Mono>
+      </div>
+      <div className="lp-msteps" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginTop: 14 }}>
+        {steps.map(([ic, t], k) => (
+          <div key={t} style={{ display: "flex", alignItems: "center", gap: 9, padding: "10px 11px", borderRadius: 12,
+            background: "rgba(255,255,255,.04)", border: `1px solid ${L.line}` }}>
+            <span style={{ width: 26, height: 26, borderRadius: 8, flexShrink: 0, display: "grid", placeItems: "center",
+              background: k === 2 ? L.amber : `${L.amber}1C`, color: k === 2 ? L.onAmber : L.amber }}><EmojiIcon e={ic} s={14} strokeWidth={2.2} /></span>
+            <span style={{ font: `600 13px/1.25 ${BODY}`, color: L.ice }}>{t}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{ font: `400 14px/1.5 ${BODY}`, color: L.mist, margin: "14px 2px 0" }}>
+        Outline your driveway on a satellite map once. We measure it and recommend a fair price from its size, slope and the snow. You can always offer more or less.</div>
+      <div style={{ position: "relative", marginTop: 14 }}>
+        <span aria-hidden style={{ position: "absolute", left: 14, top: 15, color: L.mist, display: "flex" }}><EmojiIcon e="pin" s={18} /></span>
+        <input value={q} onChange={(e) => { setQ(e.target.value); if (place) setPlace(null); }} placeholder="Start with your address"
+          aria-label="Your address" autoComplete="street-address" style={{ width: "100%", boxSizing: "border-box", minHeight: 52, padding: "0 14px 0 42px",
+            borderRadius: 14, background: "rgba(0,0,0,.35)", border: `1px solid ${L.line}`, color: L.ice, font: `400 16px ${BODY}`, outline: "none" }} />
+        {sugs.length > 0 && (
+          <div role="listbox" style={{ position: "absolute", zIndex: 5, left: 0, right: 0, top: 56, borderRadius: 14, overflow: "hidden",
+            background: L.panel2, border: `1px solid ${L.lineHard}`, boxShadow: "0 20px 50px rgba(0,0,0,.5)" }}>
+            {sugs.map((s) => (
+              <button key={s.address} role="option" onClick={() => pick(s)} style={{ display: "block", width: "100%", textAlign: "left", padding: "12px 14px",
+                background: "none", border: "none", borderBottom: `1px solid ${L.line}`, color: L.ice, font: `400 14.5px ${BODY}`, cursor: "pointer" }}>{s.address}</button>
+            ))}
+          </div>
+        )}
+      </div>
+      {place && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, font: `500 14px ${BODY}`, color: place.inArea ? L.good : L.amberHot }}>
+          <EmojiIcon e={place.inArea ? "checkfill" : "warning"} s={16} />
+          {place.inArea ? `We cover ${where || "your area"}. Your map will open right on your house.` : "That's outside our area for now. We're in the Twin Ports, Hermantown, Proctor, Esko and Cloquet."}
+        </div>
+      )}
+      <Btn big onClick={start} style={{ width: "100%", marginTop: 14 }}>Map my driveway <span aria-hidden>→</span></Btn>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginTop: 12, font: `400 13px ${BODY}`, color: L.dim }}>
+        <span>No contract · charged only when it's done</span>
+        <button className="lp-link" onClick={goDrive} style={{ fontSize: 13, color: L.mist }}>Have a plow? Drive with us →</button>
+      </div>
+    </div>
+  );
+}
+
+// Proof bar: plain facts (never customer or driver counts).
+function ProofBar() {
+  const items = [["6", "towns on both sides of the bridge"], ['86"', "of snow in a normal Duluth winter"], ["1 tap", "to book once your driveway is mapped"], ["$0", "contracts, ever"]];
+  return (
+    <div style={{ maxWidth: 1120, margin: "0 auto", padding: "46px 22px 0" }}>
+      <div className="lp-proof" style={{ display: "grid", gridTemplateColumns: `repeat(${items.length},1fr)`, borderRadius: 22, border: `1px solid ${L.line}`, background: L.panel }}>
+        {items.map(([v, l], i) => (
+          <div key={l} style={{ padding: "22px 20px", borderLeft: i ? `1px solid ${L.line}` : "none" }}>
+            <div style={{ font: `900 clamp(38px,4.6vw,54px)/1 ${DISPLAY}`, color: i === 0 ? L.amber : L.ice }}>{v}</div>
+            <div style={{ font: `400 14px/1.35 ${BODY}`, color: L.mist, marginTop: 6 }}>{l}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ---------- phone demo (three real app screens) ----------
 const DEMO = [
   { key: "map", tag: "01 · Map it", title: "Outline your driveway" },
-  { key: "price", tag: "02 · Price it", title: "Name your price" },
+  { key: "price", tag: "02 · Book it", title: "One tap per storm" },
   { key: "track", tag: "03 · Track it", title: "Watch your plow arrive" },
 ];
 function PhoneDemo() {
@@ -214,10 +323,11 @@ function PhoneDemo() {
             <div style={{ font: `800 25px/1 ${DISPLAY}`, textTransform: "uppercase", color: L.ice, margin: "8px 0 14px" }}>{DEMO[i].title}</div>
             {key === "map" ? <DemoMap /> : key === "price" ? <DemoPrice /> : <DemoTrack />}
           </div>
-          <div style={{ position: "absolute", bottom: 14, left: 0, right: 0, display: "flex", gap: 6, justifyContent: "center" }}>
+          <div style={{ position: "absolute", bottom: 4, left: 0, right: 0, display: "flex", gap: 0, justifyContent: "center" }}>
             {DEMO.map((d, k) => (
-              <button key={d.key} onClick={() => setI(k)} aria-label={d.title} style={{ width: k === i ? 22 : 7, height: 7, borderRadius: 6,
-                border: "none", cursor: "pointer", padding: 0, background: k === i ? L.amber : "#2A2F38", transition: "all .3s" }} />
+              <button key={d.key} onClick={() => setI(k)} aria-label={d.title} style={{ minWidth: 26, height: 26, border: "none", cursor: "pointer",
+                padding: 0, background: "none", display: "grid", placeItems: "center" }}>
+                <span style={{ width: k === i ? 22 : 7, height: 7, borderRadius: 6, background: k === i ? L.amber : "#2A2F38", transition: "all .3s" }} /></button>
             ))}
           </div>
         </div>
@@ -251,24 +361,30 @@ function Row({ l, v, strong }) {
   </div>;
 }
 function DemoPrice() {
-  const tiers = [["Standard", 38], ["Recommended", 44], ["Priority", 51]];
   return (
     <div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 5 }}>
-        {tiers.map(([l, v], k) => (
-          <div key={l} style={{ borderRadius: 9, padding: "7px 6px", background: k === 1 ? `${L.amber}1C` : "#15181E",
-            border: `1.5px solid ${k === 1 ? L.amber : "#262A33"}` }}>
-            <div style={{ font: `600 8.5px ${BODY}`, color: k === 1 ? L.amber : L.mist }}>{l}</div>
-            <div style={{ font: `800 18px ${DISPLAY}`, color: L.ice, marginTop: 1 }}>${v}</div>
-          </div>
-        ))}
+      <div style={{ position: "relative", borderRadius: 12, overflow: "hidden", height: 92, border: `1px solid ${L.line}` }}>
+        <div style={{ position: "absolute", inset: 0, background: "linear-gradient(135deg,#2b3a2c,#38472f 45%,#28331f)" }} />
+        <svg viewBox="0 0 130 70" preserveAspectRatio="xMidYMid slice" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}>
+          <rect x="70" y="10" width="34" height="22" rx="1" fill="#5a4634" />
+          <polygon points="74,33 92,33 96,70 70,70" fill={`${L.amber}2E`} stroke={L.amber} strokeWidth="1.6" />
+        </svg>
+        <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg,transparent 30%,rgba(0,0,0,.75))" }} />
+        <div style={{ position: "absolute", left: 8, bottom: 7, font: `600 10px ${BODY}`, color: "#fff" }}>1420 Woodland Ave</div>
+        <div style={{ position: "absolute", right: 7, top: 7, font: `600 8px ${BODY}`, color: "#fff", padding: "3px 7px", borderRadius: 99, background: "rgba(8,10,14,.6)" }}>Edit</div>
       </div>
-      <div style={{ background: "#15181E", border: "1px solid #262A33", borderRadius: 12, padding: 12, marginTop: 8 }}>
-        <Row l="Your offer" v="$44" /><Row l="Driver call-out" v="$10" /><Row l="DRIFT fee" v="$5" />
-        <div style={{ height: 1, background: "#262A33", margin: "7px 0" }} />
-        <Row l="Total" v="$59" strong />
+      <div style={{ display: "flex", gap: 4, padding: 3, borderRadius: 9, background: "#15181E", marginTop: 8 }}>
+        {["Driveway", "Sidewalk"].map((t, k) => <div key={t} style={{ flex: 1, textAlign: "center", padding: "5px 0", borderRadius: 7, font: `600 9.5px ${BODY}`,
+          color: k ? L.mist : L.ice, background: k ? "transparent" : "#262A33" }}>{t}</div>)}
       </div>
-      <div style={{ marginTop: 8, background: L.amber, color: L.onAmber, borderRadius: 999, padding: "10px 0", textAlign: "center", font: `600 13px ${BODY}` }}>Send offer · $59</div>
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginTop: 10 }}>
+        <div><div style={{ font: `400 9.5px ${BODY}`, color: L.mist }}>Recommended price</div>
+          <div style={{ font: `800 40px/.9 ${DISPLAY}`, color: L.ice, marginTop: 3 }}>${EX.total}</div></div>
+        <div style={{ font: `600 9px ${BODY}`, color: L.ice, padding: "5px 8px", borderRadius: 99, background: "#15181E", border: "1px solid #262A33" }}>Up to 4" snow ▾</div>
+      </div>
+      <div style={{ font: `400 9px ${BODY}`, color: L.mist, marginTop: 6 }}>~20 min on site · charged when it's done · <span style={{ color: L.good }}>no contract</span></div>
+      <div style={{ marginTop: 10, background: L.amber, color: L.onAmber, borderRadius: 999, padding: "11px 0", textAlign: "center", font: `700 12.5px ${BODY}` }}>Plow my driveway · ${EX.total}</div>
+      <div style={{ textAlign: "center", font: `500 9.5px ${BODY}`, color: L.mist, marginTop: 8 }}>Change price or schedule for later ▾</div>
     </div>
   );
 }
@@ -411,9 +527,9 @@ function MapboxServiceArea() {
       {/* edge vignette so the map melts into the page */}
       <div aria-hidden style={{ position: "absolute", inset: 0, pointerEvents: "none",
         boxShadow: `inset 0 0 80px 20px ${L.bg}`, borderRadius: 24 }} />
+      {/* drawn map stands in until the live map is ready */}
       {state !== "ready" && (
-        <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
-          <Mono style={{ color: L.dim }}>Loading map…</Mono></div>
+        <div style={{ position: "absolute", inset: 0, overflow: "hidden" }}><ServiceMap bare /></div>
       )}
       <div style={{ position: "absolute", left: 18, top: 16, padding: "8px 12px", borderRadius: 10, background: "rgba(10,14,21,.8)",
         border: `1px solid ${L.line}`, backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}>
@@ -429,7 +545,7 @@ const TOWNS = [
   ["Duluth", 46.787, -92.100, "MN", true], ["Superior", 46.721, -92.104, "WI"], ["Hermantown", 46.807, -92.238, "MN"],
   ["Proctor", 46.747, -92.225, "MN"], ["Esko", 46.707, -92.363, "MN"], ["Cloquet", 46.722, -92.459, "MN"],
 ];
-function ServiceMap() {
+function ServiceMap({ bare }) {
   const W = 640, H = 330;
   const x = (lng) => ((lng + 92.53) / 0.56) * W;
   const y = (lat) => ((46.875 - lat) / 0.21) * H;
@@ -438,9 +554,9 @@ function ServiceMap() {
     [-92.04, 46.72], [-92.0, 46.705], [-91.97, 46.70]];
   const lake = `M${shore.map(([a, b]) => `${x(a).toFixed(1)} ${y(b).toFixed(1)}`).join(" L")} L${W} ${y(46.70)} L${W} 0 Z`;
   return (
-    <div style={{ position: "relative", borderRadius: 24, overflow: "hidden", border: `1px solid ${L.line}`,
+    <div style={{ position: "relative", borderRadius: bare ? 0 : 24, overflow: "hidden", border: bare ? "none" : `1px solid ${L.line}`, height: bare ? "100%" : undefined,
       background: `radial-gradient(120% 90% at 20% 30%, ${L.panel2}, ${L.bg2})` }}>
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }} role="img"
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid slice" style={{ width: "100%", height: bare ? "100%" : "auto", display: "block" }} role="img"
         aria-label="Service area: Duluth, Superior, Hermantown, Proctor, Esko and Cloquet">
         <defs>
           <pattern id="lpGrid" width="32" height="32" patternUnits="userSpaceOnUse">
@@ -504,9 +620,11 @@ export default function Landing({ onStart, onLegal }) {
   // FAQ copy matches the JSON-LD in index.html (rich results) — keep them in sync.
   const FAQ = [
     ["Do I need a contract or subscription?", "No. DRIFT is pay-per-storm — you're only charged when a plow actually clears your driveway. No contracts, no monthly fees, no commitment."],
-    ["How much does it cost to plow a driveway in Duluth?", "You name your price. For a typical Duluth driveway we suggest an offer of about $30–$50 based on its size, plus a $10 call-out fee that goes to your driver and a $5 DRIFT booking fee. Offer more for a faster pickup mid-storm. You're only charged when it's done."],
+    ["How much does it cost to plow a driveway in Duluth?", `You outline your driveway once and we recommend a price from its size, slope and the snow depth. You can offer more or less. Most single-car driveways come in around ${estimateRange(SIZES[0].sqft).text} and most two-car driveways around ${estimateRange(SIZES[1].sqft).text} per storm, including the $10 call-out fee that goes to your driver and the $5 DRIFT booking fee. Offer more for a faster pickup mid-storm. You're only charged when it's done.`],
     ["How fast can someone come plow?", "Book whenever you need it. Your offer goes out to local drivers right away, and once one accepts you can watch them head over live. Arrival depends on who's out and how busy the storm is — raising your offer helps during big storms."],
     ["What areas do you serve?", "Duluth, Hermantown, Cloquet, Esko, Proctor, and Superior, Wisconsin — the greater Twin Ports and Northland."],
+    ["Can I schedule a plow before a storm?", "Yes. Pick a day and a 2-hour window up to 6 days ahead. Your card is held when you book and only charged once the job is done."],
+    ["When do I have to clear my sidewalk in Duluth?", "Within 24 hours after the snowfall ends, across the full width of the walk. You can add sidewalk clearing to the same booking as your driveway."],
     ["Who does the plowing?", "Independent local plow operators who use DRIFT to find jobs. They're not DRIFT employees — DRIFT is the app that connects you, handles booking and payment, and gives you live tracking and photos."],
   ];
 
@@ -519,7 +637,8 @@ export default function Landing({ onStart, onLegal }) {
 
   return (
     <div style={{ minHeight: "100vh", background: L.bg, color: L.ice, fontFamily: BODY, overflowX: "hidden", WebkitFontSmoothing: "antialiased" }}>
-      <style>{`
+      {/* dangerouslySetInnerHTML so the pre-rendered HTML matches exactly (no escaped quotes) */}
+      <style dangerouslySetInnerHTML={{ __html: `
         html{scroll-behavior:smooth}
         .lp-btn{transition:transform .18s cubic-bezier(.2,.8,.2,1),box-shadow .25s ease,background .2s ease}
         .lp-btn:not(.lp-btn-ghost):hover{transform:translateY(-2px);box-shadow:0 12px 34px ${L.amber}55}
@@ -565,7 +684,13 @@ export default function Landing({ onStart, onLegal }) {
         @media(max-width:640px){.lp-mk-lbl{font-size:15px}.lp-mk-hq .lp-mk-lbl{font-size:20px}.lp-mk-lbl em{display:none}}
         .lp-step{transition:transform .3s cubic-bezier(.2,.8,.2,1),border-color .3s}
         .lp-step:hover{transform:translateY(-6px);border-color:${L.amber}66!important}
-        .lp-svc{transition:transform .3s cubic-bezier(.2,.8,.2,1),background .3s}
+        .lp-svc{transition:transform .3s cubic-bezier(.2,.8,.2,1),background .3s,border-color .3s}
+        .lp-svc:focus-visible,.lp-chip:focus-visible{outline:2px solid ${L.amberHot};outline-offset:3px}
+        .lp-chip{display:inline-flex;align-items:center;gap:8px;padding:10px 15px;border-radius:999px;border:1px solid ${L.line};background:${L.panel};color:${L.ice};text-decoration:none;font:500 14.5px ${BODY};transition:border-color .2s,background .2s}
+        .lp-chip:hover{border-color:${L.amber}88;background:${L.panel2}}
+        .lp-fcol{display:flex;flex-direction:column;gap:9px}.lp-fcol a{text-decoration:none}
+        .lp-pc input:focus{border-color:${L.amber}!important;box-shadow:0 0 0 3px ${L.amber}33}
+        .lp-pc input::placeholder{color:${L.dim}}
         .lp-svc:hover{transform:translateY(-4px);background:${L.panel2}!important}
         @media(prefers-reduced-motion:reduce){
           *{animation:none!important;transition:none!important}
@@ -576,6 +701,8 @@ export default function Landing({ onStart, onLegal }) {
           .lp-hero{grid-template-columns:1fr!important;padding-top:44px!important;gap:56px!important}
           .lp-driver{grid-template-columns:1fr!important}
           .lp-money{grid-template-columns:1fr!important}
+          .lp-guides{grid-template-columns:1fr!important}
+          .lp-nav-links{display:none!important}
         }
         @media(max-width:640px){
           .lp-section{padding:76px 20px!important}
@@ -591,8 +718,12 @@ export default function Landing({ onStart, onLegal }) {
           .lp-town{transform:scale(1.8)}
           .lp-st{display:none}
           .lp-lake{font-size:20px!important}
+          .lp-proof{grid-template-columns:1fr 1fr!important}
+          .lp-msteps{grid-template-columns:1fr!important}
+          .lp-proof>div:nth-child(3){border-left:none!important}
+          .lp-proof>div:nth-child(n+3){border-top:1px solid ${L.line}}
         }
-      `}</style>
+      ` }} />
 
       {/* ============ NAV ============ */}
       <nav style={{ position: "sticky", top: 0, zIndex: 40, background: "rgba(6,8,12,.72)", backdropFilter: "saturate(160%) blur(18px)",
@@ -604,10 +735,12 @@ export default function Landing({ onStart, onLegal }) {
             </span>
             <span style={{ font: `900 26px/1 ${DISPLAY}`, letterSpacing: ".06em", color: L.ice }}>DRIFT</span>
           </a>
-          <div className="lp-nav-links" style={{ display: "flex", gap: 26 }}>
+          <div className="lp-nav-links" style={{ display: "flex", gap: 22 }}>
             <a className="lp-link" href="#how" style={{ textDecoration: "none" }}>How it works</a>
             <a className="lp-link" href="#pricing" style={{ textDecoration: "none" }}>Pricing</a>
             <a className="lp-link" href="#area" style={{ textDecoration: "none" }}>Service area</a>
+            <a className="lp-link" href="/faq/" style={{ textDecoration: "none" }}>FAQ</a>
+            <a className="lp-link" href="/learn/" style={{ textDecoration: "none" }}>Learn</a>
             <button className="lp-link" onClick={goDrive}>Drive with us</button>
           </div>
           <Btn onClick={onStart} style={{ padding: "10px 18px", fontSize: 14 }}>Get started</Btn>
@@ -628,17 +761,14 @@ export default function Landing({ onStart, onLegal }) {
             <div className="lp-rise" style={{ display: "inline-flex", alignItems: "center", gap: 10, padding: "7px 14px", borderRadius: 999,
               border: `1px solid ${L.line}`, background: "rgba(16,21,30,.6)" }}>
               <span className="lp-strobe" style={{ width: 7, height: 7, borderRadius: "50%", background: L.amber }} />
-              <Mono style={{ color: L.mist }}><span className="lp-pill">Duluth · Superior · Hermantown · Cloquet</span></Mono>
+              <Mono style={{ color: L.mist }}><span className="lp-pill">Snow plowing · Duluth · Superior · Hermantown</span></Mono>
             </div>
             <PlowedHeadline />
-            <p className="lp-rise" style={{ animationDelay: "1.2s", font: `400 clamp(17px,1.8vw,20px)/1.55 ${BODY}`, color: L.mist, maxWidth: 520, margin: "0 0 34px" }}>
-              On-demand snow removal from local plow operators. Map your property once, name your price every storm,
-              track the truck live — and pay only when it's done. <span style={{ color: L.ice }}>No contracts. Ever.</span>
+            <p className="lp-rise" style={{ animationDelay: "1.2s", font: `400 clamp(17px,1.8vw,20px)/1.55 ${BODY}`, color: L.mist, maxWidth: 540, margin: "0 0 26px" }}>
+              On-demand snow plowing in Duluth, Superior and Hermantown from local plow operators. Map your driveway once, book every storm
+              in one tap, track the truck live, and pay only when it's done. <span style={{ color: L.ice }}>No contracts. Ever.</span>
             </p>
-            <div className="lp-rise lp-ctas" style={{ animationDelay: "1.35s", display: "flex", gap: 12, flexWrap: "wrap" }}>
-              <Btn big onClick={onStart}>Get my driveway plowed <span aria-hidden>→</span></Btn>
-              <Btn big ghost onClick={goDrive}><EmojiIcon e="plowtruck" s={18} color={L.amber} /> I have a plow</Btn>
-            </div>
+            <MapStart onStart={onStart} goDrive={goDrive} />
             <ForecastStrip />
           </div>
           <div className="lp-rise" style={{ animationDelay: ".3s" }}><PhoneDemo /></div>
@@ -647,6 +777,7 @@ export default function Landing({ onStart, onLegal }) {
 
       {/* ============ MARQUEE ============ */}
       <div style={{ position: "relative", zIndex: 3, padding: "10px 0 0" }}><Marquee /></div>
+      <ProofBar />
 
       {/* ============ HOW IT WORKS ============ */}
       <Section id="how" kicker="How it works" title={<>Flurry to <span style={{ color: L.amber }}>cleared</span> in four taps.</>}
@@ -673,14 +804,14 @@ export default function Landing({ onStart, onLegal }) {
           {/* receipt */}
           <div style={{ background: L.snow, color: "#10141B", borderRadius: 22, padding: "30px 28px 26px", position: "relative",
             boxShadow: "0 30px 70px rgba(0,0,0,.45)", transform: "rotate(-1deg)" }}>
-            <Mono style={{ color: "#6B7686" }}>Example · 2-car driveway</Mono>
+            <Mono style={{ color: "#566170" }}>Example · 2-car driveway, suggested price</Mono>
             <div style={{ font: `900 44px/1 ${DISPLAY}`, textTransform: "uppercase", margin: "10px 0 18px" }}>Your receipt</div>
-            {[["Your offer", "$38"], ["Driver call-out fee", "$10"], ["DRIFT booking fee", "$5"]].map(([l, v]) => (
+            {[["Your offer", `$${EX.offer}`], ["Driver call-out fee", "$10"], ["DRIFT booking fee", "$5"]].map(([l, v]) => (
               <div key={l} style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px dashed #C9D2DD",
                 font: `500 16px ${BODY}` }}><span>{l}</span><span style={{ font: `500 16px ${MONO}` }}>{v}</span></div>
             ))}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "16px 0 4px" }}>
-              <span style={{ font: `600 17px ${BODY}` }}>Total</span><span style={{ font: `900 46px/1 ${DISPLAY}` }}>$53</span>
+              <span style={{ font: `600 17px ${BODY}` }}>Total</span><span style={{ font: `900 46px/1 ${DISPLAY}` }}>${EX.total}</span>
             </div>
             <div style={{ font: `500 13px/1.5 ${BODY}`, color: "#4B5563", marginTop: 8 }}>
               Charged only after the job is done. No surge fees, no subscriptions, nothing hidden.</div>
@@ -691,22 +822,22 @@ export default function Landing({ onStart, onLegal }) {
           </div>
           {/* split */}
           <div style={{ background: L.panel, border: `1px solid ${L.line}`, borderRadius: 22, padding: "30px 28px", display: "flex", flexDirection: "column" }}>
-            <Mono style={{ color: L.dim }}>Where your $53 goes</Mono>
+            <Mono style={{ color: L.dim }}>Where your ${EX.total} goes</Mono>
             <div style={{ display: "flex", height: 64, borderRadius: 14, overflow: "hidden", margin: "18px 0 22px", border: `1px solid ${L.line}` }}>
-              <div style={{ flex: 40, background: `linear-gradient(90deg, ${L.amber}, ${L.amberHot})`, display: "flex", alignItems: "center", padding: "0 16px" }}>
-                <span style={{ font: `900 30px ${DISPLAY}`, color: L.onAmber }}>$40</span></div>
-              <div style={{ flex: 13, background: "#2A3446", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <span style={{ font: `800 20px ${DISPLAY}`, color: L.mist }}>$13</span></div>
+              <div style={{ flex: DRV, background: `linear-gradient(90deg, ${L.amber}, ${L.amberHot})`, display: "flex", alignItems: "center", padding: "0 16px" }}>
+                <span style={{ font: `900 30px ${DISPLAY}`, color: L.onAmber }}>${DRV}</span></div>
+              <div style={{ flex: EX.total - DRV, background: "#2A3446", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <span style={{ font: `800 20px ${DISPLAY}`, color: L.mist }}>${EX.total - DRV}</span></div>
             </div>
             <div style={{ display: "grid", gap: 16, flex: 1 }}>
               <div style={{ display: "flex", gap: 14 }}>
                 <span style={{ width: 12, height: 12, borderRadius: 3, background: L.amber, marginTop: 5, flexShrink: 0 }} />
-                <div><div style={{ font: `600 16px ${BODY}`, color: L.ice }}>Your driver · $40</div>
+                <div><div style={{ font: `600 16px ${BODY}`, color: L.ice }}>Your driver · ${DRV}</div>
                   <div style={{ font: `400 14px/1.5 ${BODY}`, color: L.mist, marginTop: 2 }}>80% of your offer plus the full $10 call-out fee. And every dollar you tip.</div></div>
               </div>
               <div style={{ display: "flex", gap: 14 }}>
                 <span style={{ width: 12, height: 12, borderRadius: 3, background: "#4A5A74", marginTop: 5, flexShrink: 0 }} />
-                <div><div style={{ font: `600 16px ${BODY}`, color: L.ice }}>DRIFT · $13</div>
+                <div><div style={{ font: `600 16px ${BODY}`, color: L.ice }}>DRIFT · ${EX.total - DRV}</div>
                   <div style={{ font: `400 14px/1.5 ${BODY}`, color: L.mist, marginTop: 2 }}>The $5 booking fee plus 20% of the offer. Covers card processing, the app, and support.</div></div>
               </div>
             </div>
@@ -720,20 +851,24 @@ export default function Landing({ onStart, onLegal }) {
       <Section kicker="Services" title="Built for the whole storm." lead="Plowing comes first — with backup for everything else a Duluth winter throws at you.">
         <div className="lp-svcs" style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr", gap: 14 }}>
           {[
-            ["plowtruck", "Driveway plowing", "Cleared edge to edge, exactly how you mapped it.", true],
-            ["broom", "Sidewalks", "Walks and steps, before the city's 24-hour deadline."],
-            ["car", "Car dig-outs", "Freed from the berm the city plow left behind."],
-            ["battery", "Jump-starts", "Dead battery at -20°? Someone nearby can help."],
-          ].map(([ic, t, d, hero]) => (
-            <div key={t} className={`lp-svc${hero ? " lp-svc-hero" : ""}`} style={{ position: "relative", overflow: "hidden", borderRadius: 22, padding: hero ? "30px 28px" : "26px 22px",
+            ["plowtruck", "Driveway plowing", "Cleared edge to edge, exactly how you mapped it.", "Priced from your map", "snow-plowing-duluth-mn", true],
+            ["broom", "Sidewalks", "Walks and steps, before the city's 24-hour deadline.", "Priced by length", "sidewalk-snow-removal-duluth"],
+            ["car", "Car dig-outs", "Freed from the berm the city plow left behind.", "Flat price", "car-dig-out-duluth"],
+            ["battery", "Jump-starts", "Dead battery at -20°? Someone nearby can help.", "Flat price", "jump-start-duluth"],
+          ].map(([ic, t, d, price, slug, hero]) => (
+            <a key={t} href={`/${slug}/`} className={`lp-svc${hero ? " lp-svc-hero" : ""}`} style={{ position: "relative", overflow: "hidden", borderRadius: 22, padding: hero ? "28px 26px" : "24px 22px",
               background: hero ? `linear-gradient(150deg, ${L.amber}22, ${L.panel} 55%)` : L.panel, border: `1px solid ${hero ? L.amber + "55" : L.line}`,
-              minHeight: 230, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
-              <EmojiIcon e={ic} s={hero ? 40 : 30} color={hero ? L.amber : L.ice} />
+              minHeight: 210, display: "flex", flexDirection: "column", justifyContent: "space-between", gap: 26, textDecoration: "none", color: "inherit" }}>
+              <span style={{ width: hero ? 54 : 46, height: hero ? 54 : 46, borderRadius: 14, display: "grid", placeItems: "center",
+                background: hero ? `${L.amber}22` : "rgba(255,255,255,.05)", border: `1px solid ${hero ? L.amber + "55" : L.line}` }}>
+                <EmojiIcon e={ic} s={hero ? 28 : 23} color={hero ? L.amber : L.ice} /></span>
               <div>
-                <div style={{ font: `800 ${hero ? 36 : 26}px/1 ${DISPLAY}`, textTransform: "uppercase", color: L.ice }}>{t}</div>
+                <h3 style={{ font: `800 ${hero ? 36 : 26}px/1 ${DISPLAY}`, textTransform: "uppercase", color: L.ice, margin: 0 }}>{t}</h3>
                 <div style={{ font: `400 14px/1.5 ${BODY}`, color: L.mist, marginTop: 8 }}>{d}</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14, font: `600 13.5px ${BODY}` }}>
+                  <span style={{ color: hero ? L.amber : L.ice }}>{price}</span><span aria-hidden style={{ color: L.mist }}>→</span></div>
               </div>
-            </div>
+            </a>
           ))}
         </div>
       </Section>
@@ -768,6 +903,28 @@ export default function Landing({ onStart, onLegal }) {
       <Section id="area" kicker="Service area" title="Head of the Lakes." lead="On-demand snow removal across the Twin Ports and the towns around them."
         style={{ paddingTop: 40 }}>
         <MapboxServiceArea />
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 16 }}>
+          {CITY_PAGES.map(([n, slug]) => (
+            <a key={slug} href={`/${slug}/`} className="lp-chip">Snow plowing in {n} <span aria-hidden>→</span></a>
+          ))}
+        </div>
+      </Section>
+
+      {/* ============ LOCAL KNOW-HOW (guides) ============ */}
+      <Section kicker="Duluth winter, handled" title="Know the rules. Skip the ticket." style={{ paddingTop: 40 }}
+        lead="Duluth gives you 24 hours to clear your sidewalk, moves cars for snow emergencies and gets around 86 inches of snow a winter. Here's what to know.">
+        <div className="lp-guides" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14 }}>
+          {GUIDE_PAGES.map(([t, slug, d], k) => (
+            <a key={slug} href={`/${slug}/`} className="lp-svc" style={{ display: "block", textDecoration: "none", color: "inherit", borderRadius: 22, padding: "24px 22px",
+              background: L.panel, border: `1px solid ${L.line}` }}>
+              <Mono style={{ color: L.amber }}>Guide {String(k + 1).padStart(2, "0")}</Mono>
+              <h3 style={{ font: `800 28px/1 ${DISPLAY}`, textTransform: "uppercase", color: L.ice, margin: "14px 0 10px" }}>{t}</h3>
+              <p style={{ font: `400 14.5px/1.5 ${BODY}`, color: L.mist, margin: "0 0 16px" }}>{d}</p>
+              <span style={{ font: `600 14px ${BODY}`, color: L.amber }}>Read the guide →</span>
+            </a>
+          ))}
+        </div>
+        <div style={{ marginTop: 18 }}><a href="/learn/" className="lp-chip">Visit the learning center <span aria-hidden>→</span></a></div>
       </Section>
 
       {/* ============ FAQ ============ */}
@@ -785,11 +942,13 @@ export default function Landing({ onStart, onLegal }) {
                     display: "grid", placeItems: "center", color: open ? L.amber : L.mist, fontSize: 20, fontWeight: 300,
                     transform: open ? "rotate(45deg)" : "none", transition: "transform .25s, border-color .25s" }}>+</span>
                 </button>
-                {open && <div style={{ padding: "0 52px 26px 50px", font: `400 16px/1.6 ${BODY}`, color: L.mist, animation: "lp-fadeUp .3s ease" }}>{a}</div>}
+                {/* always in the HTML (search engines read the answers); shown when open */}
+                <div hidden={!open} style={{ padding: "0 52px 26px 50px", font: `400 16px/1.6 ${BODY}`, color: L.mist, animation: open ? "lp-fadeUp .3s ease" : undefined }}>{a}</div>
               </div>
             );
           })}
         </div>
+        <div style={{ marginTop: 22 }}><a href="/faq/" className="lp-chip">See all questions <span aria-hidden>→</span></a></div>
       </Section>
 
       {/* ============ FINAL CTA ============ */}
@@ -820,6 +979,18 @@ export default function Landing({ onStart, onLegal }) {
               The app that connects you with independent local plow operators. Duluth, MN ·{" "}
               <a href="mailto:support@driftplowing.com" style={{ color: L.mist }}>support@driftplowing.com</a></p>
           </div>
+          <nav aria-label="Snow plowing by town" className="lp-fcol">
+            <Mono style={{ color: L.dim }}>Areas</Mono>
+            {CITY_PAGES.map(([n, slug]) => <a key={slug} className="lp-link" href={`/${slug}/`}>Snow plowing {n}</a>)}
+          </nav>
+          <nav aria-label="Guides" className="lp-fcol">
+            <Mono style={{ color: L.dim }}>Guides</Mono>
+            {GUIDE_PAGES.map(([t, slug]) => <a key={slug} className="lp-link" href={`/${slug}/`}>{t}</a>)}
+            <a className="lp-link" href="/sidewalk-snow-removal-duluth/">Sidewalk snow removal</a>
+            <a className="lp-link" href="/faq/">FAQ</a>
+            <a className="lp-link" href="/learn/">Learning center</a>
+            <a className="lp-link" href="/plow-jobs-duluth-mn/">Snow plow jobs</a>
+          </nav>
           <div style={{ display: "flex", gap: "12px 26px", flexWrap: "wrap" }}>
             <button className="lp-link" onClick={onStart}>Get a plow</button>
             <button className="lp-link" onClick={goDrive}>Drive with DRIFT</button>

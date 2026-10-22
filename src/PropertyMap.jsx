@@ -238,7 +238,7 @@ const hazardType = (id) => HAZARD_TYPES.find((t) => t.id === id) || HAZARD_TYPES
 // ============================================================
 // MapPropertyDesigner — starting outline + tap-to-outline
 // ============================================================
-export default function MapPropertyDesigner({ existing, onDone, onQuote, saveLabel = "Save property" }) {
+export default function MapPropertyDesigner({ existing, onDone, onQuote, saveLabel = "Save property", autoStart = false }) {
   const el = useRef(null), mapRef = useRef(null), modeRef = useRef("idle"), hazMarkers = useRef([]), centerRef = useRef(existing?.center || null);
   const zonesRef = useRef([]), pendingRef = useRef(null), autoPlacedRef = useRef(false);
   const [ready, setReady] = useState(false);
@@ -304,6 +304,14 @@ export default function MapPropertyDesigner({ existing, onDone, onQuote, saveLab
         setAutoPlaced(true);
       }
     });
+
+    // Arrived from the homepage price check with an address: start with an outline on their house.
+    if (autoStart && existing?.center && !(existing.features || []).length) {
+      setPending({ mode: "plow", coords: rectAround(existing.center.lng, existing.center.lat, START_W_FT, START_L_FT) });
+      setAutoPlaced(true);
+      // show their address in the search box (without running a new search)
+      try { if (existing.address) geocoder._inputEl.value = existing.address.replace(/, United States$/, ""); } catch { /* geocoder internals changed */ }
+    }
 
     map.on("click", (e) => {
       const m = modeRef.current;

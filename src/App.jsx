@@ -13,9 +13,10 @@ function LiveMap(props) {
 import { useAuth } from "./lib/auth.jsx";
 import { supabaseEnabled } from "./lib/supabase.js";
 import { recordLegalAcceptance, loadProperties, replaceProperties, rateJob, pushDriverLocation, subscribeToDriverLocation, createJobFromOrder, patchJob, sendMessage, subscribeToMessages, loadMessages,
-  updateMyProfile, rowToOrder, fetchJob, listOpenJobs, listScheduledJobs, listMyQueue, queuePosition, lastCompletedJob, subscribeOpenJobs, claimJob, getProfile, profileToDriver, setDriverStatus, becomeDriver, cancelJob, expireJob, subscribeToJob, loadActiveJob, loadAccountStats, loadReviews, listFavorites, addFavorite, removeFavorite, setSnowAlerts } from "./lib/db.js";
+  updateMyProfile, rowToOrder, fetchJob, listOpenJobs, listScheduledJobs, listMyQueue, queuePosition, lastCompletedJob, subscribeOpenJobs, claimJob, getProfile, profileToDriver, setDriverStatus, becomeDriver, cancelJob, expireJob, subscribeToJob, loadActiveJob, loadAccountStats, loadReviews, listFavorites, addFavorite, removeFavorite, setSnowAlerts, listRegulars, driverYear, saveJobMiles } from "./lib/db.js";
 import { STRIPE_ENABLED, STRIPE_PK, getStripe, startHold, confirmHold, cancelJobPaid, completeJobPaid, tipJob, connectSession, connectStatus, connectDashboard, authedFetch, announceJob,
-  schedClaim, schedBackout, schedCheckin, schedStart, schedTick } from "./lib/payments.js";
+  schedClaim, schedBackout, schedCheckin, schedStart, schedTick, previewJobs, reportIssue, marketStats } from "./lib/payments.js";
+import { LEVELS, driverLevel, nextLevel, mileageRate } from "./lib/levels.js";
 import { uploadJobPhoto, uploadDriverDoc, myDriverDocs, signedUrl } from "./lib/photos.js";
 import { unlockRinger, startRing, stopRing, keepAwake, isStandalone, isIOS, canPromptInstall, promptInstall,
   onInstallChange, pushSupported, enablePush, pushEnabled, localAlert } from "./lib/alerts.js";
@@ -468,6 +469,7 @@ function reducer(s, a) {
       driverReferral: { ...s.driverReferral, code: a.name ? "PLOW-" + a.name.split(" ")[0].toUpperCase() : s.driverReferral.code },
     };
     case "QUEUE": return { ...s, queued: s.queued + 1 };
+    case "DRIVER_PATCH": return { ...s, driver: { ...s.driver, ...a.patch } };
     case "REFER_RIDER": {
       const r = s.riderReferral;
       return { ...s, riderReferral: { ...r, invited: r.invited + 1,
@@ -491,7 +493,8 @@ function reducer(s, a) {
         return { ...s, ...real, userId: a.userId, role: "driver", profile: a.profile || s.profile,
           driverOnboarded: !!a.isDriver,
           driver: { ...s.driver, id: a.userId, name: d.name || a.profile?.name || "",
-            truck: d.truck || "", tools: d.tools || [], rating: d.rating ?? null, reviews: d.reviews || 0, jobs: d.jobs ?? 0, lng: null, lat: null } };
+            truck: d.truck || "", tools: d.tools || [], rating: d.rating ?? null, reviews: d.reviews || 0, jobs: d.jobs ?? 0, lng: null, lat: null,
+            lateCancels: d.lateCancels || 0, home: d.home || null, homeRadius: d.homeRadius ?? null } };
       }
       const props = a.properties || [];
       return { ...s, ...real, userId: a.userId, role: "rider", profile: a.profile || s.profile,
@@ -1445,7 +1448,10 @@ function AddressSearch({ value, onChange, picked, onPick, compact }) {
 function Onboarding() {
   const { state, dispatch } = useStore();
   const [step, setStep] = useState(state.userId ? 1 : 0); // signed-in users skip the welcome hero
-  const [prop, setProp] = useState(null); // { address, center, features, sqft, mapImg }
+  // The homepage price check can hand over the address they typed, so the map opens on their house.
+  const [prop, setProp] = useState(() => {
+    try { const p = JSON.parse(localStorage.getItem("drift.prefill") || "null"); return p?.center ? { address: p.address, center: p.center } : null; } catch { return null; }
+  }); // { address, center, features, sqft, mapImg }
   const [profile, setProfile] = useState({ name: "", phone: "", email: "" });
   const [valid, setValid] = useState({});
 
@@ -1463,6 +1469,7 @@ function Onboarding() {
       features: prop?.features || [], sqft: prop?.sqft || 0, center: prop?.center, mapImg: prop?.mapImg,
       zones: [],
     };
+    try { localStorage.removeItem("drift.prefill"); } catch { /* ignore */ }
     dispatch({ type: "ONBOARD_DONE", profile: fp, property });
     dispatch({ type: "TOAST", msg: `Welcome${fp?.name ? ", " + fp.name.split(" ")[0] : ""}! You're all set.` });
   };
@@ -1529,7 +1536,7 @@ function Onboarding() {
           <h2 style={h2}>Where should we plow?</h2>
           <p style={sub}>Search your address and we'll place a starting outline on the satellite view. Confirm it or redraw it — we measure it and price it for you.</p>
           <div style={{ height: 14 }} />
-          <MapPropertyDesigner existing={prop} saveLabel="Continue"
+          <MapPropertyDesigner existing={prop} saveLabel="Continue" autoStart
             onQuote={(sqft) => quoteJob({ jobType: "driveway", sqft }).suggested}
             onDone={(data) => { setProp(data); go(state.userId ? 3 : 2); }} />
         </Fade>
@@ -2630,6 +2637,10 @@ function RiderTracking() {
   // Favorite drivers get the offer alone for 2 minutes; then everyone else is alerted.
   const dibsMs = LIVE && o.state === "requested" && o.exclusiveUntil && !needsCard ? Math.max(0, o.exclusiveUntil - now) : 0;
   const favCount = (o.preferredDriverIds || []).length;
+  // First look goes to your favorites, or (if none are online) to Elite drivers nearby.
+  const [myFavIds, setMyFavIds] = useState(null);
+  useEffect(() => { if (LIVE && favCount) listFavorites(state.userId).then((fs) => setMyFavIds((fs || []).map((f) => f.id))); }, [LIVE, favCount]);
+  const dibsToFavs = !myFavIds || (o.preferredDriverIds || []).some((id) => myFavIds.includes(id));
   useEffect(() => {
     if (!LIVE || !o.jobId || o.state !== "requested" || !o.exclusiveUntil || needsCard) return;
     const wait = Math.max(0, o.exclusiveUntil - Date.now()) + 1500;
@@ -2714,7 +2725,7 @@ function RiderTracking() {
   const big = finding ? "Finding your plow" : shownArrived ? "Plowing now" : LIVE ? (liveEta ? `${liveEta.mins} min` : ahead > 0 ? "You're next" : "On the way") : `${Math.max(1, Math.ceil(eta))} min`;
   const line = finding ? (LIVE ? (needsCard ? "Hold your card to send your offer to drivers"
         : !o.jobId ? "Sending your offer…"
-        : dibsMs > 0 ? `Sent to your favorite driver${favCount === 1 ? "" : "s"} first · everyone else sees it in ${Math.floor(dibsMs / 60000)}:${String(Math.floor(dibsMs / 1000) % 60).padStart(2, "0")}`
+        : dibsMs > 0 ? `${dibsToFavs ? `Sent to your favorite driver${favCount === 1 ? "" : "s"} first` : "Sent to top-rated drivers nearby first"} · everyone else sees it in ${Math.floor(dibsMs / 60000)}:${String(Math.floor(dibsMs / 1000) % 60).padStart(2, "0")}`
         : `Your $${o.quote?.offer} offer is live for drivers nearby${mmss ? ` · ${mmss} left` : ""}`)
       : "Sent to plows near you — usually under 2 minutes")
     : shownArrived ? `${first} is clearing ${o.property?.label?.toLowerCase() === "home" ? "your driveway" : (o.property?.label || "your property")}`
@@ -3850,9 +3861,21 @@ function DriverDocsCard() {
   );
 }
 
+const INSURANCE_NOTE = (
+  <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "12px 13px", borderRadius: 14, background: C.slate, border: `1px solid ${C.line}` }}>
+    <span style={{ color: C.plow, display: "flex", marginTop: 1 }}><Icon e="shield" s={17} /></span>
+    <div style={{ font: `400 13px/1.45 ${FB}`, color: C.mist }}>
+      <b style={{ color: C.ice }}>About insurance:</b> DRIFT doesn't insure you or your truck. Most personal auto policies don't cover plowing for pay, so check with your agent,
+      or compare snow-plowing business coverage online at{" "}
+      <a href="https://www.nextinsurance.com/" target="_blank" rel="noopener noreferrer" style={{ color: C.plow, fontWeight: 600 }}>NEXT Insurance</a>.</div>
+  </div>
+);
+
 function DriverOnboarding() {
   const { state, dispatch } = useStore();
   const [step, setStep] = useState(0); // 0 intro, 1 identity, 2 equipment, 3 contractor agreement, 4 payout
+  const [browsing, setBrowsing] = useState(false); // look at open jobs before any paperwork
+  const market = useMarket();
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [truck, setTruck] = useState("");
@@ -3905,6 +3928,12 @@ function DriverOnboarding() {
     );
   };
 
+  if (browsing) return (
+    <div style={{ padding: `10px ${S.xl}px 0`, flex: 1 }}>
+      <JobsPreview onBack={() => setBrowsing(false)} onSetup={() => { setBrowsing(false); setStep(1); }} />
+    </div>
+  );
+
   return (
     <div style={{ padding: `0 ${S.xl}px`, flex: 1, display: "flex", flexDirection: "column" }}>
       {step > 0 && (
@@ -3925,9 +3954,11 @@ function DriverOnboarding() {
           </div>
           <h1 style={{ font: `800 45px/1 ${FD}`, textTransform: "uppercase", margin: "0 0 10px", textAlign: "center" }}>
             Plow on your<br />own schedule.</h1>
-          <p style={{ ...sub, maxWidth: 300, margin: "0 auto 20px", textAlign: "center", fontSize: 15 }}>
+          <p style={{ ...sub, maxWidth: 300, margin: "0 auto 16px", textAlign: "center", fontSize: 15 }}>
             Turn on when the snow flies. Take the jobs you want. You're your own boss.
           </p>
+          <div style={{ font: `500 12px ${FM}`, letterSpacing: ".08em", textTransform: "uppercase", color: C.mist, textAlign: "center", marginBottom: 8 }}>Right now in Duluth</div>
+          <DemandStrip m={market} style={{ marginBottom: 12 }} />
           <div style={{ display: "grid", gap: 10, marginBottom: S.xl }}>
             {[["cash", "80% of every offer + $10 per job", "The call-out fee and all tips are yours"],
               ["bolt", "Work when you want", "Go online during storms — take only the jobs you like"],
@@ -3940,7 +3971,9 @@ function DriverOnboarding() {
               </div>
             ))}
           </div>
-          <Btn full kind="good" onClick={() => setStep(1)}>Start driver setup</Btn>
+          <Btn full kind="good" onClick={() => setBrowsing(true)}>See open jobs and pay first</Btn>
+          <div style={{ height: 8 }} />
+          <Btn full kind="dark" onClick={() => setStep(1)}>Start driver setup · about 3 min</Btn>
           <button onClick={() => dispatch({ type: "ROLE", role: "rider" })}
             style={{ width: "100%", marginTop: S.md, background: "transparent", border: "none", cursor: "pointer",
               color: C.mist, font: `600 14px ${FB}`, padding: 12 }}>I need a plow instead →</button>
@@ -3995,6 +4028,7 @@ function DriverOnboarding() {
               placeholder="F-350 · 9ft V-Plow" />
             {!LIVE_ONB && <UploadRow k="plate" label="Registration / plate" hint="Proof the rig is yours" />}
             {LIVE_ONB && <DocUpload kind="registration" label="Vehicle registration" hint="Photo of the registration card" onDone={() => setUploads(u => ({ ...u, plate: "verified" }))} />}
+            {INSURANCE_NOTE}
           </div>
           <div style={{ position: "sticky", bottom: 16 }}>
             <Btn full kind="good" onClick={() => setStep(3)} disabled={!(tools.length && uploads.plate)}>
@@ -4043,6 +4077,406 @@ function DriverOnboarding() {
     </div>
   );
 }
+
+// ============================================================
+// Driver tools: demand numbers, browse-before-setup, storm mode, home zone,
+// levels, regulars, problem reports, mileage + tax summary.
+// ============================================================
+
+// How busy DRIFT is (public counts). Demo mode shows example numbers.
+const DEMO_MARKET = { openNow: 3, openScheduled: 6, openPay: 410 }; // open work only, never customer/driver counts
+function useMarket() {
+  const { state } = useStore();
+  const LIVE = isLive(state) || supabaseEnabled;
+  const [m, setM] = useState(LIVE ? null : DEMO_MARKET);
+  useEffect(() => {
+    if (!LIVE) return;
+    let on = true;
+    const load = () => marketStats().then((x) => on && x && setM(x));
+    load(); const iv = setInterval(load, 60000);
+    return () => { on = false; clearInterval(iv); };
+  }, [LIVE]);
+  return m;
+}
+
+const kindLabel = (k) => (JOB_TYPES[k] || JOB_TYPES.driveway).label;
+
+// "Right now in Duluth" strip — three numbers that sell the gig.
+function DemandStrip({ m, style }) {
+  if (!m) return <Skeleton h={74} r={16} />;
+  const open = (m.openNow || 0) + (m.openScheduled || 0);
+  const cells = [[open, open === 1 ? "open job now" : "open jobs now"], [`$${(m.openPay || 0).toLocaleString()}`, "waiting to be earned"], ["80%", "+ $10 call-out per job"]];
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", background: C.slate, border: `1px solid ${C.line}`, borderRadius: 16, ...style }}>
+      {cells.map(([v, l], i) => (
+        <div key={l} style={{ padding: "13px 10px", borderLeft: i ? `1px solid ${C.lineSoft}` : "none", textAlign: "center" }}>
+          <div style={{ font: `800 28px/1 ${FD}`, color: i === 1 ? C.push : C.ice }}>{v ?? "—"}</div>
+          <div style={{ font: `400 12.5px/1.25 ${FB}`, color: C.mist, marginTop: 5 }}>{l}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Browse open jobs before any paperwork: approximate spots + what each one pays.
+function JobsPreview({ onSetup, onBack }) {
+  const { state } = useStore();
+  const LIVE = isLive(state);
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState(null);
+  const [pick, setPick] = useState(null);
+  useEffect(() => {
+    if (!LIVE) {
+      const c = DULUTH_CENTER;
+      setD({ market: DEMO_MARKET, jobs: [
+        { id: "p1", kind: "driveway", lat: c.lat + .012, lng: c.lng - .02, pay: 42, sqft: 620, depth: '4–8"' },
+        { id: "p2", kind: "driveway", lat: c.lat + .03, lng: c.lng + .015, pay: 61, sqft: 1400 },
+        { id: "p3", kind: "sidewalk", lat: c.lat - .004, lng: c.lng + .03, pay: 27 },
+        { id: "p4", kind: "driveway", lat: c.lat + .05, lng: c.lng - .06, pay: 48, sqft: 900, scheduledFor: Date.now() + 14 * 3600e3 },
+      ] });
+      return;
+    }
+    previewJobs().then(setD).catch((e) => setErr(e.message));
+  }, [LIVE]);
+  const jobs = d?.jobs || [];
+  const total = jobs.reduce((t, j) => t + (j.pay || 0), 0);
+  const markers = jobs.filter((j) => j.lat != null).map((j) => ({ lat: j.lat, lng: j.lng, label: `$${j.pay}` }));
+  return (
+    <Fade k="jp">
+      <button onClick={onBack} style={{ ...miniBtn, marginBottom: 14 }}>‹ Back</button>
+      <Eyebrow color={C.push}>Open jobs right now</Eyebrow>
+      <h2 style={{ ...H(28), margin: "6px 0 4px" }}>{d ? (jobs.length ? `$${total} waiting on ${jobs.length} job${jobs.length > 1 ? "s" : ""}` : "No open jobs this minute") : "Loading jobs…"}</h2>
+      <p style={{ ...sub, fontSize: 14, marginBottom: 14 }}>
+        {jobs.length ? "This is your take-home pay for each job. Spots are approximate until you're set up." : "Jobs pour in when it snows. Finish setup now so you're ready and get alerts for the next storm."}</p>
+      {err && <p style={{ ...sub, color: C.danger }}>{err}</p>}
+      {MAP_ENABLED && markers.length > 0 && <div style={{ borderRadius: 18, overflow: "hidden", marginBottom: 12 }}>
+        <LiveMap center={DULUTH_CENTER} height={210} markers={markers} fit /></div>}
+      <div style={{ display: "grid", gap: 8 }}>
+        {!d && [0, 1, 2].map((i) => <Skeleton key={i} h={62} r={14} />)}
+        {jobs.map((j) => (
+          <button key={j.id} onClick={() => setPick(j)} style={{ display: "flex", gap: 12, alignItems: "center", padding: "12px 14px", textAlign: "left",
+            background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, cursor: "pointer", WebkitTapHighlightColor: "transparent" }}>
+            <div style={{ font: `800 26px/1 ${FD}`, color: C.push, minWidth: 58 }}>${j.pay}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ font: `600 14.5px ${FB}`, color: C.ice }}>{kindLabel(j.kind)}{j.sqft ? ` · ${j.sqft.toLocaleString()} sq ft` : ""}</div>
+              <div style={{ font: `400 12.5px ${FB}`, color: C.mist, marginTop: 3 }}>
+                {[j.scheduledFor ? `Scheduled ${fmtWindowLocal(new Date(j.scheduledFor).getTime())}` : "Needs a plow now", j.depth ? `${j.depth} snow` : null].filter(Boolean).join(" · ")}</div>
+            </div>
+            <Icon e="lock" s={15} color={C.mistDim} />
+          </button>
+        ))}
+      </div>
+      <div style={{ position: "sticky", bottom: 16, marginTop: 18 }}>
+        <Btn full kind="good" onClick={onSetup}>Finish setup to take jobs · about 3 min</Btn>
+      </div>
+      {pick && (
+        <Sheet onClose={() => setPick(null)}>
+          <div style={{ font: `800 48px/1 ${FD}`, color: C.push }}>${pick.pay}</div>
+          <div style={{ font: `600 15px ${FB}`, color: C.ice, marginTop: 6 }}>{kindLabel(pick.kind)}{pick.sqft ? ` · ${pick.sqft.toLocaleString()} sq ft` : ""}</div>
+          <p style={{ ...sub, fontSize: 14, margin: "10px 0 16px" }}>To take a job you need three quick things: a photo of your license, your truck, and the contractor agreement. Then jobs like this one ring your phone.</p>
+          <Btn full kind="good" onClick={onSetup}>Finish setup</Btn>
+          <div style={{ height: 8 }} />
+          <Btn full kind="dark" onClick={() => setPick(null)}>Keep looking</Btn>
+        </Sheet>
+      )}
+    </Fade>
+  );
+}
+
+// Storm mode: the night before / day of a storm, show the work that's waiting.
+function DriverStormCard({ onRoute }) {
+  const { state } = useStore();
+  const LIVE = isLive(state);
+  const m = useMarket();
+  const [f, setF] = useState(LIVE ? null : { next24: 5, next12: 2, range24: '4–6"' });
+  const [hide, setHide] = useState(false);
+  useEffect(() => { if (LIVE) fetchSnowForecast().then(setF); }, [LIVE]);
+  if (hide || !f || !(f.next24 >= 1)) return null;
+  const sched = m?.openScheduled || 0, now = m?.openNow || 0;
+  return (
+    <div style={{ marginBottom: 14, borderRadius: 18, padding: "16px 16px 14px", position: "relative", overflow: "hidden",
+      background: `linear-gradient(160deg, ${C.plow}26, ${C.slate} 60%)`, border: `1px solid ${C.plow}66` }}>
+      <button onClick={() => setHide(true)} aria-label="Dismiss" style={{ position: "absolute", top: 8, right: 8, background: "none", border: "none",
+        color: C.mistDim, cursor: "pointer", padding: 6 }}><Icon e="close" s={15} /></button>
+      <div style={{ font: `500 12px ${FM}`, letterSpacing: ".08em", textTransform: "uppercase", color: C.plow }}>Storm mode</div>
+      <div style={{ font: `800 30px/1.05 ${FD}`, textTransform: "uppercase", color: C.ice, marginTop: 6 }}>
+        {f.range24 || `${f.next24}"`} {f.next12 >= 1 ? "in the next 12 hrs" : "in the next 24 hrs"}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, margin: "12px 0 14px" }}>
+        {[[sched, "scheduled plows open"], [now, "need a plow now"], [m ? `$${(m.openPay || 0).toLocaleString()}` : null, "waiting to be earned"]].map(([v, l]) => (
+          <div key={l}><div style={{ font: `800 28px/1 ${FD}`, color: C.ice }}>{v ?? "—"}</div>
+            <div style={{ font: `400 12.5px/1.3 ${FB}`, color: C.mist, marginTop: 4 }}>{l}</div></div>
+        ))}
+      </div>
+      <button onClick={onRoute} style={{ width: "100%", minHeight: 52, borderRadius: 14, border: "none", cursor: "pointer",
+        background: C.plow, color: "#fff", font: `700 16px ${FB}`, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+        <Icon e="map" s={17} /> {sched ? "Build your route for tonight" : "Open your route"}</button>
+      <div style={{ font: `400 12.5px/1.4 ${FB}`, color: C.mist, marginTop: 9, textAlign: "center" }}>
+        Then go online when it starts to pile up. More customers book once it's falling.</div>
+    </div>
+  );
+}
+
+// Home zone: where you work from + how far you'll drive. Only jobs inside it ring your phone.
+const ZONE_OPTIONS = [5, 10, 15, 25, null];
+function HomeZoneSheet({ onClose }) {
+  const { state, dispatch } = useStore();
+  const d = state.driver;
+  const [home, setHome] = useState(d.home || null);
+  const [radius, setRadius] = useState(d.homeRadius ?? 15);
+  const [busy, setBusy] = useState(false);
+  const [locErr, setLocErr] = useState(null);
+  const locate = () => {
+    setLocErr(null);
+    if (!navigator.geolocation) { setLocErr("This phone can't share its location."); return; }
+    setBusy(true);
+    navigator.geolocation.getCurrentPosition(
+      (p) => { setHome({ lat: +p.coords.latitude.toFixed(5), lng: +p.coords.longitude.toFixed(5) }); setBusy(false); },
+      () => { setLocErr("Couldn't get your location. Allow location for DRIFT, or use Duluth's center."); setBusy(false); },
+      { enableHighAccuracy: false, timeout: 15000, maximumAge: 300000 });
+  };
+  const save = async () => {
+    const h = home || DULUTH_CENTER;
+    setBusy(true);
+    const r = isLive(state) ? await updateMyProfile(state.userId, { home_lat: h.lat, home_lng: h.lng, home_radius_mi: radius }) : {};
+    setBusy(false);
+    if (r?.error) { dispatch({ type: "TOAST", msg: `Couldn't save — ${r.error.message}` }); return; }
+    dispatch({ type: "DRIVER_PATCH", patch: { home: h, homeRadius: radius } });
+    dispatch({ type: "TOAST", msg: radius ? `Saved — you'll get jobs within ${radius} miles` : "Saved — you'll get jobs anywhere we serve" });
+    onClose();
+  };
+  return (
+    <Sheet onClose={onClose}>
+      <h3 style={{ ...H(24), margin: "0 0 4px" }}>Your home zone</h3>
+      <p style={{ ...sub, fontSize: 14, marginBottom: 14 }}>Where you start from and how far you'll go. You'll only get job alerts inside it, so no pings for jobs across town.</p>
+      {MAP_ENABLED && <div style={{ borderRadius: 16, overflow: "hidden", marginBottom: 12 }}>
+        <LiveMap center={home || DULUTH_CENTER} height={170} interactive={false}
+          markers={[{ ...(home || DULUTH_CENTER), kind: "truck", size: 30 }]} /></div>}
+      <button onClick={locate} disabled={busy} style={{ ...miniBtn, width: "100%", minHeight: 50, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 15 }}>
+        <Icon e="target" s={17} /> {home ? "Update to where I am now" : "Use where I am now"}</button>
+      <div style={{ font: `400 12.5px ${FB}`, color: locErr ? C.danger : C.mistDim, margin: "7px 2px 14px" }}>
+        {locErr || (home ? `Set at ${home.lat.toFixed(3)}, ${home.lng.toFixed(3)}. Do this from home or where you park the truck.` : "Do this from home or where you park the truck. Skip it and we'll use Duluth's center.")}</div>
+      <Eyebrow>How far will you drive?</Eyebrow>
+      <div role="radiogroup" style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 6, margin: "8px 0 18px" }}>
+        {ZONE_OPTIONS.map((r) => {
+          const on = radius === r;
+          return <button key={String(r)} role="radio" aria-checked={on} onClick={() => setRadius(r)} style={{ minHeight: 50, borderRadius: 12, cursor: "pointer",
+            font: `700 15px ${FB}`, color: on ? C.push : C.ice, background: on ? C.push + "16" : C.night2,
+            border: `1.5px solid ${on ? C.push : "transparent"}` }}>{r ? `${r} mi` : "Any"}</button>;
+        })}
+      </div>
+      <Btn full kind="good" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save home zone"}</Btn>
+    </Sheet>
+  );
+}
+const zoneText = (d) => d.homeRadius ? `Jobs within ${d.homeRadius} mi of ${d.home ? "home" : "Duluth"}` : d.home ? "Any distance" : "Not set — you get every job";
+// Is a job inside this driver's zone? (no zone, or no pin = yes)
+function inMyZone(driver, job) {
+  if (!driver?.homeRadius || !driver.home) return true;
+  const mi = milesBetween(driver.home, jobLL(job));
+  return mi == null || mi <= driver.homeRadius;
+}
+
+// Level badge + what it takes to reach the next one.
+const LEVEL_COLOR = { rookie: () => C.mist, pro: () => C.plow, elite: () => C.amber };
+function LevelCard({ d }) {
+  const input = { jobs_count: d.jobs, rating: d.rating, ratings_count: d.reviews, late_cancels: d.lateCancels };
+  const lvl = driverLevel(input), next = nextLevel(input), col = LEVEL_COLOR[lvl]();
+  return (
+    <Card style={{ marginBottom: 14, borderColor: col + "66" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ width: 46, height: 46, borderRadius: 14, display: "grid", placeItems: "center", background: col + "22", color: col, flexShrink: 0 }}>
+          <Icon e={lvl === "elite" ? "star" : lvl === "pro" ? "shield" : "snowflake"} s={22} /></div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ font: `500 12px ${FM}`, letterSpacing: ".08em", textTransform: "uppercase", color: C.mist }}>Your level</div>
+          <div style={{ font: `800 28px/1 ${FD}`, textTransform: "uppercase", color: col, marginTop: 3 }}>{LEVELS[lvl].label}</div>
+        </div>
+      </div>
+      <div style={{ font: `400 13.5px/1.45 ${FB}`, color: C.ice, marginTop: 10 }}>{LEVELS[lvl].perk}</div>
+      {next && <>
+        <div style={{ display: "flex", justifyContent: "space-between", font: `600 13px ${FB}`, color: C.mist, margin: "14px 0 6px" }}>
+          <span>Next: {LEVELS[next.to].label}</span><span>{Math.round(next.progress * 100)}%</span></div>
+        <div style={{ height: 8, borderRadius: 8, background: C.night2, overflow: "hidden" }}>
+          <div style={{ width: `${next.progress * 100}%`, height: "100%", background: LEVEL_COLOR[next.to](), transition: `width .6s ${EASE}` }} /></div>
+        <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
+          {next.items.map((it) => (
+            <div key={it.text} style={{ display: "flex", gap: 8, alignItems: "center", font: `400 13.5px ${FB}`, color: it.done ? C.mist : C.ice }}>
+              {it.done ? <span style={{ color: C.push, display: "flex" }}><Icon e="check" s={15} strokeWidth={2.6} /></span>
+                : <span style={{ width: 13, height: 13, margin: 1, borderRadius: 99, border: `2px solid ${C.mistDim}`, flexShrink: 0 }} />}{it.text}</div>
+          ))}
+        </div>
+        <div style={{ font: `400 12.5px/1.4 ${FB}`, color: C.mistDim, marginTop: 10 }}>{LEVELS[next.to].perk}</div>
+      </>}
+    </Card>
+  );
+}
+
+// Customers who made you a favorite — they get you first when they book.
+function RegularsSheet({ onClose }) {
+  const { state } = useStore();
+  const [rows, setRows] = useState(null);
+  useEffect(() => {
+    if (!isLive(state)) { setRows([{ id: "a", name: "Jane", jobs: 4, last: Date.now() - 6 * 864e5, address: "1420 Woodland Ave" }, { id: "b", name: "Tom", jobs: 2, last: Date.now() - 20 * 864e5, address: "512 N 21st Ave E" }]); return; }
+    listRegulars(state.userId).then(({ data }) => setRows(data || []));
+  }, []);
+  return (
+    <Sheet onClose={onClose}>
+      <h3 style={{ ...H(24), margin: "0 0 4px" }}>Your regulars</h3>
+      <p style={{ ...sub, fontSize: 14, marginBottom: 14 }}>Customers who saved you as a favorite. When they book and you're online, you get it alone for 2 minutes before anyone else.</p>
+      {!rows ? <Skeleton h={60} r={14} /> : rows.length === 0 ? (
+        <div style={{ padding: "16px 14px", font: `400 14px/1.45 ${FB}`, color: C.mist, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14 }}>
+          No regulars yet. After a job, customers can tap the heart on their receipt. Good photos and a clean edge are what earn it.</div>
+      ) : (
+        <div style={{ display: "grid", gap: 8 }}>
+          {rows.map((r) => (
+            <div key={r.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "12px 14px", background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14 }}>
+              <div style={{ width: 38, height: 38, borderRadius: 99, background: C.amber + "22", color: C.amber, display: "grid", placeItems: "center", font: `700 15px ${FB}` }}>{(r.name || "?")[0]}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ font: `600 15px ${FB}`, color: C.ice }}>{r.name}</div>
+                <div style={{ font: `400 12.5px ${FB}`, color: C.mist, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {r.jobs} job{r.jobs === 1 ? "" : "s"} with you{r.last ? ` · last ${new Date(r.last).toLocaleDateString(undefined, { month: "short", day: "numeric" })}` : ""}{r.address ? ` · ${r.address}` : ""}</div>
+              </div>
+              <Icon e="heart" s={16} color={C.danger} />
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ height: 14 }} /><Btn full kind="dark" onClick={onClose}>Done</Btn>
+    </Sheet>
+  );
+}
+
+// Share a link that brings another plow owner to the Drive page (tracked by ?ref=).
+async function inviteDriver(state, dispatch) {
+  const first = (state.driver.name || "driver").split(" ")[0].toLowerCase().replace(/[^a-z0-9]/g, "") || "driver";
+  const url = `https://driftplowing.com/drive.html?ref=driver-${first}`;
+  const text = "I plow driveways through DRIFT. You pick the jobs, keep 80% plus a $10 call-out on each one, and get paid through Stripe.";
+  try {
+    if (navigator.share) { await navigator.share({ title: "Plow with DRIFT", text, url }); return; }
+    await navigator.clipboard.writeText(`${text} ${url}`);
+    dispatch({ type: "TOAST", msg: "Invite link copied — send it to a plow buddy" });
+  } catch { /* share sheet closed */ }
+}
+
+// Report a problem during a job. Drivers can also give the job back (before plowing starts).
+const PROBLEMS = [
+  { id: "blocked", icon: "car", label: "Something's in the way", hint: "Car parked in the driveway, trash cans, a pile you can't move" },
+  { id: "no_access", icon: "lock", label: "Can't get to the property", hint: "Gate locked, road closed, wrong address" },
+  { id: "unsafe", icon: "warning", label: "Unsafe to plow", hint: "Ice, people or pets in the way, a hazard that wasn't marked" },
+  { id: "damage", icon: "shield", label: "Something got damaged", hint: "Curb, lawn, mailbox, your truck. Report it right away" },
+  { id: "other", icon: "chat", label: "Something else", hint: "Anything DRIFT should know" },
+];
+function ProblemSheet({ job, canRelease, onClose, onReleased }) {
+  const { state, dispatch } = useStore();
+  const [kind, setKind] = useState(null);
+  const [note, setNote] = useState("");
+  const [release, setRelease] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const showRelease = canRelease && ["blocked", "no_access", "unsafe"].includes(kind);
+  const send = async () => {
+    setBusy(true);
+    if (!isLive(state)) { dispatch({ type: "TOAST", msg: "Reported (demo)" }); onClose(); return; }
+    try {
+      const r = await reportIssue(job.jobId, kind, note, showRelease && release);
+      dispatch({ type: "TOAST", msg: r.released ? "Job given back — DRIFT is finding another driver" : "Reported — the customer and DRIFT can see it" });
+      if (r.released) onReleased?.(); else onClose();
+    } catch (e) { dispatch({ type: "TOAST", msg: e.message }); setBusy(false); }
+  };
+  return (
+    <Sheet onClose={onClose}>
+      <h3 style={{ ...H(24), margin: "0 0 4px" }}>What's wrong?</h3>
+      <p style={{ ...sub, fontSize: 14, marginBottom: 12 }}>It goes to the customer's chat and to DRIFT. If someone's hurt, call 911 first.</p>
+      <div style={{ display: "grid", gap: 8 }}>
+        {PROBLEMS.map((p) => {
+          const on = kind === p.id;
+          return (
+            <button key={p.id} onClick={() => setKind(p.id)} aria-pressed={on} style={{ display: "flex", gap: 12, alignItems: "center", padding: "12px 14px", minHeight: 62,
+              textAlign: "left", borderRadius: 14, cursor: "pointer", background: on ? C.amber + "14" : C.slate,
+              border: `1.5px solid ${on ? C.amber : C.line}`, WebkitTapHighlightColor: "transparent" }}>
+              <span style={{ color: on ? C.amber : C.mist, display: "flex" }}><Icon e={p.icon} s={20} /></span>
+              <div style={{ flex: 1 }}><div style={{ font: `600 15px ${FB}`, color: C.ice }}>{p.label}</div>
+                <div style={{ font: `400 12.5px/1.35 ${FB}`, color: C.mist, marginTop: 2 }}>{p.hint}</div></div>
+            </button>
+          );
+        })}
+      </div>
+      {kind && <>
+        <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} maxLength={500} placeholder="Add a quick note (optional)"
+          style={{ width: "100%", boxSizing: "border-box", marginTop: 12, padding: 12, borderRadius: 12, background: C.night2, border: `1px solid ${C.line}`,
+            color: C.ice, font: `400 15px/1.4 ${FB}`, resize: "vertical" }} />
+        {showRelease && (
+          <label style={{ display: "flex", gap: 10, alignItems: "flex-start", marginTop: 12, padding: 12, borderRadius: 12, background: C.slate, border: `1px solid ${C.line}`, cursor: "pointer" }}>
+            <input type="checkbox" checked={release} onChange={(e) => setRelease(e.target.checked)} style={{ width: 20, height: 20, marginTop: 1, accentColor: C.amber }} />
+            <span style={{ font: `400 14px/1.4 ${FB}`, color: C.ice }}><b>I can't do this job — give it back.</b> It goes back to other drivers right away. No late cancel on your record.</span>
+          </label>
+        )}
+        <div style={{ height: 12 }} />
+        <Btn full kind={release && showRelease ? "danger" : "primary"} onClick={send} disabled={busy}>{busy ? "Sending…" : release && showRelease ? "Report and give job back" : "Send report"}</Btn>
+      </>}
+    </Sheet>
+  );
+}
+
+// Year-to-date earnings, miles and the mileage deduction estimate, plus a CSV for taxes.
+function TaxCard() {
+  const { state, dispatch } = useStore();
+  const LIVE = isLive(state);
+  const year = new Date().getFullYear();
+  const [rows, setRows] = useState(null);
+  useEffect(() => {
+    if (!LIVE) { setRows([{ completed_at: new Date().toISOString(), job_type: "driveway", address: "1420 Woodland Ave", driver_pay: 42, tip: 5, driver_miles: 3.1 },
+      { completed_at: new Date().toISOString(), job_type: "driveway", address: "512 N 21st Ave E", driver_pay: 58, tip: 0, driver_miles: 4.4 }]); return; }
+    driverYear(state.userId, year).then(({ data }) => setRows(data || []));
+  }, [LIVE, state.userId]);
+  if (!rows) return null;
+  const earned = rows.reduce((t, r) => t + Number(r.driver_pay || 0) + Number(r.tip || 0), 0);
+  const miles = rows.reduce((t, r) => t + Number(r.driver_miles || 0), 0);
+  const deduction = rows.reduce((t, r) => t + Number(r.driver_miles || 0) * mileageRate(r.completed_at), 0);
+  const money = (v) => `$${Math.round(v).toLocaleString()}`;
+  const download = () => {
+    const head = ["Date", "Job", "Address", "Pay", "Tip", "Total", "Miles", "Mileage deduction (est.)"];
+    const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const lines = rows.map((r) => {
+      const mi = Number(r.driver_miles || 0), pay = Number(r.driver_pay || 0), tip = Number(r.tip || 0);
+      return [new Date(r.completed_at).toLocaleDateString("en-US"), kindLabel(r.job_type), r.address || "", pay.toFixed(2), tip.toFixed(2), (pay + tip).toFixed(2),
+        mi.toFixed(1), (mi * mileageRate(r.completed_at)).toFixed(2)].map(esc).join(",");
+    });
+    const csv = [head.map(esc).join(","), ...lines, "", `${esc("Totals")},,,,,${esc(earned.toFixed(2))},${esc(miles.toFixed(1))},${esc(deduction.toFixed(2))}`].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = `DRIFT-${year}-earnings-and-miles.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    dispatch({ type: "TOAST", msg: "Downloaded — give it to whoever does your taxes" });
+  };
+  return (
+    <Card style={{ marginBottom: S.lg }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <Eyebrow color={C.mist}>{year} for taxes</Eyebrow>
+        <span style={{ font: `500 12.5px ${FB}`, color: C.mistDim }}>{rows.length} job{rows.length === 1 ? "" : "s"}</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, margin: "12px 0 10px" }}>
+        {[[money(earned), "Earned"], [`${miles.toFixed(miles < 100 ? 1 : 0)}`, "Miles on jobs"], [money(deduction), "Mileage deduction"]].map(([v, l], i) => (
+          <div key={l}><div style={{ font: `800 24px/1 ${FD}`, color: i === 2 ? C.push : C.ice }}>{v}</div>
+            <div style={{ font: `400 12.5px ${FB}`, color: C.mist, marginTop: 4 }}>{l}</div></div>
+        ))}
+      </div>
+      <div style={{ font: `400 12.5px/1.45 ${FB}`, color: C.mistDim }}>
+        Miles are logged from your phone's GPS while you're on a DRIFT job. The deduction uses the IRS standard mileage rate (76¢ a mile since July 2026) and is an estimate. Stripe sends your 1099. Ask a tax pro what you can claim.</div>
+      <button onClick={download} disabled={!rows.length} style={{ ...miniBtn, width: "100%", minHeight: 46, marginTop: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, opacity: rows.length ? 1 : .5 }}>
+        <Icon e="download" s={16} /> Download {year} spreadsheet (CSV)</button>
+    </Card>
+  );
+}
+
+// Miles driven on the current job, from GPS fixes (kept across page reloads).
+const milesKey = (jobId) => `drift.miles.${jobId}`;
+function addJobMiles(jobId, prev, next) {
+  if (!jobId || !prev || !next) return;
+  const mi = milesBetween(prev, next);
+  if (mi == null || mi < 0.015 || mi > 3) return; // ignore GPS jitter and jumps
+  try { const cur = Number(localStorage.getItem(milesKey(jobId)) || 0); localStorage.setItem(milesKey(jobId), String(cur + mi)); } catch { /* private mode */ }
+}
+function jobMiles(jobId) { try { return Number(localStorage.getItem(milesKey(jobId)) || 0); } catch { return 0; } }
 
 function DriverApp() {
   const { state } = useStore();
@@ -4431,7 +4865,10 @@ function DriverDrive() {
   useEffect(() => { if (link.route) { setView("route"); consumeLink("route"); } }, [link.route]);
 
   // ---- LIVE: the real pool of open offers from customers nearby ----
-  const [pool, setPool] = useState([]);
+  const [allPool, setPool] = useState([]);
+  const [showAll, setShowAll] = useState(false); // jobs outside your home zone are hidden unless you ask
+  const pool = showAll ? allPool : allPool.filter(j => inMyZone(state.driver, j));
+  const outsideZone = allPool.length - pool.length;
   const [passed, setPassed] = useState(() => new Set());
   const [claiming, setClaiming] = useState(false);
   const [browseJob, setBrowseJob] = useState(null);
@@ -4463,11 +4900,11 @@ function DriverDrive() {
     ? pool.find(j => !passed.has(j.jobId) && !seen.current.has(j.jobId) && (!j.expiresAt || j.expiresAt > Date.now())) : null;
   // A tapped "new request" notification opens that job.
   useEffect(() => {
-    if (!link.offer || !pool.length) return;
-    const j = pool.find(x => x.jobId === link.offer);
+    if (!link.offer || !allPool.length) return;
+    const j = allPool.find(x => x.jobId === link.offer);
     if (j) { setView("live"); setBrowseJob(j); }
     consumeLink("offer");
-  }, [link.offer, pool.length]);
+  }, [link.offer, allPool.length]);
 
   // driver "has a job" if there's an order that they've accepted, OR an incoming request while online
   const incoming = LIVE ? !!liveOffer : online && o && o.state === "requested";
@@ -4522,6 +4959,8 @@ function DriverDrive() {
       <p style={{ font: `400 15px ${FB}`, color: C.mist, margin: "0 0 16px" }}>
         {online ? (LIVE ? `${pool.length} open request${pool.length === 1 ? "" : "s"} nearby` : `${SNOW_DEPTH_IN}" down · 12 open requests nearby`)
           : LIVE ? "Go online to see requests from customers near you." : `${SNOW_DEPTH_IN}" down in Duluth — demand is high right now.`}</p>
+
+      {view === "live" && <DriverStormCard onRoute={() => setView("route")} />}
 
       {/* live jobs vs scheduled routes */}
       <div role="tablist" style={{ display: "flex", gap: 4, padding: 4, borderRadius: 14, background: C.night2, border: `1px solid ${C.line}`, marginBottom: 14 }}>
@@ -4581,6 +5020,10 @@ function DriverDrive() {
               .map(j => <JobRow key={j.jobId} job={j} here={here} onClick={() => setBrowseJob(j)} />)}
           </div>
         </div>
+      )}
+      {LIVE && online && (outsideZone > 0 || showAll) && (
+        <button onClick={() => setShowAll(v => !v)} style={{ ...miniBtn, width: "100%", minHeight: 44, marginTop: 10 }}>
+          {showAll ? "Only show jobs in my home zone" : `${outsideZone} more job${outsideZone > 1 ? "s" : ""} outside your home zone · show`}</button>
       )}
 
       {/* waiting state — calm, not empty */}
@@ -4873,6 +5316,8 @@ function DriverActiveJob() {
   const checkableZones = jtA.basis === "area" ? plowZones : [];
 
   const [gps, setGps] = useState(null); // real device location {lng, lat, heading}
+  const [problemOpen, setProblemOpen] = useState(false);
+  const lastFix = useRef(null);         // previous GPS fix, for the mileage log
 
   // LIVE: tell the customer you're on the way, and bail out if they cancel.
   useEffect(() => {
@@ -4907,6 +5352,7 @@ function DriverActiveJob() {
       (p) => {
         const loc = { lng: p.coords.longitude, lat: p.coords.latitude, heading: p.coords.heading || 0 };
         setGps(loc);
+        if (!(p.coords.accuracy > 100)) { addJobMiles(o.jobId, lastFix.current, loc); lastFix.current = loc; } // miles for the tax log
         if (supabaseEnabled && state.userId) {
           pushDriverLocation(state.userId, loc.lng, loc.lat, loc.heading);
         }
@@ -4936,6 +5382,7 @@ function DriverActiveJob() {
   };
   const [finishing, setFinishing] = useState(false);
   const complete = async () => {
+    if (LIVE && o.jobId) Promise.resolve(saveJobMiles(o.jobId, jobMiles(o.jobId))).catch(() => {}); // tax log
     if (LIVE && o.jobId && o.paymentStatus && o.paymentStatus !== "not_required") {
       setFinishing(true);
       try { await completeJobPaid(o.jobId, o.photos); }
@@ -5054,6 +5501,13 @@ function DriverActiveJob() {
       {/* density routing: cluster of nearby jobs to batch (demo only for now) */}
       {!arrived && !LIVE && <ClusterRoute />}
       {queueBlock}
+
+      <button onClick={() => setProblemOpen(true)} style={{ width: "100%", marginTop: 12, minHeight: 50, borderRadius: 14, cursor: "pointer",
+        background: "transparent", border: `1px solid ${C.line}`, color: C.ice, font: `600 15px ${FB}`,
+        display: "flex", alignItems: "center", justifyContent: "center", gap: 8, WebkitTapHighlightColor: "transparent" }}>
+        <Icon e="warning" s={17} color={C.amber} /> Report a problem</button>
+      {problemOpen && <ProblemSheet job={o} canRelease={o.state !== "plowing"} onClose={() => setProblemOpen(false)}
+        onReleased={() => { setProblemOpen(false); startNext(); }} />}
 
       {/* chat with the customer */}
       <JobChat jobId={o.jobId} senderId={state.userId} peerName="your customer" seed={[]} />
@@ -5387,6 +5841,8 @@ function DriverEarnings({ onReferral }) {
         </div>}
       </Card>
 
+      <TaxCard />
+
       {/* payouts: real Stripe setup for signed-in drivers, demo card otherwise */}
       {isLive(state) && STRIPE_ENABLED ? <PayoutsCard /> : (
       !isLive(state) && STRIPE_ENABLED && !state.driver.stripeAccountId ? (
@@ -5448,10 +5904,12 @@ function DriverAccount({ onReferral }) {
   const [legalOpen, setLegalOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [reviewsOpen, setReviewsOpen] = useState(false);
+  const [zoneOpen, setZoneOpen] = useState(false);
+  const [regularsOpen, setRegularsOpen] = useState(false);
   const LIVE = isLive(state);
   const [fresh, setFresh] = useState(null); // latest rating / jobs from the database
   useEffect(() => { if (LIVE) getProfile(state.userId).then(({ data }) => data && setFresh(profileToDriver(data))); }, [LIVE, state.userId]);
-  const d = fresh ? { ...base, rating: fresh.rating, reviews: fresh.reviews, jobs: fresh.jobs } : base;
+  const d = fresh ? { ...base, rating: fresh.rating, reviews: fresh.reviews, jobs: fresh.jobs, lateCancels: fresh.lateCancels } : base;
   const openPayouts = async () => {
     try { const { url } = await connectDashboard(); window.open(url, "_blank", "noopener"); }
     catch (e) { dispatch({ type: "TOAST", msg: "Set up payouts in the Earnings tab first" }); }
@@ -5475,6 +5933,14 @@ function DriverAccount({ onReferral }) {
             {d.rating ? <><Stars v={Number(d.rating)} size={13} /><span style={{ font: `600 12px ${FB}`, color: C.mist }}>{d.rating} · {d.jobs} jobs</span></>
               : <span style={{ font: `600 12px ${FB}`, color: C.mist }}>{d.jobs ? `${d.jobs} jobs · no ratings yet` : "New driver"}</span>}</div></div>
       </div>
+      <LevelCard d={d} />
+
+      <ListGroup style={{ marginBottom: 14 }}>
+        <ListRow icon="pin" tint={C.push} title="Home zone" sub={zoneText(base)} onClick={() => setZoneOpen(true)} />
+        <ListRow icon="heart" tint={C.danger} title="Your regulars" sub="Customers who get you first" onClick={() => setRegularsOpen(true)} />
+        <ListRow icon="share" tint={C.plow} title="Invite a plow buddy" sub="Send them a link to drive with DRIFT" onClick={() => inviteDriver(state, dispatch)} last />
+      </ListGroup>
+
       <ListGroup style={{ marginBottom: 14 }}>
         <ListRow icon="user" tint={C.amber} title="Profile and equipment" sub="Name, phone, truck and gear" onClick={() => setEditOpen(true)} last={!LIVE} />
         {LIVE && <ListRow icon="star" tint={C.amber} title="Your reviews"
@@ -5513,6 +5979,7 @@ function DriverAccount({ onReferral }) {
       </Card>
 
       {LIVE && <DriverDocsCard />}
+      {LIVE && <div style={{ marginBottom: 14 }}>{INSURANCE_NOTE}</div>}
       {/* documents (demo only) */}
       {!LIVE && <Card style={{ marginBottom: 14 }}>
         <Eyebrow>Documents</Eyebrow>
@@ -5554,6 +6021,8 @@ function DriverAccount({ onReferral }) {
       {legalOpen && <LegalHub onClose={() => setLegalOpen(false)}
         acceptance={[state.legal?.driver, state.legal?.customer].filter(Boolean)} />}
       {editOpen && <ProfileSheet driver onClose={() => setEditOpen(false)} />}
+      {zoneOpen && <HomeZoneSheet onClose={() => setZoneOpen(false)} />}
+      {regularsOpen && <RegularsSheet onClose={() => setRegularsOpen(false)} />}
       {reviewsOpen && <ReviewsSheet userId={state.userId} name="" rating={d.rating} count={d.reviews || 0} onClose={() => setReviewsOpen(false)} />}
 
       {auth?.isConfigured && auth?.session && (
