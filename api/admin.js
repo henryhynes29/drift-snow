@@ -133,7 +133,7 @@ const ACTIONS = {
   async live() {
     const soon = new Date(Date.now() + 12 * 3600e3).toISOString();
     const [drivers, jobs] = await Promise.all([
-      all("profiles", "id, name, email, truck, is_online", (q) => q.eq("is_driver", true).eq("is_online", true)),
+      all("profiles", "id, name, email, truck, is_online, online_since, active_at, last_seen_at", (q) => q.eq("is_driver", true).eq("is_online", true)),
       all("jobs", "id, status, address, lat, lng, price, driver_id, scheduled_for, created_at, expires_at, payment_status",
         (q) => q.in("status", ["requested", "scheduled", "accepted", "enroute", "plowing"]).order("created_at", { ascending: false }).limit(300)),
     ]);
@@ -153,13 +153,44 @@ const ACTIONS = {
         const loc = locs.find((l) => l.driver_id === id);
         const d = drivers.find((x) => x.id === id);
         const busy = active.filter((j) => j.driver_id === id && ["accepted", "enroute", "plowing"].includes(j.status)).length;
-        return { id, name: nm(id), truck: d?.truck || null, online: !!d, busy, lat: loc?.lat ?? null, lng: loc?.lng ?? null, seenAt: loc?.updated_at || null };
+        return { id, name: nm(id), truck: d?.truck || null, online: !!d, busy, lat: loc?.lat ?? null, lng: loc?.lng ?? null, seenAt: loc?.updated_at || null,
+          onlineSince: d?.online_since || null, activeAt: d?.active_at || null, phoneAt: d?.last_seen_at || null };
       }),
       jobs: active.map((j) => ({ id: j.id, status: j.status, address: j.address, price: num(j.price), driver: nm(j.driver_id),
         scheduledFor: j.scheduled_for, createdAt: j.created_at,
         lat: j.lat ?? null, lng: j.lng ?? null })),
       at: new Date().toISOString(),
     };
+  },
+
+  // ---------- watch list: held payouts, disputes, and patterns worth a look ----------
+  async watch() {
+    const day = 864e5, since = new Date(Date.now() - 45 * day).toISOString();
+    const jobs = await all("jobs", "id, status, address, price, driver_pay, customer_id, driver_id, accepted_at, completed_at, cancelled_at, created_at, payout_status, payout_hold_reason, completed_by, disputed_at, arrived_at, photos",
+      (q) => q.gte("created_at", since).order("created_at", { ascending: false }).limit(2000));
+    const ids = [...new Set(jobs.flatMap((j) => [j.customer_id, j.driver_id]).filter(Boolean))];
+    const people = ids.length ? await all("profiles", "id, name, email, phone", (q) => q.in("id", ids)) : [];
+    const who = (id) => { const p = people.find((x) => x.id === id); return p ? (p.name || p.email) : null; };
+    const brief = (j) => ({ id: j.id, address: j.address, price: num(j.price), driverPay: num(j.driver_pay), customer: who(j.customer_id), driver: who(j.driver_id),
+      at: j.completed_at || j.cancelled_at || j.created_at, by: j.completed_by, reason: j.payout_hold_reason });
+    const held = jobs.filter((j) => j.payout_status === "held").map(brief);
+    const disputed = jobs.filter((j) => j.disputed_at && ["accepted", "enroute", "plowing"].includes(j.status)).map(brief);
+    const notByDriver = jobs.filter((j) => j.status === "completed" && ["auto", "customer"].includes(j.completed_by)).slice(0, 20).map(brief);
+    // Customers who cancel after a driver already accepted (2+ times) — can mean they're paying someone off the app.
+    const cancels = {};
+    for (const j of jobs) if (j.status === "cancelled" && j.accepted_at && j.driver_id) (cancels[j.customer_id] ||= []).push(j);
+    const cancelAfterAccept = Object.entries(cancels).filter(([, l]) => l.length >= 2)
+      .map(([cid, l]) => ({ customer: who(cid), count: l.length, drivers: [...new Set(l.map((j) => who(j.driver_id)))].filter(Boolean), last: l[0].cancelled_at || l[0].created_at }));
+    // A customer and driver who did 2+ jobs together, then the customer stopped booking for 3+ weeks.
+    const pairs = {};
+    for (const j of jobs) if (j.status === "completed" && j.driver_id) (pairs[`${j.customer_id}|${j.driver_id}`] ||= []).push(j);
+    const lastBooking = {};
+    for (const j of jobs) if (!lastBooking[j.customer_id] || j.created_at > lastBooking[j.customer_id]) lastBooking[j.customer_id] = j.created_at;
+    const quietPairs = Object.entries(pairs).filter(([k, l]) => {
+      const cid = k.split("|")[0];
+      return l.length >= 2 && Date.now() - new Date(lastBooking[cid]).getTime() > 21 * day;
+    }).map(([k, l]) => ({ customer: who(k.split("|")[0]), driver: who(k.split("|")[1]), jobs: l.length, lastJob: l[0].completed_at }));
+    return { held, disputed, notByDriver, cancelAfterAccept, quietPairs };
   },
 
   // ---------- problems reported on jobs ----------

@@ -4,7 +4,7 @@
 import React, { Suspense, lazy, useEffect, useState } from "react";
 import { C, FD, FB, FM } from "./theme.js";
 import Icon from "./Icon.jsx";
-import { authedFetch } from "./lib/payments.js";
+import { authedFetch, releasePayout, resolveDispute } from "./lib/payments.js";
 const LiveMap = lazy(() => import("./PropertyMap.jsx").then((m) => ({ default: m.LiveMap })));
 
 async function api(action, body) {
@@ -21,6 +21,7 @@ const money = (n) => `$${Number(n || 0).toLocaleString(undefined, { minimumFract
 const date = (d) => (d ? new Date(d).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—");
 const day = (d) => (d ? new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—");
 
+const mins = (t) => { if (!t) return ""; const m = Math.max(0, Math.round((Date.now() - new Date(t).getTime()) / 60000)); return m < 60 ? `${m} min` : `${Math.floor(m / 60)}h ${m % 60}m`; };
 const card = () => ({ background: C.slate, border: `1px solid ${C.line}`, borderRadius: 16, padding: 18 });
 const th = () => ({ textAlign: "left", font: `600 12px ${FB}`, color: C.mistDim, padding: "10px 12px", borderBottom: `1px solid ${C.line}`, whiteSpace: "nowrap" });
 const td = () => ({ font: `400 14px ${FB}`, color: C.ice, padding: "11px 12px", borderBottom: `1px solid ${C.lineSoft}`, whiteSpace: "nowrap" });
@@ -129,6 +130,74 @@ function Issues() {
   );
 }
 
+// Held payouts, disputes, and patterns that can mean jobs are moving off the app.
+function Watch() {
+  const [d, setD] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const load = () => api("watch").then(setD).catch(() => setD(null));
+  useEffect(() => { load(); }, []);
+  if (!d) return null;
+  const total = d.held.length + d.disputed.length + d.cancelAfterAccept.length + d.quietPairs.length;
+  if (!total && !d.notByDriver.length) return null;
+  const release = async (id) => { setBusy(id); try { await releasePayout(id); await load(); } catch (e) { alert(e.message); } setBusy(null); };
+  const settle = async (id, outcome) => { setBusy(id + outcome); try { await resolveDispute(id, outcome); await load(); } catch (e) { alert(e.message); } setBusy(null); };
+  const line = { display: "flex", gap: 10, alignItems: "center", padding: "10px 0", borderTop: `1px solid ${C.lineSoft}`, flexWrap: "wrap" };
+  const sub = { font: `400 12.5px ${FB}`, color: C.mistDim };
+  const Block = ({ title, note, children, show }) => !show ? null : (
+    <div style={card()}>
+      <div style={{ font: `600 15px ${FB}` }}>{title}</div>
+      {note && <div style={{ ...sub, margin: "3px 0 6px" }}>{note}</div>}
+      {children}
+    </div>
+  );
+  return (
+    <section>
+      <h2 style={{ font: `700 20px ${FD}`, margin: "0 0 12px", color: C.amber }}>Watch list{total ? ` · ${total}` : ""}</h2>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(320px,1fr))", gap: 12 }}>
+        <Block title={`Payouts on hold · ${d.held.length}`} note="Customer was charged, but the job has no before/after photos. Release once you're satisfied." show={d.held.length > 0}>
+          {d.held.map((j) => (
+            <div key={j.id} style={line}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ font: `500 14px ${FB}` }}>{j.address || "No address"} · {money(j.driverPay)} to {j.driver || "driver"}</div>
+                <div style={sub}>{j.reason || "Held"} · {j.by === "auto" ? "auto-charged" : j.by} · {date(j.at)}</div>
+              </div>
+              <button disabled={busy === j.id} onClick={() => release(j.id)} style={btn("good")}>{busy === j.id ? "Releasing…" : "Release payout"}</button>
+            </div>
+          ))}
+        </Block>
+        <Block title={`Customer says not done · ${d.disputed.length}`} note="No charge until you decide. The customer's note is in Needs a look." show={d.disputed.length > 0}>
+          {d.disputed.map((j) => (
+            <div key={j.id} style={line}><div style={{ flex: 1, minWidth: 0 }}><div style={{ font: `500 14px ${FB}` }}>{j.address || "No address"} · {money(j.price)}</div>
+              <div style={sub}>{j.customer || "Customer"} · driver {j.driver || "—"} · {date(j.at)}</div></div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button disabled={!!busy} onClick={() => settle(j.id, "charge")} style={btn("good")}>{busy === j.id + "charge" ? "…" : "It was done: charge"}</button>
+                <button disabled={!!busy} onClick={() => settle(j.id, "release")} style={btn()}>{busy === j.id + "release" ? "…" : "Not done: no charge"}</button>
+              </div></div>
+          ))}
+        </Block>
+        <Block title={`Cancels after a driver accepted · ${d.cancelAfterAccept.length}`} note="Customers who cancel 2+ times once a driver is on the way. Can mean they're paying someone off the app." show={d.cancelAfterAccept.length > 0}>
+          {d.cancelAfterAccept.map((r, i) => (
+            <div key={i} style={line}><div style={{ flex: 1 }}><div style={{ font: `500 14px ${FB}` }}>{r.customer || "Customer"} · {r.count} cancels</div>
+              <div style={sub}>Drivers: {r.drivers.join(", ") || "—"} · last {date(r.last)}</div></div></div>
+          ))}
+        </Block>
+        <Block title={`Regulars who went quiet · ${d.quietPairs.length}`} note="Did 2+ jobs together, then the customer stopped booking for 3+ weeks." show={d.quietPairs.length > 0}>
+          {d.quietPairs.map((r, i) => (
+            <div key={i} style={line}><div style={{ flex: 1 }}><div style={{ font: `500 14px ${FB}` }}>{r.customer || "Customer"} + {r.driver || "driver"}</div>
+              <div style={sub}>{r.jobs} jobs together · last {date(r.lastJob)}</div></div></div>
+          ))}
+        </Block>
+        <Block title="Finished without the driver tapping Complete" note="Confirmed by the customer, or charged automatically after 2 hours." show={d.notByDriver.length > 0}>
+          {d.notByDriver.map((j) => (
+            <div key={j.id} style={line}><div style={{ flex: 1 }}><div style={{ font: `500 14px ${FB}` }}>{j.address || "No address"} · {money(j.price)}</div>
+              <div style={sub}>{j.by === "auto" ? "Auto-charged" : "Customer confirmed"} · driver {j.driver || "—"} · {date(j.at)}</div></div></div>
+          ))}
+        </Block>
+      </div>
+    </section>
+  );
+}
+
 function Overview() {
   const [d, setD] = useState(null);
   const [range, setRange] = useState("last30");
@@ -141,6 +210,7 @@ function Overview() {
   return (
     <div style={{ display: "grid", gap: 22 }}>
       <Issues />
+      <Watch />
       <section>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
           <h2 style={{ font: `700 20px ${FD}`, margin: 0, color: C.ice }}>Money</h2>
@@ -273,7 +343,7 @@ function LiveBoard() {
   const fresh = (t) => t && Date.now() - new Date(t).getTime() < 15 * 60e3;
   const markers = [
     ...d.jobs.filter((j) => j.lat != null).map((j) => ({ lat: j.lat, lng: j.lng, label: `$${Math.round(j.price)}`, color: LIVE_STATUS[j.status]?.color })),
-    ...d.drivers.filter((x) => x.lat != null && fresh(x.seenAt)).map((x) => ({ lat: x.lat, lng: x.lng, kind: "truck", pulse: x.busy > 0 })),
+    ...d.drivers.filter((x) => x.lat != null && fresh(x.seenAt)).map((x) => ({ lat: x.lat, lng: x.lng, kind: "truck", pulse: x.busy > 0, name: (x.name || "Driver").split(" ")[0] })),
   ];
   const waiting = d.jobs.filter((j) => j.status === "requested").length;
   const active = d.jobs.filter((j) => ["accepted", "enroute", "plowing"].includes(j.status)).length;
@@ -322,7 +392,7 @@ function LiveBoard() {
               <Icon e="truck" s={16} color={x.online ? C.push : C.mistDim} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ font: `500 14px ${FB}` }}>{x.name || "Driver"}</div>
-                <div style={{ font: `400 12.5px ${FB}`, color: C.mistDim }}>{x.online ? "Online" : "Offline"}{x.busy ? ` · ${x.busy} job${x.busy > 1 ? "s" : ""}` : ""}{x.seenAt ? ` · location ${fresh(x.seenAt) ? "live" : date(x.seenAt)}` : " · no location yet"}</div>
+                <div style={{ font: `400 12.5px ${FB}`, color: C.mistDim }}>{x.online ? `Online ${mins(x.onlineSince)}` : "Offline"}{x.busy ? ` · ${x.busy} job${x.busy > 1 ? "s" : ""}` : x.online && x.activeAt ? ` · idle ${mins(x.activeAt)}` : ""}{x.seenAt ? ` · location ${fresh(x.seenAt) ? "live" : date(x.seenAt)}` : " · no location yet"}{x.truck ? ` · ${x.truck}` : ""}</div>
               </div>
             </div>
           ))}

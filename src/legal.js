@@ -10,14 +10,13 @@
 // When you change the wording, bump LEGAL_VERSION — every user is re-asked to
 // agree to the new version before their next booking / going online.
 //
-// TODO before launch: replace ENTITY with the registered LLC name and EMAIL with
-// a real monitored inbox.
+// Entity: Drift Plowing LLC (Minnesota file no. 1680237400021, filed Oct 20, 2026).
 // ============================================================
 
-export const LEGAL_VERSION = "2026-09-28.2";
-export const LEGAL_UPDATED = "September 28, 2026";
-export const ENTITY = "DRIFT";                 // e.g. "DRIFT Technologies LLC, a Minnesota limited liability company"
-export const EMAIL = "legal@driftplowing.com";    // TODO: real, monitored address
+export const LEGAL_VERSION = "2026-11-08.1";
+export const LEGAL_UPDATED = "November 8, 2026";
+export const ENTITY = "Drift Plowing LLC, a Minnesota limited liability company"; // doing business as DRIFT
+export const EMAIL = "support@driftplowing.com";
 export const VENUE = "St. Louis County, Minnesota";
 
 // Each section: { h: heading, p: [paragraphs], loud: true → rendered bold (conspicuous) }
@@ -49,13 +48,13 @@ export const DOCS = {
       ] },
       { h: "5. You name the price; fees; payment", p: [
         `You decide how much to offer for each job. DRIFT may show suggested offers based on your property's size and features, but the amount is your choice. Drivers decide which offers to accept, so lower offers may take longer to be accepted or may not be accepted at all.`,
-        `Your total is your offer, plus a $10 call-out fee that goes entirely to the Driver, plus DRIFT's $5 booking fee. You'll see the total before you send an offer. Your card is authorized when you send it and charged only when the Driver marks the job complete; if no Driver accepts, you aren't charged. Payments are processed by our payment provider, Stripe. You authorize DRIFT to collect payment on the Driver's behalf as their limited payment collection agent; paying DRIFT satisfies what you owe the Driver for that job. Tips go 100% to the Driver.`,
+        `Your total is your offer, plus a $10 call-out fee that goes entirely to the Driver, plus DRIFT's $5 booking fee. You'll see the total before you send an offer. Your card is authorized when you send it and charged when the Driver completes the job at your property with before-and-after photos. If a Driver arrives but doesn't mark the job complete, we'll ask you to confirm it was done; if you don't answer or report a problem within 2 hours, we may charge the authorized amount. If no Driver accepts, you aren't charged. Payments are processed by our payment provider, Stripe. You authorize DRIFT to collect payment on the Driver's behalf as their limited payment collection agent; paying DRIFT satisfies what you owe the Driver for that job. Tips go 100% to the Driver.`,
       ] },
       { h: "6. Cancellations and problems", p: [
-        `You can cancel before a Driver arrives at no charge. After a Driver has arrived or started, you may be charged. If there's a problem with a job, report it in the app within 48 hours with photos. We may help you and the Driver resolve it, but we're not obligated to, and any refund or credit is at our discretion (see Section 2).`,
+        `You can cancel before a Driver arrives at no charge. Once the app shows the Driver has arrived at your property, cancelling charges the full amount, because the Driver has made the trip. If there's a problem with a job, report it in the app within 48 hours with photos. We may help you and the Driver resolve it, but we're not obligated to, and any refund or credit is at our discretion (see Section 2).`,
       ] },
       { h: "7. Photos, messages, and texts", p: [
-        `Drivers may take before-and-after photos of the work area; you agree to this. Messages between you and a Driver go through the app. You agree to receive calls and texts (including automated ones) about your account and jobs. Message and data rates may apply. You can opt out of non-essential texts by replying STOP.`,
+        `Drivers may take before-and-after photos of the work area; you agree to this. Messages between you and a Driver go through the app, and phone numbers and email addresses are hidden in chat. You agree to receive calls and texts (including automated ones) about your account and jobs. Message and data rates may apply. You can opt out of non-essential texts by replying STOP.`,
       ] },
       { h: "8. Things you may not do", p: [
         `Don't misuse DRIFT: no false information, fraud, harassment, discrimination, unsafe instructions, requests for illegal work, or attempts to avoid DRIFT's fees by arranging a job found on DRIFT off the app for 12 months after you were introduced.`,
@@ -143,7 +142,7 @@ export const DOCS = {
         `DRIFT provides software that lets you receive job requests from Customers, see each Customer's offer and exactly what you'd earn before you accept, communicate, navigate, document work with photos, and get paid. That's a lead-generation and payments service. The job itself is an agreement between you and the Customer.`,
       ] },
       { h: "4. Earnings and fees", p: [
-        `Customers choose how much to offer for each job. DRIFT may show Customers suggested amounts, but DRIFT does not set the job price. You'll see the Customer's offer and exactly what you'd earn before you accept, and you may pass on any offer.`,
+        `Customers choose how much to offer for each job. DRIFT may show Customers suggested amounts, but DRIFT does not set the job price. You'll see the Customer's offer and exactly what you'd earn before you accept, and you may pass on any offer. To complete a job in the app, you take a before photo when you arrive and an after photo before you leave, while you're at the property; the Customer is charged when you mark it complete. Payment for a job isn't released until both photos are in or the Customer confirms the work.`,
         `You receive 80% of the Customer's offer, 100% of the $10 call-out fee the Customer pays, and 100% of tips. DRIFT keeps 20% of the offer as its service fee for platform access, payment processing, and support. Customers also pay DRIFT a separate $5 booking fee.`,
         `Payouts are made through Stripe Connect. You agree to Stripe's Connected Account Agreement, and you authorize DRIFT to collect payment from Customers on your behalf as your limited payment collection agent. We'll give you at least 14 days' notice in the app before changing our service fee; you can stop using DRIFT at any time.`,
       ] },
@@ -161,10 +160,10 @@ export const DOCS = {
         `Follow all laws that apply to you, including traffic and vehicle laws, plow equipment and lighting requirements, local ordinances, and any license or registration your business needs. Hold a valid driver's license. Never work impaired. Don't push or deposit snow or ice onto public roads or sidewalks where the law prohibits it. Be respectful and non-discriminatory toward Customers.`,
       ] },
       { h: "9. Customer information and photos", p: [
-        `Use Customer information only to complete that Customer's job, and keep it private. Before-and-after photos you take in the app are shared with the Customer and DRIFT to document the job.`,
+        `Use Customer information only to complete that Customer's job, and keep it private. Don't take payment outside the app for a job you received through DRIFT, and don't ask a Customer you met through DRIFT to book you outside the app for 12 months after you first did a job for them. Before-and-after photos you take in the app are shared with the Customer and DRIFT to document the job.`,
       ] },
       { h: "10. Account deactivation", p: [
-        `You can close your account at any time. DRIFT may deactivate an account for safety concerns, fraud, violations of law, a material breach of this Agreement, or repeated serious Customer complaints. Declining jobs is never a reason for deactivation.`,
+        `You can close your account at any time. DRIFT may deactivate an account for safety concerns, fraud, violations of law, a material breach of this Agreement, or repeated serious Customer complaints. Declining jobs is never a reason for deactivation. To keep the list of available Drivers accurate, the app switches you offline after 60 minutes online without accepting a job (with a reminder first), or if it loses touch with your phone for 30 minutes while job alerts are off. That's not a penalty; you can go back online any time.`,
       ] },
       { h: "11. Risks you assume", loud: true, p: [
         `Snow removal and winter driving are dangerous. Risks include collisions, rollovers, getting stuck, equipment failure, hidden objects and hazards, slips and falls, cold exposure, carbon monoxide, back and other injuries, animals, and the condition of Customers' property and the conduct of Customers and others. YOU KNOWINGLY AND VOLUNTARILY ASSUME ALL OF THESE RISKS, KNOWN AND UNKNOWN.`,

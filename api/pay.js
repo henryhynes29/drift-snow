@@ -22,13 +22,54 @@ import {
 import { snowCheck } from "./_weather.js";
 
 const OPEN = ["requested", "scheduled"];
-const NO_STRIPE_OK = ["announce", "tick", "sched-claim", "sched-backout", "sched-checkin", "sched-start", "market", "preview-jobs", "report-issue", "release-job"];
+const NO_STRIPE_OK = ["announce", "tick", "sched-claim", "sched-backout", "sched-checkin", "sched-start", "market", "preview-jobs", "report-issue", "release-job",
+  "arrive", "confirm-done", "dispute", "stay-online", "release-payout", "resolve-dispute"];
 const H = 3600e3, MIN = 60e3;
 const FREE_BACKOUT_HOURS = 3;     // drivers can drop a scheduled job for free until 3 hrs before
 const CHECKIN_DEADLINE_MIN = 45;  // ...and must check in by 45 min before the window
 const OPEN_TO_ALL_MIN = 30;       // unclaimed scheduled jobs go to everyone 30 min before
 const MAX_ROUTE = 12;             // scheduled jobs one driver can hold
 const ACTIVE = ["accepted", "enroute", "plowing"];
+const ON_SITE_M = 250;            // "at the property" = within 250 m of the driveway pin
+const CONFIRM_AFTER_MIN = 15;     // driver arrived but never finished: ask the customer after this...
+const CONFIRM_FORCE_MIN = 90;     // ...or after this long even if the driver still seems to be there
+const AUTO_CHARGE_H = 2;          // no answer from the customer: charge after 2 hours
+const OFFLINE_NO_SIGNAL_MIN = 30; // driver's phone stopped checking in (and job alerts aren't on)
+const IDLE_WARN_MIN = 55, IDLE_OFF_MIN = 60; // online this long without accepting a job
+
+// Distance in meters between two lat/lng points.
+function metersBetween(aLat, aLng, bLat, bLng) {
+  const r = (x) => (x * Math.PI) / 180;
+  const h = Math.sin(r(bLat - aLat) / 2) ** 2 + Math.cos(r(aLat)) * Math.cos(r(bLat)) * Math.sin(r(bLng - aLng) / 2) ** 2;
+  return 12742000 * Math.asin(Math.sqrt(h));
+}
+const hasPin = (job) => job.lat != null && job.lng != null;
+const num = (v) => (v == null || v === "" || Number.isNaN(Number(v)) ? null : Number(v));
+// Is this point at the job's property? (Jobs without a pin can't be checked, so they pass.)
+function atProperty(job, lat, lng) {
+  if (!hasPin(job)) return { ok: true, m: null };
+  if (lat == null || lng == null) return { ok: false, m: null };
+  const m = Math.round(metersBetween(job.lat, job.lng, lat, lng));
+  return { ok: m <= ON_SITE_M, m };
+}
+async function driverFix(driverId) {
+  const { data } = await admin.from("driver_locations").select("lat, lng, updated_at").eq("driver_id", driverId).maybeSingle();
+  return data || null;
+}
+const hasPhotos = (job, phase) => ((job.photos || {})[phase] || []).length > 0;
+// The photos really exist in storage (uploaded by the app to job-photos/<job id>/before-… / after-…).
+async function photosOnFile(job) {
+  try {
+    const { data } = await admin.storage.from("job-photos").list(job.id, { limit: 100 });
+    const names = (data || []).map((f) => f.name || "");
+    return { before: names.some((n) => n.startsWith("before-")), after: names.some((n) => n.startsWith("after-")) };
+  } catch { return { before: false, after: false }; }
+}
+// Keep only photo entries that point at this job's own folder.
+const ownPhotos = (job, photos) => {
+  const keep = (l) => (Array.isArray(l) ? l.filter((x) => x && typeof x.path === "string" && x.path.startsWith(`${job.id}/`)).slice(0, 10) : []);
+  return { before: keep(photos?.before), after: keep(photos?.after) };
+};
 
 export default async function handler(req, res) {
   const action = (req.query?.action || new URL(req.url, "http://x").searchParams.get("action") || "").toString();
@@ -125,12 +166,24 @@ const ACTIONS = {
   },
 
   // ---------- 2. cancel / expire: release the hold ----------
-  async cancel(user, { jobId, reason }) {
+  async cancel(user, { jobId, reason, acceptCharge }) {
     const job = await getJob(jobId);
     if (job.customer_id !== user.id) throw new HttpError(403, "Not your job");
     const expired = reason === "expired";
     if (expired && !(OPEN.includes(job.status) && new Date(job.expires_at) <= new Date())) {
       throw new HttpError(409, "This offer hasn't expired");
+    }
+    // Once the driver has checked in at the property, cancelling charges the full
+    // amount (the driver made the trip) and pays the driver.
+    if (!expired && job.disputed_at && ACTIVE.includes(job.status)) {
+      return { job: await voidJob(job, "Customer cancelled after reporting a problem") };
+    }
+    if (!expired && job.arrived_at && ACTIVE.includes(job.status)) {
+      if (!acceptCharge) throw new HttpError(409, `Your driver is already at your property. Cancelling now charges the full $${Number(job.price)}.`);
+      const done = await finishJob(job, "cancel");
+      if (!done) throw new HttpError(409, "This job was just finished");
+      if (job.driver_id) await pushTo([job.driver_id], { title: "Customer cancelled at the property", body: `You still get paid for ${job.address || "this job"}. Head to your next one.`, tag: `job-${job.id}` });
+      return { job: done, charged: true };
     }
     if (!(OPEN.includes(job.status) || (!expired && ["accepted", "enroute"].includes(job.status)))) {
       throw new HttpError(409, job.status === "plowing" ? "Your driver has already started" : "This job can't be cancelled");
@@ -148,23 +201,112 @@ const ACTIONS = {
   },
 
   // ---------- 3. driver completes: charge the card, pay the driver ----------
-  async complete(user, { jobId, photos }) {
-    const job = await getJob(jobId);
+  // The job can only be finished at the property, after the driver checked in
+  // there, with a before AND an after photo.
+  async complete(user, { jobId, photos, lat, lng }) {
+    let job = await getJob(jobId);
     if (job.driver_id !== user.id) throw new HttpError(403, "Not your job");
     if (job.status === "completed") return { job, alreadyDone: true };
     if (!ACTIVE.includes(job.status)) throw new HttpError(409, "This job isn't active");
-
-    let patch = { status: "completed", photos: photos || job.photos };
-    if (job.payment_status !== "not_required") {
-      const charged = await chargeForJob(job);
-      patch = { ...patch, ...charged };
+    if (job.disputed_at) throw new HttpError(409, "The customer reported a problem with this job. DRIFT will follow up with you.");
+    if (photos && typeof photos === "object") job = await updateJob(job.id, { photos: ownPhotos(job, photos) });
+    if (!hasPhotos(job, "before")) throw new HttpError(409, "Add a before photo first.");
+    if (!hasPhotos(job, "after")) throw new HttpError(409, "Add an after photo first.");
+    let here = atProperty(job, num(lat), num(lng));
+    if (!here.ok) {
+      const fix = await driverFix(user.id);   // the phone's last location ping, if it's fresh
+      if (fix && Date.now() - new Date(fix.updated_at).getTime() < 3 * MIN) here = atProperty(job, fix.lat, fix.lng);
     }
-    let done = await updateJob(job.id, patch);
+    if (!here.ok) throw new HttpError(409, here.m != null
+      ? `You're about ${here.m} m from the property. Finish the job while you're there.`
+      : "We can't confirm you're at the property. Turn on location for DRIFT and try again.");
+    // Jobs started before check-in existed: record the arrival now (the driver is on site).
+    if (!job.arrived_at) job = await updateJob(job.id, { arrived_at: new Date().toISOString(), arrived_lat: num(lat), arrived_lng: num(lng) });
+    const done = await finishJob(job, "driver", { completed_lat: num(lat), completed_lng: num(lng) });
+    if (!done) return { job: await getJob(job.id), alreadyDone: true };
+    await touchDriver(user.id);
+    return { job: done };
+  },
 
-    // Pay the driver (or mark it owed until their payout setup is finished).
-    if (done.payment_status === "captured") {
-      done = await settleDriver(done, user.id);
+  // Driver reached the property. Recorded by the server, so it can't be faked by the app.
+  async arrive(user, { jobId, lat, lng }) {
+    const job = await getJob(jobId);
+    if (job.driver_id !== user.id) throw new HttpError(403, "Not your job");
+    if (!ACTIVE.includes(job.status)) throw new HttpError(409, "This job isn't active");
+    if (job.arrived_at) return { job, already: true };
+    const here = atProperty(job, num(lat), num(lng));
+    if (!here.ok) throw new HttpError(409, here.m != null
+      ? `You're about ${here.m} m away. Check in when you're at the property.`
+      : "Turn on location for DRIFT so we can check you in at the property.");
+    const done = await updateJob(job.id, { arrived_at: new Date().toISOString(), arrived_lat: num(lat), arrived_lng: num(lng) });
+    await touchDriver(user.id);
+    await pushTo([job.customer_id], { title: "Your driver is here", body: `${job.address || "Your property"} — plowing starts after a quick before photo.`,
+      tag: `job-${job.id}`, url: `/?job=${job.id}` });
+    return { job: done };
+  },
+
+  // Customer: "Yes, it's plowed." Charges now and pays the driver.
+  async "confirm-done"(user, { jobId }) {
+    const job = await getJob(jobId);
+    if (job.customer_id !== user.id) throw new HttpError(403, "Not your job");
+    if (job.status === "completed") return { job, alreadyDone: true };
+    if (!ACTIVE.includes(job.status) || !job.arrived_at) throw new HttpError(409, "There's nothing to confirm on this job yet");
+    const done = await finishJob(job, "customer", { customer_confirmed_at: new Date().toISOString() });
+    if (!done) return { job: await getJob(job.id), alreadyDone: true };
+    if (job.driver_id) await pushTo([job.driver_id], { title: "Customer confirmed your job", body: `${job.address || "Job"} is marked done and paid.`, tag: `job-${job.id}` });
+    return { job: done };
+  },
+
+  // Customer: "No, it wasn't done." Stops the automatic charge and flags it for DRIFT.
+  async dispute(user, { jobId, note }) {
+    const job = await getJob(jobId);
+    if (job.customer_id !== user.id) throw new HttpError(403, "Not your job");
+    if (job.status === "completed") throw new HttpError(409, "This job is already finished. Report a problem from your receipt.");
+    if (job.disputed_at) return { job };
+    if (!ACTIVE.includes(job.status) || !job.arrived_at) throw new HttpError(409, "There's nothing to dispute on this job yet");
+    const text = String(note || "").trim().slice(0, 500);
+    const done = await updateJob(job.id, { disputed_at: new Date().toISOString() });
+    await admin.from("job_issues").insert({ job_id: job.id, reporter_id: user.id, kind: "other",
+      note: `Customer says the job wasn't done${text ? `: ${text}` : ""}`, released: false });
+    if (job.driver_id) await pushTo([job.driver_id], { title: "Customer says the job isn't done", body: text || "Open DRIFT to see the message. DRIFT will follow up.", tag: `job-${job.id}`, url: `/?job=${job.id}` });
+    await pushTo(await ownerIds(), { title: "Disputed job", body: `${job.address || "A job"}: customer says it wasn't done${text ? " — " + text : ""}`, tag: `dispute-${job.id}`, url: "/?admin=1" }, { urgency: "normal" });
+    return { job: done };
+  },
+
+  // Driver: "I'm still here" (resets the idle timer).
+  async "stay-online"(user) {
+    await touchDriver(user.id, { idle_warned_at: null });
+    return { ok: true };
+  },
+
+  // Owner: settle a disputed job — "charge" (it was done: charge + pay the driver)
+  // or "release" (it wasn't: release the card hold, nobody is charged).
+  async "resolve-dispute"(user, { jobId, outcome }) {
+    if (!(await ownerIds()).includes(user.id)) throw new HttpError(403, "Owners only");
+    const job = await getJob(jobId);
+    if (!job.disputed_at || !ACTIVE.includes(job.status)) throw new HttpError(409, "This job isn't waiting on a decision");
+    if (outcome === "charge") {
+      const done = await finishJob({ ...job, disputed_at: null }, "owner", {}, { allowDisputed: true });
+      if (!done) throw new HttpError(409, "This job was already settled");
+      await pushTo([job.customer_id], { title: "Your plow job was reviewed", body: `DRIFT confirmed ${job.address || "the job"} was done, so it was charged.`, tag: `job-${job.id}`, url: `/?job=${job.id}` });
+      if (job.driver_id) await pushTo([job.driver_id], { title: "Job reviewed: you're paid", body: `${job.address || "Your job"} was confirmed done.`, tag: `job-${job.id}` });
+      return { job: done };
     }
+    if (outcome === "release") {
+      const done = await voidJob(job, "Customer reported it wasn't done");
+      if (job.driver_id) await pushTo([job.driver_id], { title: "Job reviewed: not charged", body: `${job.address || "The job"} was closed without a charge after review.`, tag: `job-${job.id}` });
+      return { job: done };
+    }
+    throw new HttpError(400, "Pick charge or release");
+  },
+
+  // Owner: release a payout that was held (e.g. finished without photos).
+  async "release-payout"(user, { jobId }) {
+    if (!(await ownerIds()).includes(user.id)) throw new HttpError(403, "Owners only");
+    const job = await getJob(jobId);
+    if (job.payout_status !== "held") throw new HttpError(409, "This payout isn't on hold");
+    if (job.transfer_id) throw new HttpError(409, "This driver was already paid for this job");
+    const done = await settleDriver(await updateJob(job.id, { payout_hold_reason: null }), job.driver_id);
     return { job: done };
   },
 
@@ -527,6 +669,7 @@ async function chargeForJob(job) {
 }
 
 async function settleDriver(job, driverId) {
+  if (job.transfer_id || job.payout_status === "paid") return job;   // already paid
   const driver = await getProfile(driverId);
   if (!driver?.stripe_account_id) return await updateJob(job.id, { payout_status: "owed" });
   let ready = driver.payouts_ready;
@@ -542,6 +685,46 @@ async function settleDriver(job, driverId) {
     console.error("[pay:complete] transfer failed", e.message);
     return await updateJob(job.id, { payout_status: "owed" });
   }
+}
+
+// Finish a job (driver tapped Complete, customer confirmed, automatic charge, or
+// a cancel after the driver arrived): charge the card, then pay the driver.
+// No before/after photos and no customer confirmation = payout held for DRIFT to review.
+// Only one path can finish a job: it's claimed first (completed_by set while still
+// active and unclaimed), so a driver tap, customer confirm, cancel and the automatic
+// charge can never both charge or pay. Returns null if someone else got there first.
+async function finishJob(job, by, extra = {}, { allowDisputed = false } = {}) {
+  let claim = admin.from("jobs").update({ completed_by: by }).eq("id", job.id).in("status", ACTIVE).is("completed_by", null);
+  if (!allowDisputed) claim = claim.is("disputed_at", null);
+  const { data: claimed } = await claim.select().maybeSingle();
+  if (!claimed) return null;
+  let patch = { status: by === "cancel" ? "cancelled" : "completed", ...extra };
+  if (claimed.payment_status !== "not_required") patch = { ...patch, ...(await chargeForJob(claimed)) };
+  let done = await updateJob(claimed.id, patch);
+  if (done.payment_status === "captured" && done.driver_id && (done.payout_status || "none") === "none") {
+    // Proof = the driver checked in at a pinned property and both photos are really on file.
+    const files = await photosOnFile(done);
+    const proof = hasPin(done) && done.arrived_at && files.before && files.after;
+    if (proof || by === "customer" || by === "cancel" || by === "owner") done = await settleDriver(done, done.driver_id);
+    else done = await updateJob(done.id, { payout_status: "held",
+      payout_hold_reason: !hasPin(done) ? "Job had no map pin to check the location" : "Finished without before/after photos on file" });
+  }
+  return done;
+}
+
+// Close an active job with no charge: release the card hold.
+async function voidJob(job, why) {
+  if (stripe && job.payment_status === "authorized") await releaseHold(job);
+  const done = await updateJob(job.id, { status: "cancelled", completed_by: "void", payout_hold_reason: why || null,
+    payment_status: job.payment_status === "not_required" ? "not_required" : "canceled" });
+  await pushTo([job.customer_id], { title: "You weren't charged", body: `${job.address || "Your plow job"} was closed without a charge.`, tag: `job-${job.id}`, url: "/" });
+  return done;
+}
+
+// The driver did something (accepted, checked in, finished): reset the idle timer.
+async function touchDriver(driverId, extra = {}) {
+  const now = new Date().toISOString();
+  try { await admin.from("profiles").update({ active_at: now, last_seen_at: now, ...extra }).eq("id", driverId); } catch { /* best effort */ }
 }
 
 async function payOwedJobs(driverId, accountId) {
@@ -585,7 +768,7 @@ async function releaseLiveJob(job, driverId) {
   if (!["accepted", "enroute"].includes(job.status)) throw new HttpError(409, job.status === "plowing" ? "You've already started — finish it or report the problem without giving it back" : "This job can't be given back");
   const { data: got } = await admin.from("jobs").update({ driver_id: null, status: "requested", accepted_at: null,
     expires_at: new Date(Date.now() + 20 * MIN).toISOString(), announced_at: null, announced_all_at: null,
-    preferred_driver_ids: null, exclusive_until: null })
+    preferred_driver_ids: null, exclusive_until: null, arrived_at: null, arrived_lat: null, arrived_lng: null, confirm_asked_at: null })
     .eq("id", job.id).eq("driver_id", driverId).in("status", ["accepted", "enroute"]).select().maybeSingle();
   if (!got) throw new HttpError(409, "This job isn't yours anymore");
   await admin.from("driver_backouts").insert({ job_id: job.id, driver_id: driverId, late: false, reason: "released" });
@@ -645,6 +828,8 @@ async function recordBackout(job, driverId, late, reason) {
 async function tick() {
   const now = Date.now(), iso = (t) => new Date(t).toISOString();
   const out = { reminded: 0, released: 0, opened: 0, expired: 0 };
+  try { Object.assign(out, await presenceTick(now)); } catch (e) { console.error("[tick] presence", e.message); }
+  try { Object.assign(out, await proofTick(now)); } catch (e) { console.error("[tick] proof", e.message); }
   const { data: sched } = await admin.from("jobs").select("*").eq("status", "scheduled")
     .in("payment_status", ["authorized", "not_required"]).lte("scheduled_for", iso(now + 3 * H));
 
@@ -698,6 +883,98 @@ async function tick() {
       await pushTo([j.customer_id], { title: "Sorry — no driver made it", body: `Your ${fmtWindow(j.scheduled_for, j.window_end)} plow wasn't done, so you weren't charged. Book again anytime.`, tag: `job-${j.id}`, url: "/" });
       out.expired += 1;
     } catch (e) { console.error("[tick] expire", j.id, e.message); }
+  }
+  return out;
+}
+
+// ---------- drivers online: closed apps and idle drivers go offline ----------
+async function presenceTick(now) {
+  const out = { offline: 0, warned: 0 };
+  const { data: on } = await admin.from("profiles").select("id, last_seen_at, online_since, active_at, idle_warned_at").eq("is_online", true);
+  if (!on?.length) return out;
+  const ids = on.map((p) => p.id);
+  const { data: busy } = await admin.from("jobs").select("driver_id").in("status", ACTIVE).in("driver_id", ids);
+  const working = new Set((busy || []).map((j) => j.driver_id));
+  // Drivers with job alerts on can be reached with the app closed, so a locked phone isn't "gone".
+  const { data: subs } = await admin.from("push_subscriptions").select("user_id").in("user_id", ids);
+  const reachable = new Set((subs || []).map((x) => x.user_id));
+  const t = (v) => (v ? new Date(v).getTime() : 0);
+  for (const p of on) {
+    if (working.has(p.id)) continue;   // on a job: never booted
+    if (!p.online_since) {             // online from before this check existed: start the clock now
+      const n = new Date(now).toISOString();
+      await admin.from("profiles").update({ online_since: n, active_at: p.active_at || n, last_seen_at: p.last_seen_at || n }).eq("id", p.id);
+      continue;
+    }
+    const seen = Math.max(t(p.last_seen_at), t(p.online_since));
+    const idleFrom = Math.max(t(p.online_since), t(p.active_at));
+    let reason = null;
+    if (!reachable.has(p.id) && now - seen > OFFLINE_NO_SIGNAL_MIN * MIN) reason = "app_closed";
+    else if (idleFrom && now - idleFrom >= IDLE_OFF_MIN * MIN && t(p.idle_warned_at) >= idleFrom && now - t(p.idle_warned_at) >= 4.5 * MIN) reason = "idle";
+    if (reason) {
+      // Re-check right before switching them off: no job accepted, no "I'm here" in the meantime.
+      const { data: nowBusy } = await admin.from("jobs").select("id").in("status", ACTIVE).eq("driver_id", p.id).limit(1);
+      if (nowBusy?.length) continue;
+      let off = admin.from("profiles").update({ is_online: false, offline_reason: reason }).eq("id", p.id).eq("is_online", true);
+      if (p.active_at) off = off.eq("active_at", p.active_at);
+      const { data: gone } = await off.select("id");
+      if (!gone?.length) continue;
+      await pushTo([p.id], reason === "idle"
+        ? { title: "You're offline now", body: "You were online for an hour without taking a job. Go back online any time.", tag: "presence", url: "/?go=drive" }
+        : { title: "You're offline now", body: "DRIFT lost touch with your phone, so we switched you offline. Open DRIFT and go back online when you're ready.", tag: "presence", url: "/?go=drive" },
+        { ttl: 3600, urgency: "normal" });
+      out.offline += 1;
+      continue;
+    }
+    if (idleFrom && now - idleFrom >= IDLE_WARN_MIN * MIN && t(p.idle_warned_at) < idleFrom) {
+      await admin.from("profiles").update({ idle_warned_at: new Date(now).toISOString() }).eq("id", p.id);
+      await pushTo([p.id], { title: "Still there?", body: "You'll go offline in 5 minutes. Tap to stay online.", tag: "presence", url: "/?go=drive&stay=1" },
+        { ttl: 300, urgency: "high" });
+      out.warned += 1;
+    }
+  }
+  return out;
+}
+
+// ---------- driver arrived but never finished: ask the customer, then charge ----------
+async function proofTick(now) {
+  const out = { asked: 0, autoCharged: 0 };
+  const { data: open } = await admin.from("jobs").select("*").in("status", ACTIVE).not("arrived_at", "is", null).is("disputed_at", null).limit(200);
+  for (const j of open || []) {
+    try {
+      const since = now - new Date(j.arrived_at).getTime();
+      if (!j.confirm_asked_at) {
+        if (since < CONFIRM_AFTER_MIN * MIN) continue;
+        let gone = since >= CONFIRM_FORCE_MIN * MIN;
+        if (!gone && j.driver_id) {
+          const fix = await driverFix(j.driver_id);
+          const stale = !fix || now - new Date(fix.updated_at).getTime() > 15 * MIN;
+          gone = stale || !atProperty(j, fix.lat, fix.lng).ok;
+        }
+        if (!gone) continue;
+        const { data: got } = await admin.from("jobs").update({ confirm_asked_at: new Date(now).toISOString() })
+          .eq("id", j.id).is("confirm_asked_at", null).select().maybeSingle();
+        if (!got) continue;
+        await pushTo([j.customer_id], { title: "Was your driveway plowed?", sticky: true,
+          body: `Your driver checked in at ${j.address || "your property"} but didn't mark it done. Tap to confirm or report a problem. No answer in ${AUTO_CHARGE_H} hours and it's charged.`,
+          tag: `confirm-${j.id}`, url: `/?confirm=${j.id}` }, { ttl: 7200, urgency: "high" });
+        if (j.driver_id) await pushTo([j.driver_id], { title: "Finish your job in DRIFT", body: `${j.address || "Your last job"} isn't marked complete. Your payout waits on the after photo.`, tag: `job-${j.id}`, url: "/?go=drive" });
+        out.asked += 1;
+      } else if (now - new Date(j.confirm_asked_at).getTime() >= AUTO_CHARGE_H * H) {
+        // Only charge if the driver documented being there (a before photo on file).
+        // No proof at all: close it without a charge instead of leaving it hanging.
+        if (!(await photosOnFile(j)).before) {
+          const { data: still } = await admin.from("jobs").select("*").eq("id", j.id).in("status", ACTIVE).is("disputed_at", null).is("completed_by", null).maybeSingle();
+          if (still) { await voidJob(still, "Driver checked in but never documented the job"); out.voided = (out.voided || 0) + 1; }
+          continue;
+        }
+        const done = await finishJob(j, "auto");
+        if (!done) continue;   // the driver finished it, the customer answered, or it was disputed meanwhile
+        await pushTo([j.customer_id], { title: `Charged $${Number(j.price)} for your plow`, body: "We didn't hear back, so the job was marked done. Something wrong? Report it from your receipt.", tag: `job-${j.id}`, url: `/?job=${j.id}` });
+        if (j.driver_id) await pushTo([j.driver_id], { title: "Job closed", body: done.payout_status === "held" ? "The customer was charged. Your payout is held until DRIFT reviews it (no after photo)." : "The customer was charged and your payout is on the way.", tag: `job-${j.id}` });
+        out.autoCharged += 1;
+      }
+    } catch (e) { console.error("[tick] proof", j.id, e.message); }
   }
   return out;
 }

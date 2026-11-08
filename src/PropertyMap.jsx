@@ -113,6 +113,11 @@ function makeMarkerEl(mk) {
       `<path d="M3 7h9v8H3zM12 10h4l3 3v2h-7z"/><circle cx="7" cy="17.5" r="1.8"/><circle cx="16.5" cy="17.5" r="1.8"/></svg>`
     : `<svg width="${g}" height="${g}" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5.5" fill="#fff"/></svg>`;
   wrap.appendChild(circleEl(d, fill, glyph));
+  if (mk.name) { // owner map: driver's first name next to the truck
+    const pill = labelPill(mk.name);
+    pill.style.borderColor = "rgba(255,255,255,.35)"; pill.style.left = `${d + 4}px`; pill.style.top = `${Math.round(d / 2) - 9}px`;
+    wrap.style.position = "relative"; wrap.appendChild(pill);
+  }
   return wrap;
 }
 
@@ -186,7 +191,7 @@ export function LiveMap({ center, markers = [], route, height = 220, interactive
   }, [fitKey]);
   useEffect(() => {
     const m = mapRef.current; if (!m) return;
-    const key = markers.map((mk) => `${mk.kind || ""}${mk.label || ""}`).join("|");
+    const key = markers.map((mk) => `${mk.kind || ""}${mk.label || ""}${mk.name || ""}`).join("|");
     if (markerObjs.current.length !== markers.length || markerObjs.current.key !== key) {
       markerObjs.current.forEach((o) => o.remove());
       markerObjs.current = markers.map((mk) => new mapboxgl.Marker({ element: makeMarkerEl(mk) }).setLngLat([mk.lng, mk.lat]).addTo(m));

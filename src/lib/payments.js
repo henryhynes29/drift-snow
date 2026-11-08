@@ -44,9 +44,20 @@ export const startHold = (jobId) => pay("hold", { jobId });
 // Customer: after the card form succeeds, put the offer in front of drivers.
 export const confirmHold = (jobId) => pay("confirm-hold", { jobId });
 // Customer: cancel (or expire) an offer and release the card hold.
-export const cancelJobPaid = (jobId, reason = "cancelled") => pay("cancel", { jobId, reason });
-// Driver: finish the job -> customer is charged, driver is paid.
-export const completeJobPaid = (jobId, photos) => pay("complete", { jobId, photos });
+export const cancelJobPaid = (jobId, reason = "cancelled", acceptCharge = false) => pay("cancel", { jobId, reason, acceptCharge });
+// Driver: finish the job (at the property) -> customer is charged, driver is paid.
+export const completeJobPaid = (jobId, photos, at) => pay("complete", { jobId, photos, lat: at?.lat, lng: at?.lng });
+// Driver: checked in at the property (the server checks the location).
+export const arriveAtJob = (jobId, at) => pay("arrive", { jobId, lat: at?.lat, lng: at?.lng });
+// Customer: the driver forgot to finish — "yes, it's plowed" / "no, it wasn't done".
+export const confirmJobDone = (jobId) => pay("confirm-done", { jobId });
+export const disputeJob = (jobId, note) => pay("dispute", { jobId, note });
+// Driver: "I'm still here" (resets the 60-minute idle timer).
+export const stayOnline = () => pay("stay-online").catch(() => null);
+// Owner: release a payout that was held for review.
+export const releasePayout = (jobId) => pay("release-payout", { jobId });
+// Owner: settle a disputed job — "charge" (it was done) or "release" (no charge).
+export const resolveDispute = (jobId, outcome) => pay("resolve-dispute", { jobId, outcome });
 // Customer: tip after the job. 100% goes to the driver.
 export const tipJob = (jobId, amount) => pay("tip", { jobId, amount });
 // Driver: payouts setup (embedded Stripe onboarding) + status + Stripe dashboard link.

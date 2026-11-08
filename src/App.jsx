@@ -12,9 +12,9 @@ function LiveMap(props) {
 }
 import { useAuth } from "./lib/auth.jsx";
 import { supabaseEnabled } from "./lib/supabase.js";
-import { recordLegalAcceptance, loadProperties, replaceProperties, rateJob, pushDriverLocation, subscribeToDriverLocation, createJobFromOrder, patchJob, sendMessage, subscribeToMessages, loadMessages,
+import { recordLegalAcceptance, loadProperties, replaceProperties, rateJob, pushDriverLocation, driverHeartbeat, subscribeToDriverLocation, createJobFromOrder, patchJob, sendMessage, subscribeToMessages, loadMessages,
   updateMyProfile, rowToOrder, fetchJob, listOpenJobs, listScheduledJobs, listMyQueue, queuePosition, lastCompletedJob, subscribeOpenJobs, claimJob, getProfile, profileToDriver, setDriverStatus, becomeDriver, cancelJob, expireJob, subscribeToJob, loadActiveJob, loadAccountStats, loadReviews, listFavorites, addFavorite, removeFavorite, setSnowAlerts, listRegulars, driverYear, saveJobMiles } from "./lib/db.js";
-import { STRIPE_ENABLED, STRIPE_PK, getStripe, startHold, confirmHold, cancelJobPaid, completeJobPaid, tipJob, connectSession, connectStatus, connectDashboard, authedFetch, announceJob,
+import { STRIPE_ENABLED, STRIPE_PK, getStripe, startHold, confirmHold, cancelJobPaid, completeJobPaid, arriveAtJob, confirmJobDone, disputeJob, stayOnline, releasePayout, tipJob, connectSession, connectStatus, connectDashboard, authedFetch, announceJob,
   schedClaim, schedBackout, schedCheckin, schedStart, schedTick, previewJobs, reportIssue, marketStats } from "./lib/payments.js";
 import { LEVELS, driverLevel, nextLevel, mileageRate } from "./lib/levels.js";
 import { uploadJobPhoto, uploadDriverDoc, myDriverDocs, signedUrl } from "./lib/photos.js";
@@ -307,11 +307,12 @@ const AdminApp = React.lazy(() => import("./Admin.jsx"));
 // ---- Deep links: notification taps + home-screen shortcuts ----------------
 // ?job=<id> (customer job) · ?offer=<id> (driver: a new request) · ?route=1
 // (driver: scheduled route / check-in) · ?go=book|jumpstart|drive · ?rebook=1
-const deepLink = { job: null, offer: null, route: false, go: null, rebook: false };
+const deepLink = { job: null, offer: null, route: false, go: null, rebook: false, stay: false, confirm: null };
 const linkListeners = new Set();
 function readLink(search) {
   const q = new URLSearchParams(search || "");
-  Object.assign(deepLink, { job: q.get("job"), offer: q.get("offer"), route: q.has("route"), go: q.get("go"), rebook: q.has("rebook") });
+  Object.assign(deepLink, { job: q.get("job"), offer: q.get("offer"), route: q.has("route"), go: q.get("go"), rebook: q.has("rebook"),
+    stay: q.has("stay"), confirm: q.get("confirm") });
 }
 if (typeof window !== "undefined") {
   readLink(window.location.search);
@@ -328,7 +329,7 @@ function useDeepLink() {
   useEffect(() => { linkListeners.add(setL); return () => linkListeners.delete(setL); }, []);
   return l;
 }
-const consumeLink = (k) => { deepLink[k] = (k === "route" || k === "rebook") ? false : null; };
+const consumeLink = (k) => { deepLink[k] = (k === "route" || k === "rebook" || k === "stay") ? false : null; };
 const ADMIN_ROUTE = typeof window !== "undefined" && ["admin", "ops"].some((k) => new URLSearchParams(window.location.search).has(k));
 
 // Came from the "Drive with DRIFT" page (/?drive=1): open straight into driver sign-up.
@@ -357,10 +358,11 @@ const initial = {
   userId: null,                     // set when signed in via Supabase
   autoPlow: false,
   autoPlowThreshold: 2,             // inches of snow that triggers auto-dispatch
-  earnings: { today: 0, week: 512, jobsToday: 0, payouts: [
+  // Sample numbers are for the offline demo only; real sites start empty (guests included).
+  earnings: supabaseEnabled ? { today: 0, week: 0, jobsToday: 0, payouts: [] } : { today: 0, week: 512, jobsToday: 0, payouts: [
     { d: "Mon", amt: 148 }, { d: "Tue", amt: 96 }, { d: "Wed", amt: 132 }, { d: "Thu", amt: 136 },
   ]},
-  history: [
+  history: supabaseEnabled ? [] : [
     { id: "h1", date: "Jan 12", size: "Medium", total: 129, driver: "Kyle B.", rating: 5 },
     { id: "h2", date: "Jan 8", size: "Small", total: 83, driver: "Dana R.", rating: 4 },
   ],
@@ -590,7 +592,7 @@ function reducer(s, a) {
 // ---- UI atoms --------------------------------------------------------------
 // Section label — small mono "dispatch readout" label (same voice as the landing page).
 function Eyebrow({ children, color }) {
-  return <div style={{ font: `500 11.5px/1.3 ${FM}`, letterSpacing: ".08em", textTransform: "uppercase", color: color || C.mist }}>{children}</div>;
+  return <div style={{ font: `600 13px/1.3 ${FB}`, letterSpacing: "-.005em", color: color || C.mist }}>{children}</div>;
 }
 // A driver's written reviews. Reviewers are anonymous ("Customer").
 function ReviewsSheet({ userId, name, rating, count, onClose }) {
@@ -1447,7 +1449,7 @@ function AddressSearch({ value, onChange, picked, onPick, compact }) {
 
 function Onboarding() {
   const { state, dispatch } = useStore();
-  const [step, setStep] = useState(state.userId ? 1 : 0); // signed-in users skip the welcome hero
+  const [step, setStep] = useState(state.userId || supabaseEnabled ? 1 : 0); // signed-in users and guests from the homepage skip the welcome hero
   // The homepage price check can hand over the address they typed, so the map opens on their house.
   const [prop, setProp] = useState(() => {
     try { const p = JSON.parse(localStorage.getItem("drift.prefill") || "null"); return p?.center ? { address: p.address, center: p.center } : null; } catch { return null; }
@@ -1506,8 +1508,8 @@ function Onboarding() {
             </div>
           </div>
 
-          <h1 style={{ font: `800 50px/0.96 ${FD}`, textTransform: "uppercase", margin: "0 0 10px", textAlign: "center", letterSpacing: ".01em" }}>
-            Never shovel<br />again.</h1>
+          <h1 style={{ ...H(40), margin: "0 0 10px", textAlign: "center" }}>
+            Never shovel <span style={{ color: C.amber }}>again</span></h1>
           <p style={{ ...sub, maxWidth: 300, margin: "0 auto 18px", textAlign: "center", fontSize: 15 }}>
             Map your property once. Tap once each storm. A local plow operator clears it exactly how you drew it.
           </p>
@@ -1790,7 +1792,11 @@ function RiderHome({ go }) {
   const [gate, setGate] = useState(null);   // the action to run once they agree
   const [doc, setDoc] = useState(null);     // legal doc open in the reader
   const signed = hasCurrentAcceptance(state.legal?.customer);
-  const guard = (fn) => (...args) => (signed ? fn(...args) : setGate(() => () => fn(...args)));
+  // Guests (mapped their driveway, no account yet) make an account right here, at checkout.
+  const needAccount = supabaseEnabled && !state.userId;
+  const [acct, setAcct] = useState(null);   // which booking to send once they're signed in
+  const guard = (fn, kind) => (...args) => (needAccount ? setAcct(kind || "start")
+    : signed ? fn(...args) : setGate(() => () => fn(...args)));
 
   const sqft = prop?.sqft || zonesToSqFt(prop?.zones);
   // sidewalk length: derive a sensible default from the property, editable later
@@ -1864,7 +1870,7 @@ function RiderHome({ go }) {
         <div style={{ font: `400 12.5px/1.35 ${FB}`, color: C.mist, marginTop: 2 }}>
           {JOB_TYPES[rbType].label} · {(OFFER_TIERS.find((t) => t.id === rbTier) || OFFER_TIERS[1]).label}{rbQ.depthMult > 1 ? ` · ${rbQ.depthLabel} snow` : ""} · same as last time</div>
       </div>
-      <Btn sm onClick={guard(rebook)} style={{ padding: "0 14px" }}>Book</Btn>
+      <Btn sm onClick={guard(rebook, "rebook")} style={{ padding: "0 14px" }}>Book</Btn>
     </div>
   ) : null;
 
@@ -1902,6 +1908,15 @@ function RiderHome({ go }) {
   // Card hold (when payments are on) happens on the tracking screen, after the
   // offer is saved — the server reads the amount from the saved job.
   const startRequest = () => request();
+  useEffect(() => {
+    if (!acct || needAccount) return;
+    const kind = acct; setAcct(null);
+    const run = { start: startRequest, rebook: () => rebook(), sidewalk: () => bookSidewalk(), digout: () => emergencyDigout(),
+      jumpstart: () => requestRoadside("jumpstart") }[kind];
+    if (!run) return;
+    const t = setTimeout(() => (signed ? run() : setGate(() => run)), 300); // let the account finish loading
+    return () => clearTimeout(t);
+  }, [needAccount]);
   const onAuthorized = (paymentIntentId) => {
     setPayOpen(false);
     const order = buildOrder({ paymentIntentId });
@@ -1969,7 +1984,7 @@ function RiderHome({ go }) {
       {/* One notice at a time, most important first: hazards → get the app → snow forecast. */}
       {rebookCard}
       {!hazardNotice && <AppSetupCard role="rider" onShown={setSetupShown} />}
-      {!hazardNotice && !setupShown && (LIVE ? <LiveSnowBanner /> : <StormBanner />)}
+      {!hazardNotice && !setupShown && (supabaseEnabled ? <LiveSnowBanner /> : <StormBanner />)}
       {hazardNotice && (
         <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "12px 12px 12px 14px", borderRadius: 14, marginBottom: 12,
           background: C.slate, border: `1px solid ${C.danger}55` }}>
@@ -1982,7 +1997,7 @@ function RiderHome({ go }) {
           <Btn sm onClick={markHazards} style={{ padding: "0 12px" }}>Mark</Btn>
         </div>
       )}
-      {!LIVE && !hazardNotice && !setupShown && SNOW_DEPTH_IN >= 2 && prop && <OrdinanceCountdown price={quickQuote("sidewalk").riderTotal} onBook={guard(bookSidewalk)} />}
+      {!supabaseEnabled && !hazardNotice && !setupShown && SNOW_DEPTH_IN >= 2 && prop && <OrdinanceCountdown price={quickQuote("sidewalk").riderTotal} onBook={guard(bookSidewalk, "sidewalk")} />}
 
       {/* ---- THE primary action: your saved place + one button (Uber "Home" / DoorDash reorder) ---- */}
       {prop ? (
@@ -1994,7 +2009,7 @@ function RiderHome({ go }) {
             ) : MAP_ENABLED && prop.center ? (
               <LiveMap center={prop.center} height={178} interactive={false} markers={[{ lng: prop.center.lng, lat: prop.center.lat, size: 26 }]} />
             ) : (
-              <StormMap pin blips={LIVE ? [] : [{ id: 1, x: 62, y: 38 }, { id: 2, x: 30, y: 64 }]} height={2.1} />
+              <StormMap pin blips={supabaseEnabled ? [] : [{ id: 1, x: 62, y: 38 }, { id: 2, x: 30, y: 64 }]} height={2.1} />
             )}
             <div style={{ position: "absolute", inset: 0, pointerEvents: "none",
               background: "linear-gradient(180deg, rgba(5,7,10,.05) 30%, rgba(5,7,10,.82) 100%)" }} />
@@ -2215,8 +2230,8 @@ function RiderHome({ go }) {
         <div id="other-services" />
         <Eyebrow>Other services</Eyebrow>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
-          <ServiceTile icon="car" title="Dig out my car" sub={`Buried by the berm · $${quickQuote("digout").riderTotal}`} onClick={guard(emergencyDigout)} disabled={!prop} />
-          <ServiceTile icon="battery" title="Jump-start" sub={`Dead battery · $${quickQuote("jumpstart").riderTotal}`} onClick={guard(() => requestRoadside("jumpstart"))} disabled={!prop} />
+          <ServiceTile icon="car" title="Dig out my car" sub={`Buried by the berm · $${quickQuote("digout").riderTotal}`} onClick={guard(emergencyDigout, "digout")} disabled={!prop} />
+          <ServiceTile icon="battery" title="Jump-start" sub={`Dead battery · $${quickQuote("jumpstart").riderTotal}`} onClick={guard(() => requestRoadside("jumpstart"), "jumpstart")} disabled={!prop} />
         </div>
       </div>
 
@@ -2237,8 +2252,96 @@ function RiderHome({ go }) {
       )}
       {gate && <ConsentGate role="customer" onClose={() => setGate(null)}
         onAgree={(rec) => { acceptLegal(dispatch, rec, state.userId); const run = gate; setGate(null); run(); }} />}
+      {acct && needAccount && <CheckoutAccount onClose={() => setAcct(null)} />}
       {doc && <LegalReader docId={doc} onClose={() => setDoc(null)} />}
     </section></Fade>
+  );
+}
+
+// ---- Checkout account: guests sign up right where they book ----------------
+// Email + a 6-digit code (no password). Existing customers can use their password.
+function CheckoutAccount({ onClose }) {
+  const { state } = useStore();
+  const auth = useAuth();
+  const [mode, setMode] = useState("email");      // email | code | password
+  const [name, setName] = useState(state.profile?.name || "");
+  const [email, setEmail] = useState(state.profile?.email || "");
+  const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const okEmail = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim());
+  const send = async () => {
+    setErr("");
+    if (name.trim().length < 2) { setErr("Enter your name."); return; }
+    if (!okEmail) { setErr("Enter a valid email."); return; }
+    setBusy(true);
+    const r = await auth.sendEmailCode({ email: email.trim(), name: name.trim(), phone: state.profile?.phone || "" });
+    setBusy(false);
+    if (r?.error) { setErr(/rate|seconds/i.test(r.error.message || "") ? "Wait a minute, then send a new code." : r.error.message || "Couldn't send the code."); return; }
+    setMode("code");
+  };
+  const verify = async () => {
+    setErr("");
+    const t = code.replace(/\D/g, "");
+    if (t.length < 6) { setErr("Enter the 6-digit code from your email."); return; }
+    setBusy(true);
+    const r = await auth.verifyEmailCode(email.trim(), t);
+    setBusy(false);
+    if (r?.error) { setErr(/expired|invalid/i.test(r.error.message || "") ? "That code didn't work. Check it, or send a new one." : r.error.message); return; }
+    // Signed in: the app loads the account and sends the booking.
+  };
+  const signIn = async () => {
+    setErr("");
+    if (!okEmail || !password) { setErr("Enter your email and password."); return; }
+    setBusy(true);
+    const r = await auth.signIn({ email: email.trim(), password });
+    setBusy(false);
+    if (r?.error) setErr(r.error.message || "Couldn't sign in.");
+  };
+  const input = { width: "100%", boxSizing: "border-box", background: C.night2, color: C.ice, font: `500 16px ${FB}`,
+    outline: "none", padding: "14px 14px", borderRadius: 12, border: `1px solid ${C.line}` };
+  const linkBtn = { background: "none", border: "none", cursor: "pointer", font: `600 14px ${FB}`, color: C.amber, padding: "10px 4px" };
+  return (
+    <Sheet onClose={onClose}>
+      {mode === "email" && <>
+        <h3 style={{ ...H(26), margin: "0 0 6px" }}>Last step: your account</h3>
+        <p style={{ ...sub, margin: "0 0 16px" }}>So we can text you when your plow is coming and email your receipt. No password — we'll email you a code.</p>
+        <div style={{ display: "grid", gap: 10 }}>
+          <input style={input} value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" autoComplete="name" aria-label="Your name" />
+          <input style={input} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" inputMode="email" autoComplete="email" aria-label="Email"
+            onKeyDown={(e) => { if (e.key === "Enter") send(); }} />
+        </div>
+        {err && <p style={{ font: `500 14px ${FB}`, color: C.danger, margin: "10px 2px 0" }}>{err}</p>}
+        <div style={{ marginTop: 14 }}><Btn full onClick={send} disabled={busy}>{busy ? "Sending…" : "Email me a code"}</Btn></div>
+        <div style={{ textAlign: "center" }}><button onClick={() => { setErr(""); setMode("password"); }} style={linkBtn}>I have a password</button></div>
+      </>}
+      {mode === "code" && <>
+        <h3 style={{ ...H(26), margin: "0 0 6px" }}>Check your email</h3>
+        <p style={{ ...sub, margin: "0 0 16px" }}>We sent a 6-digit code to <b style={{ color: C.ice }}>{email.trim()}</b>. It can take a minute — check spam too.</p>
+        <input style={{ ...input, font: `600 26px ${FM}`, letterSpacing: ".4em", textAlign: "center" }} value={code}
+          onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code"
+          placeholder="••••••" aria-label="6-digit code" autoFocus onKeyDown={(e) => { if (e.key === "Enter") verify(); }} />
+        {err && <p style={{ font: `500 14px ${FB}`, color: C.danger, margin: "10px 2px 0" }}>{err}</p>}
+        <div style={{ marginTop: 14 }}><Btn full onClick={verify} disabled={busy || code.length < 6}>{busy ? "Checking…" : "Continue to booking"}</Btn></div>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <button onClick={() => { setCode(""); setMode("email"); }} style={linkBtn}>Change email</button>
+          <button onClick={send} disabled={busy} style={linkBtn}>Send a new code</button>
+        </div>
+      </>}
+      {mode === "password" && <>
+        <h3 style={{ ...H(26), margin: "0 0 6px" }}>Sign in</h3>
+        <p style={{ ...sub, margin: "0 0 16px" }}>Use the email and password you signed up with.</p>
+        <div style={{ display: "grid", gap: 10 }}>
+          <input style={input} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" inputMode="email" autoComplete="email" aria-label="Email" />
+          <input style={input} type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" autoComplete="current-password" aria-label="Password"
+            onKeyDown={(e) => { if (e.key === "Enter") signIn(); }} />
+        </div>
+        {err && <p style={{ font: `500 14px ${FB}`, color: C.danger, margin: "10px 2px 0" }}>{err}</p>}
+        <div style={{ marginTop: 14 }}><Btn full onClick={signIn} disabled={busy}>{busy ? "Signing in…" : "Sign in and book"}</Btn></div>
+        <div style={{ textAlign: "center" }}><button onClick={() => { setErr(""); setMode("email"); }} style={linkBtn}>Email me a code instead</button></div>
+      </>}
+    </Sheet>
   );
 }
 
@@ -2405,6 +2508,10 @@ function PaymentSheet({ amount, jobId, onAuthorized, onClose, scheduled }) {
 // ---- Shared job chat (rider <-> driver) ------------------------------------
 // Uses Supabase realtime when the job is persisted (real jobId + Supabase on);
 // otherwise falls back to a local, in-session thread so the demo still chats.
+// Phone numbers and emails stay out of job chat (keeps jobs and payments in the app).
+const hideContact = (t) => String(t || "")
+  .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[email hidden]")
+  .replace(/(\+?1[ .-]?)?\(?\d{3}\)?[ .-]?\d{3}[ .-]?\d{4}/g, "[number hidden]");
 function JobChat({ jobId, senderId, peerName, seed }) {
   const live = supabaseEnabled && !!jobId && !!senderId;
   const [msgs, setMsgs] = useState(live || (supabaseEnabled && senderId) ? [] : (seed || []));
@@ -2423,7 +2530,7 @@ function JobChat({ jobId, senderId, peerName, seed }) {
   }, [jobId, senderId]);
 
   const send = () => {
-    const body = text.trim();
+    const body = hideContact(text.trim()); // the database does this too
     if (!body) return;
     setText("");
     if (live) {
@@ -2446,6 +2553,7 @@ function JobChat({ jobId, senderId, peerName, seed }) {
           </div>
         ))}
       </div>
+      <div style={{ font: `400 12px ${FB}`, color: C.mistDim, margin: "6px 2px 0" }}>Phone numbers and emails are hidden. Keep it in DRIFT so your job and payment stay covered.</div>
       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
         <input value={text} onChange={e => setText(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter") send(); }} placeholder="Type a message…"
@@ -2572,13 +2680,16 @@ function RiderTracking() {
     if (row.status === "cancelled" || row.status === "expired") {
       dispatch({ type: "CLEAR_ORDER" });
       dispatch({ type: "TOAST", msg: row.status === "expired" ? (row.scheduled_for ? "No driver made your scheduled window — you weren't charged." : "No plow took this offer — you weren't charged. Try a higher offer.")
-        : "This job was cancelled. You weren't charged." });
+        : row.payment_status === "captured" ? `Cancelled — $${Number(row.price)} charged for your driver's trip` : "This job was cancelled. You weren't charged." });
       return;
     }
     const map = { requested: "requested", scheduled: "scheduled", accepted: "enroute", enroute: "enroute", plowing: "plowing", completed: "arrived_done" };
     const patch = { state: map[row.status] || o.state, driverId: row.driver_id || null, photos: row.photos || o.photos,
       scheduledFor: row.scheduled_for ? new Date(row.scheduled_for).getTime() : o.scheduledFor || null,
       checkedInAt: row.checked_in_at ? new Date(row.checked_in_at).getTime() : null,
+      arrivedAt: row.arrived_at ? new Date(row.arrived_at).getTime() : null,
+      confirmAskedAt: row.confirm_asked_at ? new Date(row.confirm_asked_at).getTime() : null,
+      disputedAt: row.disputed_at ? new Date(row.disputed_at).getTime() : null,
       paymentStatus: row.payment_status, expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : o.expiresAt,
       exclusiveUntil: row.exclusive_until ? new Date(row.exclusive_until).getTime() : null,
       preferredDriverIds: row.preferred_driver_ids || [] };
@@ -2699,16 +2810,40 @@ function RiderTracking() {
     return () => clearTimeout(t);
   }, [o.state, state.driverOnline]);
 
-  const cancelOffer = async (quiet) => {
+  // Once the driver is at your property, cancelling charges the full amount (they made the trip).
+  const [chargeWarn, setChargeWarn] = useState(null);
+  const cancelOffer = async (quiet, acceptCharge = false) => {
+    let charged = false;
     if (LIVE) {
       if (!o.jobId) cancelledBeforeSaved.add(o.id);
       else if (paidJob) {
-        try { await cancelJobPaid(o.jobId); }
-        catch (e) { dispatch({ type: "TOAST", msg: `Couldn't cancel — ${e.message}` }); return; }
+        try { charged = !!(await cancelJobPaid(o.jobId, "cancelled", acceptCharge))?.charged; }
+        catch (e) {
+          if (/already at your property/i.test(e.message)) { setChargeWarn(e.message); return; }
+          dispatch({ type: "TOAST", msg: `Couldn't cancel — ${e.message}` }); return;
+        }
       } else cancelJob(o.jobId);
     }
+    setChargeWarn(null);
     dispatch({ type: "CLEAR_ORDER" });
-    dispatch({ type: "TOAST", msg: quiet ? "Offer not sent — you weren't charged" : "Request cancelled — you weren't charged" });
+    dispatch({ type: "TOAST", msg: charged ? `Cancelled — $${o.quote?.riderTotal} charged for the driver's trip` : quiet ? "Offer not sent — you weren't charged" : "Request cancelled — you weren't charged" });
+  };
+  // The driver checked in but never finished: confirm it was done, or say it wasn't.
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const [disputeOpen, setDisputeOpen] = useState(false);
+  const [disputeNote, setDisputeNote] = useState("");
+  const confirmDone = async () => {
+    setConfirmBusy(true);
+    try { await confirmJobDone(o.jobId); fetchJob(o.jobId).then(({ data }) => applyRow(data)); dispatch({ type: "TOAST", msg: "Thanks — marked done" }); }
+    catch (e) { dispatch({ type: "TOAST", msg: e.message }); }
+    setConfirmBusy(false);
+  };
+  const sendDispute = async () => {
+    setConfirmBusy(true);
+    try { await disputeJob(o.jobId, disputeNote); dispatch({ type: "ORDER_STATE", patch: { disputedAt: Date.now() } }); setDisputeOpen(false);
+      dispatch({ type: "TOAST", msg: "Got it — you won't be charged until DRIFT sorts it out" }); }
+    catch (e) { dispatch({ type: "TOAST", msg: e.message }); }
+    setConfirmBusy(false);
   };
 
   if (o.state === "arrived_done") return <RiderReceipt />;
@@ -2743,6 +2878,43 @@ function RiderTracking() {
         <div style={{ font: `800 ${finding || shownArrived || !/min$/.test(big) ? 42 : 64}px/.92 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice, marginTop: 8 }}>{big}</div>
         <div style={{ font: `400 15.5px/1.4 ${FB}`, color: C.mist, marginTop: 8 }}>{line}</div>
       </div>
+
+      {/* driver checked in but never finished */}
+      {LIVE && o.confirmAskedAt && !o.disputedAt && (
+        <div style={{ marginTop: 16, background: C.amber + "14", border: `1px solid ${C.amber}66`, borderRadius: 18, padding: 16 }}>
+          <div style={{ font: `600 17px ${FB}`, color: C.ice }}>Was your driveway plowed?</div>
+          <p style={{ font: `400 14.5px/1.45 ${FB}`, color: C.mist, margin: "6px 0 12px" }}>
+            Your driver checked in but didn't mark it done. If we don't hear from you, it's charged {fmtClock(o.confirmAskedAt + 2 * 3600e3)}.</p>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn full onClick={confirmDone} disabled={confirmBusy}>Yes, it's done</Btn>
+            <Btn full kind="ghost" onClick={() => setDisputeOpen(true)} disabled={confirmBusy}>No, it isn't</Btn>
+          </div>
+        </div>
+      )}
+      {LIVE && o.disputedAt && (
+        <div style={{ marginTop: 16, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 18, padding: 14, font: `400 14.5px/1.45 ${FB}`, color: C.mist }}>
+          You reported this job wasn't done. You won't be charged while DRIFT looks into it.</div>
+      )}
+      {disputeOpen && (
+        <Sheet onClose={() => setDisputeOpen(false)}>
+          <h3 style={{ ...H(24), margin: "0 0 6px" }}>What's wrong?</h3>
+          <p style={{ ...sub, margin: "0 0 12px" }}>Tell us what wasn't done. Your card won't be charged until we sort it out.</p>
+          <textarea value={disputeNote} onChange={(e) => setDisputeNote(e.target.value)} rows={3} maxLength={500}
+            placeholder="e.g. The end of the driveway is still blocked" style={{ width: "100%", boxSizing: "border-box", padding: 12, borderRadius: 12, background: C.night2,
+              border: `1px solid ${C.line}`, color: C.ice, font: `400 15px/1.4 ${FB}`, resize: "vertical", minHeight: 90 }} />
+          <div style={{ marginTop: 12 }}><Btn full onClick={sendDispute} disabled={confirmBusy}>{confirmBusy ? "Sending…" : "Report it"}</Btn></div>
+        </Sheet>
+      )}
+      {chargeWarn && (
+        <Sheet onClose={() => setChargeWarn(null)}>
+          <h3 style={{ ...H(24), margin: "0 0 6px" }}>Your driver is already there</h3>
+          <p style={{ ...sub, margin: "0 0 14px" }}>{chargeWarn}</p>
+          <div style={{ display: "grid", gap: 8 }}>
+            <Btn full onClick={() => setChargeWarn(null)}>Keep my plow</Btn>
+            <Btn full kind="ghost" onClick={() => cancelOffer(false, true)}>Cancel and pay</Btn>
+          </div>
+        </Sheet>
+      )}
 
       {/* your driver, up top */}
       {!finding && (
@@ -2903,7 +3075,7 @@ function RiderReceipt() {
     <section style={{ paddingTop: 8 }}>
       <div style={{ textAlign: "center", margin: "12px 0 20px" }}>
         <DoneCheck />
-        <h2 style={{ font: `800 40px/1 ${FD}`, textTransform: "uppercase", margin: "16px 0 0" }}>{isRoadside ? "Back on the road" : "Plowed & clear"}</h2>
+        <h2 style={{ ...H(34), margin: "16px 0 0" }}>{isRoadside ? "Back on the road" : "Plowed and clear"}</h2>
         <p style={{ ...sub, marginTop: 8, fontSize: 15 }}>{d.name} finished your {jtR.label.toLowerCase()}{q.salt ? " + salting" : ""}.</p>
       </div>
 
@@ -3624,9 +3796,19 @@ function RiderAccount({ onReferral }) {
   const realCards = isLive(state) && STRIPE_ENABLED;
   const [favsOpen, setFavsOpen] = useState(false);
   const snowOn = auth?.profile?.snow_alerts !== false;
+  const guestAcct = supabaseEnabled && !state.userId;   // mapped a driveway, no account yet
+  const [acctOpen, setAcctOpen] = useState(false);
   return (
     <Fade k="acct"><section style={{ paddingTop: 10, paddingBottom: 28 }}>
-      <button onClick={() => setEditOpen(true)} style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 22, width: "100%",
+      {guestAcct && (
+        <div style={{ background: C.slate, border: `1px solid ${C.amber}55`, borderRadius: 18, padding: 18, marginBottom: 18 }}>
+          <div style={{ ...H(20), color: C.ice }}>Save your driveway</div>
+          <p style={{ font: `400 14.5px/1.45 ${FB}`, color: C.mist, margin: "6px 0 14px" }}>Make a free account to book, get updates and keep your map. No password needed.</p>
+          <Btn full onClick={() => setAcctOpen(true)}>Create account or sign in</Btn>
+        </div>
+      )}
+      {acctOpen && guestAcct && <CheckoutAccount onClose={() => setAcctOpen(false)} />}
+      {!guestAcct && <button onClick={() => setEditOpen(true)} style={{ display: "flex", gap: 14, alignItems: "center", marginBottom: 22, width: "100%",
         background: "none", border: "none", padding: 0, cursor: "pointer", textAlign: "left" }}>
         <Avatar name={p.name || "You"} size={58} />
         <div style={{ minWidth: 0, flex: 1 }}>
@@ -3634,17 +3816,17 @@ function RiderAccount({ onReferral }) {
           <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 2 }}>{[p.phone, p.email].filter(Boolean).join(" · ") || "Add your contact info"}</div>
           <div style={{ font: `600 13px ${FB}`, color: C.amber, marginTop: 4 }}>Edit profile</div>
         </div>
-      </button>
+      </button>}
 
       <ListGroup>
-        {!realCards && <ListRow icon="card" tint={C.plow} title={pay ? `${pay.brand} ···${pay.last4}` : "Add a card"}
+        {!realCards && !guestAcct && <ListRow icon="card" tint={C.plow} title={pay ? `${pay.brand} ···${pay.last4}` : "Add a card"}
           sub="Charged only after a job is done" />}
         {!isStandalone() && <ListRow icon="download" tint={C.plow} title="Add DRIFT to your Home Screen" sub="Opens like an app, one tap away"
           onClick={async () => { if (canPromptInstall()) await promptInstall(); else setInstallOpen(true); }} />}
         {isLive(state) && <SnowAlertsRow on={snowOn} onInstall={() => setInstallOpen(true)} />}
         {isLive(state) && <ListRow icon="heart" tint={C.amber} title="Favorite drivers" sub="They get first dibs on your offers"
           onClick={() => setFavsOpen(true)} />}
-        {!isLive(state) && <ListRow icon="gift" tint={C.amber} title={`Invite neighbors · $${ref.reward} each`}
+        {!supabaseEnabled && <ListRow icon="gift" tint={C.amber} title={`Invite neighbors · $${ref.reward} each`}
           sub={ref.credit > 0 ? `$${ref.credit} earned · ${ref.invited} invited` : `You both get $${ref.reward}`} onClick={onReferral} />}
         <ListRow icon="lifebuoy" tint={C.push} title="Help" sub="Email support@driftplowing.com" last
           onClick={() => { window.location.href = "mailto:support@driftplowing.com?subject=DRIFT%20help"; }} />
@@ -3952,8 +4134,8 @@ function DriverOnboarding() {
               <div style={{ fontSize: 50, color: "#F5F5F7" }}><Icon e="plowtruck" s={50} /></div>
             </div>
           </div>
-          <h1 style={{ font: `800 45px/1 ${FD}`, textTransform: "uppercase", margin: "0 0 10px", textAlign: "center" }}>
-            Plow on your<br />own schedule.</h1>
+          <h1 style={{ ...H(38), margin: "0 0 10px", textAlign: "center" }}>
+            Plow on your <span style={{ color: C.amber }}>own schedule</span></h1>
           <p style={{ ...sub, maxWidth: 300, margin: "0 auto 16px", textAlign: "center", fontSize: 15 }}>
             Turn on when the snow flies. Take the jobs you want. You're your own boss.
           </p>
@@ -4199,8 +4381,8 @@ function DriverStormCard({ onRoute }) {
       <button onClick={() => setHide(true)} aria-label="Dismiss" style={{ position: "absolute", top: 8, right: 8, background: "none", border: "none",
         color: C.mistDim, cursor: "pointer", padding: 6 }}><Icon e="close" s={15} /></button>
       <div style={{ font: `500 12px ${FM}`, letterSpacing: ".08em", textTransform: "uppercase", color: C.plow }}>Storm mode</div>
-      <div style={{ font: `800 30px/1.05 ${FD}`, textTransform: "uppercase", color: C.ice, marginTop: 6 }}>
-        {f.range24 || `${f.next24}"`} {f.next12 >= 1 ? "in the next 12 hrs" : "in the next 24 hrs"}</div>
+      <div style={{ ...H(26), color: C.ice, marginTop: 6 }}>
+        {f.range24 || `${f.next24}"`} {f.next12 >= 1 ? "in the next 12 hours" : "in the next 24 hours"}</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, margin: "12px 0 14px" }}>
         {[[sched, "scheduled plows open"], [now, "need a plow now"], [m ? `$${(m.openPay || 0).toLocaleString()}` : null, "waiting to be earned"]].map(([v, l]) => (
           <div key={l}><div style={{ font: `800 28px/1 ${FD}`, color: C.ice }}>{v ?? "—"}</div>
@@ -4606,6 +4788,56 @@ function AppSetupCard({ role = "rider", onShown }) {
   );
 }
 
+// Shown when a driver goes online without job alerts set up. Strong nudge, skippable.
+function GoOnlineNudge({ onClose, onGo }) {
+  const { state, dispatch } = useStore();
+  const [, bump] = useState(0);
+  const [pushOn, setPushOn] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [howTo, setHowTo] = useState(false);
+  useEffect(() => onInstallChange(() => bump((x) => x + 1)), []);
+  useEffect(() => { pushEnabled().then(setPushOn).catch(() => {}); }, []);
+  const installed = isStandalone(), ios = isIOS();
+  const needsInstallFirst = ios && !installed;
+  const install = async () => { if (canPromptInstall()) await promptInstall(); else setHowTo(true); };
+  const turnOn = async () => {
+    if (needsInstallFirst || !pushSupported()) { setHowTo(true); return; }
+    setBusy(true);
+    try { await enablePush(state.userId); setPushOn(true); dispatch({ type: "TOAST", msg: "Job alerts are on for this phone" }); }
+    catch (e) { dispatch({ type: "TOAST", msg: e.message }); }
+    setBusy(false);
+  };
+  const ready = pushOn && (installed || !ios);
+  const row = (n, done, title, body, action) => (
+    <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "14px 0", borderTop: n > 1 ? `1px solid ${C.lineSoft}` : "none" }}>
+      <div style={{ width: 32, height: 32, borderRadius: 10, flexShrink: 0, display: "grid", placeItems: "center",
+        background: done ? C.push + "22" : C.night2, border: `1px solid ${done ? C.push + "55" : C.line}`, color: done ? C.push : C.ice, font: `700 14px ${FB}` }}>
+        {done ? <Icon e="check" s={16} strokeWidth={2.4} /> : n}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ font: `600 15.5px ${FB}`, color: done ? C.mist : C.ice }}>{title}</div>
+        {!done && <div style={{ font: `400 13.5px/1.4 ${FB}`, color: C.mist, marginTop: 3 }}>{body}</div>}
+      </div>
+      {!done && action}
+    </div>
+  );
+  const small = { ...miniBtn, minHeight: 42, padding: "0 15px", fontSize: 14, flexShrink: 0 };
+  return (
+    <Sheet onClose={onClose}>
+      <h3 style={{ ...H(26), margin: "0 0 6px" }}>Don't miss jobs</h3>
+      <p style={{ ...sub, margin: "0 0 6px" }}>Jobs go to whoever taps first. With alerts on, DRIFT rings your phone for new jobs and storm heads-ups, even when the app is closed.</p>
+      {row(1, installed || !ios, "Add DRIFT to your Home Screen", ios ? "Needed on iPhone for notifications. Takes 20 seconds." : "Opens like a normal app, one tap away.",
+        <button onClick={install} style={{ ...small, background: C.amber, color: C.onAmber, border: "none" }}>{canPromptInstall() ? "Install" : "Show me"}</button>)}
+      {row(2, pushOn, "Turn on notifications", needsInstallFirst ? "Do step 1, then open DRIFT from your Home Screen." : "New jobs, check-in reminders and storm alerts.",
+        <button onClick={turnOn} disabled={busy} style={small}>{busy ? "…" : needsInstallFirst ? "How" : "Turn on"}</button>)}
+      <div style={{ display: "grid", gap: 8, marginTop: 14 }}>
+        <Btn full kind={ready ? "good" : "primary"} onClick={onGo}>{ready ? "Go online" : "Go online anyway"}</Btn>
+        {!ready && <p style={{ font: `400 12.5px/1.4 ${FB}`, color: C.mistDim, margin: 0, textAlign: "center" }}>Without alerts you'll only see jobs while DRIFT is open on your screen.</p>}
+      </div>
+      {howTo && <InstallSheet onClose={() => setHowTo(false)} />}
+    </Sheet>
+  );
+}
+
 function DriverAlertsCard() {
   const { state, dispatch } = useStore();
   const [, bump] = useState(0);
@@ -4910,6 +5142,7 @@ function DriverDrive() {
   const incoming = LIVE ? !!liveOffer : online && o && o.state === "requested";
   const working = o && ["accepted", "enroute", "plowing", "arrived_done"].includes(o.state);
 
+  const [nudge, setNudge] = useState(false); // "Don't miss jobs" sheet when going online without alerts
   if (working) return <DriverActiveJob />;
 
   const goOnline = (v) => {
@@ -4933,6 +5166,7 @@ function DriverDrive() {
     }
     const { data: row } = await fetchJob(job.jobId);
     setClaiming(false);
+    stayOnline(); // accepting resets the idle timer
     dispatch({ type: "SET_ORDER", order: { ...(row ? rowToOrder(row, state.driver) : job), state: "accepted", driver: state.driver,
       timeline: [{ k: "accepted", t: "now", label: "You accepted" }] } });
     dispatch({ type: "TOAST", msg: "Job accepted — tap Navigate for directions" });
@@ -4941,9 +5175,14 @@ function DriverDrive() {
     if (job) { setPassed(p => new Set(p).add(job.jobId)); seen.current.add(job.jobId); }
     dispatch({ type: "TOAST", msg: auto ? "Request passed to the next driver" : "Request passed" });
   };
-  const toggle = () => {
+  // Going online: strongly nudge Home Screen + notifications first (they can skip).
+  const toggle = async () => {
     unlockRinger();
     if (!online && !hasCurrentAcceptance(state.legal?.driver)) { setGate(true); return; }
+    if (!online && LIVE) {
+      const pushOn = await pushEnabled().catch(() => false);
+      if (!(isStandalone() && pushOn) && !(pushOn && !isIOS())) { setNudge(true); return; }
+    }
     goOnline(!online);
   };
 
@@ -5063,6 +5302,7 @@ function DriverDrive() {
         : <IncomingJob order={o} here={{ lng: state.driver.lng, lat: state.driver.lat }} />)}
       {browseJob && <IncomingJob key={"b" + browseJob.jobId} order={browseJob} busy={claiming} here={here} browse
         onAccept={() => acceptLive(browseJob)} onPass={() => setBrowseJob(null)} />}
+      {nudge && <GoOnlineNudge onClose={() => setNudge(false)} onGo={() => { setNudge(false); goOnline(true); }} />}
       {gate && <ConsentGate role="driver" onClose={() => setGate(false)}
         onAgree={async (rec) => {
           setGate(false);
@@ -5078,6 +5318,11 @@ function DriverDrive() {
   );
 }
 
+const ON_SITE_M = 250;          // "at the property" (matches the server)
+const AUTO_CHECKIN_M = 150;     // check the driver in automatically inside this
+const PHOTO_MAX_AGE_MIN = 10;   // job photos must be fresh from the camera
+const fmtDist = (m) => (m < 400 ? `${m} m` : `${(m / 1609.34).toFixed(m < 16000 ? 1 : 0)} mi`);
+const fmtClock = (ms) => new Date(ms).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 // Straight-line miles between two {lat, lng} points.
 function milesBetween(a, b) {
   if (!a || !b || a.lat == null || b.lat == null) return null;
@@ -5303,7 +5548,8 @@ function DriverActiveJob() {
   const { state, dispatch } = useStore();
   const LIVE = isLive(state);
   const o = state.order, q = o.quote;
-  const [here, setHere] = useState(o.state === "plowing");
+  const [here, setHere] = useState(o.state === "plowing" || !!o.arrivedAt);
+  const [checkingIn, setCheckingIn] = useState(false);
   const dPay = driverNetPay(q, state.driver); // take-home
   const dHourly = driverHourlyFor(dPay, o.size?.mins || q.mins);
   const [pos, setPos] = useState({ x: state.driver.x, y: state.driver.y });
@@ -5326,7 +5572,13 @@ function DriverActiveJob() {
     const unsub = subscribeToJob(o.jobId, (row) => {
       if (row?.status === "cancelled") {
         dispatch({ type: "CLEAR_ORDER" });
-        dispatch({ type: "TOAST", msg: "The customer cancelled this job" });
+        dispatch({ type: "TOAST", msg: row.payment_status === "captured" ? "The customer cancelled — you still get paid for the trip" : "The customer cancelled this job" });
+      } else if (row?.status === "completed" && row.completed_by && row.completed_by !== "driver") {
+        dispatch({ type: "CLEAR_ORDER" });
+        dispatch({ type: "TOAST", msg: row.completed_by === "customer" ? "The customer confirmed this job — it's marked done" : "This job was closed and the customer was charged" });
+      } else if (row?.disputed_at && !o.disputedAt) {
+        dispatch({ type: "ORDER_STATE", patch: { disputedAt: Date.now() } });
+        dispatch({ type: "TOAST", msg: "The customer reported a problem — DRIFT will follow up" });
       }
     });
     return unsub;
@@ -5364,6 +5616,33 @@ function DriverActiveJob() {
   }, [o.state, state.userId]);
 
   const arrived = LIVE ? (here || o.state === "plowing") : (eta <= 0 || o.state === "plowing");
+  // LIVE: the job can only be checked in, photographed and finished at the property.
+  const siteLL = o.property?.center || (o.lat != null ? { lat: o.lat, lng: o.lng } : null);
+  const siteM = gps && siteLL ? Math.round((milesBetween(gps, siteLL) || 0) * 1609.34) : null;
+  const onSite = !LIVE || !siteLL || (siteM != null && siteM <= ON_SITE_M);
+  const siteError = () => !LIVE || !siteLL ? null
+    : siteM == null ? "Turn on location for DRIFT — photos and finishing only work at the property."
+    : siteM > ON_SITE_M ? `You're about ${fmtDist(siteM)} from the property. Do this while you're there.` : null;
+  const lastTry = useRef(0);
+  const checkIn = async (at, auto) => {
+    if (!LIVE || !o.jobId || checkingIn || here) return;
+    const err = siteError();
+    if (err) { if (!auto) dispatch({ type: "TOAST", msg: err }); return; }
+    if (auto && Date.now() - lastTry.current < 60000) return;   // after a failed check-in, don't retry on every GPS update
+    setCheckingIn(true);
+    try {
+      lastTry.current = Date.now();
+      await arriveAtJob(o.jobId, at || gps);
+      setHere(true);
+      dispatch({ type: "ORDER_STATE", patch: { arrivedAt: Date.now() } });
+      dispatch({ type: "TOAST", msg: "Checked in — take a before photo" });
+    } catch (e) { dispatch({ type: "TOAST", msg: e.message }); }
+    setCheckingIn(false);
+  };
+  // Auto check-in when the phone gets within 150 m of the driveway.
+  useEffect(() => {
+    if (LIVE && !here && gps && siteM != null && siteM <= AUTO_CHECKIN_M) checkIn(gps, true);
+  }, [LIVE, here, siteM]);
   const allChecked = checkableZones.length === 0 || checkableZones.every((_, i) => checks[i]);
   const jobCenter = o.property?.center;
   const initEtaD = o.eta || 8;
@@ -5382,10 +5661,12 @@ function DriverActiveJob() {
   };
   const [finishing, setFinishing] = useState(false);
   const complete = async () => {
+    const err = siteError();
+    if (err) { dispatch({ type: "TOAST", msg: err }); return; }
     if (LIVE && o.jobId) Promise.resolve(saveJobMiles(o.jobId, jobMiles(o.jobId))).catch(() => {}); // tax log
     if (LIVE && o.jobId && o.paymentStatus && o.paymentStatus !== "not_required") {
       setFinishing(true);
-      try { await completeJobPaid(o.jobId, o.photos); }
+      try { await completeJobPaid(o.jobId, o.photos, gps); }
       catch (e) { setFinishing(false); dispatch({ type: "TOAST", msg: `Couldn't finish — ${e.message}` }); return; }
       setFinishing(false);
     }
@@ -5431,7 +5712,7 @@ function DriverActiveJob() {
       <Fade k="jobdone"><section style={{ paddingTop: 8 }}>
         <div style={{ textAlign: "center", margin: "20px 0" }}>
           <DoneCheck size={72} />
-          <h2 style={{ font: `800 40px/1 ${FD}`, textTransform: "uppercase", margin: "16px 0 0" }}>Job complete</h2>
+          <h2 style={{ ...H(34), margin: "16px 0 0" }}>Job complete</h2>
           <p style={{ ...sub, marginTop: 6 }}>Nice work. Payout added to today's earnings.</p>
         </div>
         <div style={{ background: C.night2, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 14 }}>
@@ -5491,10 +5772,16 @@ function DriverActiveJob() {
         }} style={{ minHeight: 52, padding: "0 20px", flex: "none" }}><Icon e="send" s={18} /> Navigate</Btn>
       </Card>
 
-      {/* LIVE: the driver says when they've arrived (no fake ETA) */}
+      {/* LIVE: checked in automatically at the property (or tap once you're there) */}
       {LIVE && !arrived && (
         <div style={{ marginTop: 12 }}>
-          <Btn full kind="good" onClick={() => setHere(true)} style={{ minHeight: 64, fontSize: 18, borderRadius: 18 }}>I'm at the property</Btn>
+          <Btn full kind="good" onClick={() => checkIn(gps)} disabled={checkingIn || (siteLL && siteM == null)}
+            style={{ minHeight: 64, fontSize: 18, borderRadius: 18 }}>
+            {checkingIn ? "Checking in…" : siteLL && siteM == null ? "Waiting for your location…" : "I'm at the property"}</Btn>
+          <p style={{ font: `500 13px/1.45 ${FB}`, color: C.mist, margin: "8px 2px 0", textAlign: "center" }}>
+            {siteM == null ? "Turn on location for DRIFT. You're checked in automatically when you pull up."
+              : siteM > ON_SITE_M ? `About ${fmtDist(siteM)} away · you'll be checked in automatically when you pull up`
+              : "You're here — tap to check in"}</p>
         </div>
       )}
 
@@ -5561,7 +5848,7 @@ function DriverActiveJob() {
               <p style={{ font: `500 13px ${FB}`, color: C.mist, margin: "6px 0 10px" }}>
                 Snap a quick "before" photo. The customer sees it as proof of the starting conditions.
               </p>
-              <PhotoCapture phase="before" photos={o.photos?.before || []} jobId={o.jobId}
+              <PhotoCapture phase="before" photos={o.photos?.before || []} jobId={o.jobId} guard={siteError}
                 onCapture={(photo) => savePhoto("before", photo)} />
               <div style={{ marginTop: 12 }}>
                 <Btn full kind="good" onClick={startPlow} disabled={!(o.photos?.before?.length)} style={{ minHeight: 64, fontSize: 18, borderRadius: 18 }}>
@@ -5591,13 +5878,15 @@ function DriverActiveJob() {
               <p style={{ font: `500 13px ${FB}`, color: C.mist, margin: "6px 0 10px" }}>
                 Show the finished job. This lands on the customer's receipt.
               </p>
-              <PhotoCapture phase="after" photos={o.photos?.after || []} jobId={o.jobId}
+              <PhotoCapture phase="after" photos={o.photos?.after || []} jobId={o.jobId} guard={siteError}
                 onCapture={(photo) => savePhoto("after", photo)} />
 
               <div style={{ marginTop: 14 }}>
-                <Btn full onClick={complete} disabled={!allChecked || !(o.photos?.after?.length) || finishing} style={{ minHeight: 64, fontSize: 18, borderRadius: 18 }}>
-                  {finishing ? "Finishing…" : !allChecked ? "Check off all zones" : !(o.photos?.after?.length) ? "Add an after photo" : `Complete job · collect $${dPay}`}
+                <Btn full onClick={complete} disabled={!allChecked || !(o.photos?.after?.length) || finishing || !onSite} style={{ minHeight: 64, fontSize: 18, borderRadius: 18 }}>
+                  {finishing ? "Finishing…" : !allChecked ? "Check off all zones" : !(o.photos?.after?.length) ? "Add an after photo" : !onSite ? "Finish at the property" : `Complete job · collect $${dPay}`}
                 </Btn>
+                {LIVE && <p style={{ font: `500 12.5px/1.45 ${FB}`, color: C.mist, margin: "8px 2px 0", textAlign: "center" }}>
+                  The customer is charged when you finish here. Your payout needs both photos.</p>}
               </div>
             </>
           )}
@@ -5608,7 +5897,7 @@ function DriverActiveJob() {
 }
 
 // ---- Photo capture: simulated camera that produces a faux before/after ----
-function PhotoCapture({ phase, photos, onCapture, jobId }) {
+function PhotoCapture({ phase, photos, onCapture, jobId, guard }) {
   const { state, dispatch } = useStore();
   const [capturing, setCapturing] = useState(false);
   const fileRef = useRef(null);
@@ -5617,13 +5906,23 @@ function PhotoCapture({ phase, photos, onCapture, jobId }) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+    // Photos must be taken now, at the property (no old camera-roll shots).
+    const err = guard?.();
+    if (err) { dispatch({ type: "TOAST", msg: err }); return; }
+    if (file.lastModified && Date.now() - file.lastModified > PHOTO_MAX_AGE_MIN * 60000) {
+      dispatch({ type: "TOAST", msg: "Use a photo you take right now with the camera." }); return;
+    }
     setCapturing(true);
-    try { onCapture(await uploadJobPhoto(jobId, phase, file)); }
+    try { onCapture({ ...(await uploadJobPhoto(jobId, phase, file)), ts: Date.now() }); }
     catch (err) { dispatch({ type: "TOAST", msg: `Photo didn't upload — ${err.message}` }); }
     setCapturing(false);
   };
   const snap = () => {
-    if (real) { fileRef.current?.click(); return; }
+    if (real) {
+      const err = guard?.();
+      if (err) { dispatch({ type: "TOAST", msg: err }); return; }
+      fileRef.current?.click(); return;
+    }
     setCapturing(true);
     setTimeout(() => {
       onCapture({ seed: Math.floor(Math.random() * 90) + 1, phase, ts: Date.now() });
@@ -6096,8 +6395,8 @@ function DriverReferral({ onBack }) {
 // ============================================================
 // AUTH SCREEN — real sign up / log in (Supabase)
 // ============================================================
-function AuthScreen({ auth, onDemo, initialRole, signInOnly, title }) {
-  const [mode, setMode] = useState(signInOnly ? "signin" : "signup"); // signup | signin | forgot
+function AuthScreen({ auth, onDemo, initialRole, signInOnly, title, onBack, initialMode }) {
+  const [mode, setMode] = useState(signInOnly ? "signin" : initialMode || "signup"); // signup | signin | forgot
   const [role, setRole] = useState(initialRole || "customer"); // customer | driver
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -6140,19 +6439,24 @@ function AuthScreen({ auth, onDemo, initialRole, signInOnly, title }) {
   return (
     <div style={{ minHeight: "100vh", background: C.night, color: C.ice, fontFamily: FB, display: "flex", justifyContent: "center" }}>
       <style>{`*{box-sizing:border-box;-webkit-font-smoothing:antialiased} input::placeholder{color:${C.mistDim}}`}</style>
-      <div style={{ width: "100%", maxWidth: 440, minHeight: "100vh", display: "flex", flexDirection: "column", justifyContent: "center", padding: "0 24px" }}>
-        <div style={{ marginBottom: 26 }}>
+      <div style={{ width: "100%", maxWidth: 440, minHeight: "100vh", display: "flex", flexDirection: "column", justifyContent: "center", padding: "32px 24px" }}>
+        {onBack && (
+          <button onClick={onBack} style={{ alignSelf: "flex-start", background: "none", border: "none", cursor: "pointer", color: C.mist,
+            font: `600 14px ${FB}`, padding: "8px 0", marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>‹ Back</button>
+        )}
+        <div style={{ marginBottom: 24 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span style={{ width: 34, height: 34, borderRadius: 9, background: C.amber, color: C.onAmber, display: "grid", placeItems: "center" }}>
               <Icon e="snowflake" s={19} /></span>
             <span style={{ font: `900 28px/1 ${FD}`, textTransform: "uppercase", letterSpacing: ".06em" }}>DRIFT</span>
           </div>
-          <h1 style={{ font: `900 52px/.9 ${FD}`, textTransform: "uppercase", margin: "26px 0 10px", color: C.ice }}>
-            {mode === "forgot" ? <>Reset your<br /><span style={{ color: C.amber }}>password.</span></>
-              : title ? title : mode === "signup" ? <>Let's get you<br /><span style={{ color: C.amber }}>plowed.</span></> : <>Welcome<br /><span style={{ color: C.amber }}>back.</span></>}</h1>
-          <div style={{ font: `400 15px/1.5 ${FB}`, color: C.mist }}>
+          <h1 style={{ ...H(36), margin: "28px 0 8px", color: C.ice }}>
+            {mode === "forgot" ? <>Reset your <span style={{ color: C.amber }}>password</span></>
+              : title ? title : mode === "signup" ? (role === "driver" ? <>Plow for <span style={{ color: C.amber }}>DRIFT</span></> : <>Create your <span style={{ color: C.amber }}>account</span></>)
+              : <>Welcome <span style={{ color: C.amber }}>back</span></>}</h1>
+          <div style={{ font: `400 16px/1.5 ${FB}`, color: C.mist }}>
             {mode === "forgot" ? "Enter your email and we'll send you a link to set a new one."
-              : mode === "signup" ? "Create your account — it takes about a minute." : "Sign in to your DRIFT account."}</div>
+              : mode === "signup" ? (role === "driver" ? "Create your account, then see open jobs and what they pay before any paperwork." : "It takes about a minute.") : "Sign in to your DRIFT account."}</div>
         </div>
 
         {mode === "signup" && (
@@ -6229,8 +6533,8 @@ function ResetPasswordScreen({ auth }) {
   return (
     <div style={{ minHeight: "100vh", background: C.night, color: C.ice, fontFamily: FB, display: "flex", justifyContent: "center" }}>
       <div style={{ width: "100%", maxWidth: 440, minHeight: "100vh", display: "flex", flexDirection: "column", justifyContent: "center", padding: "0 24px" }}>
-        <h1 style={{ font: `900 52px/.9 ${FD}`, textTransform: "uppercase", margin: "0 0 10px" }}>
-          New<br /><span style={{ color: C.amber }}>password.</span></h1>
+        <h1 style={{ ...H(36), margin: "0 0 10px" }}>
+          New <span style={{ color: C.amber }}>password</span></h1>
         <div style={{ font: `400 15px/1.5 ${FB}`, color: C.mist, marginBottom: 22 }}>
           Pick a new password for {auth.user?.email || "your account"}.</div>
         <div style={{ display: "grid", gap: 11 }}>
@@ -6261,6 +6565,11 @@ function Shell({ startEntered = false }) {
   const [notifOpen, setNotifOpen] = useState(false);
   const [legalDoc, setLegalDoc] = useState(null); // landing-page footer → document reader
   const [entered, setEntered] = useState(DRIVE_INTENT || startEntered); // false = show the marketing homepage first
+  const [wantAuth, setWantAuth] = useState(false); // guest tapped "Sign in"
+  const guestSeen = useRef(false);                 // keep the guest's screen up while their new account loads
+  const stateRef = useRef(state); stateRef.current = state;
+  // Automated tests only (never set in Vercel): lets a test finish onboarding without a map.
+  useEffect(() => { if (import.meta.env.VITE_E2E && typeof window !== "undefined") window.__driftDispatch = dispatch; }, []);
   // Tidy the address bar so a refresh doesn't re-trigger driver sign-up.
   useEffect(() => { if (DRIVE_INTENT && typeof window !== "undefined") window.history.replaceState(null, "", window.location.pathname); }, []);
   // Re-render everything when the theme flips (Account → Appearance, or the phone's setting in Auto).
@@ -6313,6 +6622,25 @@ function Shell({ startEntered = false }) {
         try { const { data } = await loadProperties(uid); props = data || []; } catch { /* show setup instead of hanging */ }
       }
       if (cancelled) return;
+      // Made the account at checkout: bring along the driveway they mapped as a guest.
+      let fromGuest = false;
+      if (role === "rider" && !props.length) {
+        let draft = null;
+        try { draft = JSON.parse(localStorage.getItem("drift.guest") || "null"); } catch { /* ignore */ }
+        const fresh = draft && Date.now() - (draft.at || 0) < 7 * 864e5 ? draft.properties : null;
+        const guestProps = stateRef.current.properties?.length && !stateRef.current.userId ? stateRef.current.properties : fresh;
+        if (guestProps?.length) { props = guestProps; fromGuest = true; }
+      }
+      if (fromGuest) {
+        // Same list already on screen: save it now (the save-on-change effect won't see a change).
+        // A list restored from the phone is saved by that effect when it lands.
+        if (props === stateRef.current.properties) replaceProperties(uid, props);
+        try { localStorage.removeItem("drift.guest"); } catch { /* ignore */ }
+        const rec = stateRef.current.legal?.customer;
+        if (rec && hasCurrentAcceptance(rec)) recordLegalAcceptance(uid, rec);
+        const gp = stateRef.current.profile || {};
+        if ((gp.phone && !prof.phone) || (gp.name && !prof.name)) updateMyProfile(uid, { ...(gp.phone && !prof.phone ? { phone: gp.phone } : {}), ...(gp.name && !prof.name ? { name: gp.name } : {}) });
+      }
       const me = profileToDriver(prof);
       dispatch({ type: "HYDRATE_USER", userId: uid, role, isDriver: !!prof.is_driver,
         driver: me && { ...me, tools: prof.tools || [] },
@@ -6339,14 +6667,57 @@ function Shell({ startEntered = false }) {
     return () => clearInterval(iv);
   }, [state.userId]);
 
+  // Driver presence: while online the phone checks in about once a minute with its
+  // location (for the owner map). The server switches drivers offline after 60 min
+  // without taking a job (with a "Still there?" first) or 10 min without a check-in.
+  const [stillThere, setStillThere] = useState(false);
+  const lastLoc = useRef(null);
+  const driverIsOnline = supabaseEnabled && !!state.userId && state.role === "driver" && state.driverOnline;
+  useEffect(() => {
+    if (!driverIsOnline) { setStillThere(false); return; }
+    const since = Date.now();   // the "online" save may still be in flight for a moment
+    let watch = null;
+    if (typeof navigator !== "undefined" && navigator.geolocation) {
+      watch = navigator.geolocation.watchPosition(
+        (p) => { lastLoc.current = { lng: p.coords.longitude, lat: p.coords.latitude, heading: p.coords.heading || 0 }; },
+        () => {}, { enableHighAccuracy: false, maximumAge: 60000, timeout: 30000 });
+    }
+    const beat = async () => {
+      const { data } = await driverHeartbeat(state.userId, lastLoc.current).catch(() => ({ data: null }));
+      if (!data) return;
+      if (!data.is_online) {
+        if (Date.now() - since < 20000) return;
+        dispatch({ type: "ONLINE", v: false }); keepAwake(false);
+        dispatch({ type: "TOAST", msg: data.offline_reason === "idle" ? "You were switched offline after an hour without a job" : "You were switched offline — go back online when you're ready" });
+        return;
+      }
+      const warned = data.idle_warned_at && (!data.active_at || new Date(data.idle_warned_at) >= new Date(data.active_at));
+      setStillThere(!!warned);
+    };
+    const first = setTimeout(beat, 4000);   // give the GPS a moment so the first check-in has a location
+    const iv = setInterval(beat, 60 * 1000);
+    const onVis = () => { if (document.visibilityState === "visible") beat(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearTimeout(first); clearInterval(iv); document.removeEventListener("visibilitychange", onVis); if (watch != null) navigator.geolocation.clearWatch(watch); };
+  }, [driverIsOnline, state.userId]);
+  const imHere = () => { setStillThere(false); stayOnline(); dispatch({ type: "TOAST", msg: "You're still online" }); };
+
   // Deep links that belong to the driver side (route / new offer / "Drive" shortcut).
   const link = useDeepLink();
+  useEffect(() => { if (link.stay && state.userId) { consumeLink("stay"); if (state.driverOnline) imHere(); } }, [link.stay, state.userId]);
   useEffect(() => {
     if (!state.userId) return;
     const driverLink = link.route || link.offer || link.go === "drive";
     if (driverLink && state.driverOnboarded && state.role !== "driver") dispatch({ type: "ROLE", role: "driver" });
     if (link.go === "drive" || link.go === "book") consumeLink("go");
   }, [state.userId, link.route, link.offer, link.go]);
+
+  // Guests: keep their mapped driveway on this phone until they make an account at
+  // checkout (also covers tapping the sign-in link from the email in a new tab).
+  useEffect(() => {
+    if (!supabaseEnabled || state.userId || !state.onboarded || !state.properties?.length) return;
+    try { localStorage.setItem("drift.guest", JSON.stringify({ properties: state.properties, profile: state.profile, at: Date.now() })); } catch { /* full or private mode */ }
+  }, [state.properties, state.onboarded, state.userId]);
 
   // Persist a customer's properties to Supabase whenever they change.
   useEffect(() => {
@@ -6385,7 +6756,7 @@ function Shell({ startEntered = false }) {
   }
 
   // Auth gate: when Supabase is configured, require sign-in (demo escape hatch stays).
-  if (supabaseEnabled && (auth.loading || (auth.session && !state.userId && !bypass))) {
+  if (supabaseEnabled && (auth.loading || (auth.session && !state.userId && !bypass && !guestSeen.current))) {
     return <div style={{ minHeight: "100vh", background: C.night, color: C.mist, fontFamily: FB,
       display: "grid", placeItems: "center" }}>
       <span style={{ width: 26, height: 26, borderRadius: "50%", border: `3px solid ${C.line}`,
@@ -6399,9 +6770,15 @@ function Shell({ startEntered = false }) {
       {legalDoc && <LegalReader docId={legalDoc} onClose={() => setLegalDoc(null)} />}</>;
   }
 
-  if (supabaseEnabled && !auth.session && !bypass) {
-    return <>{SkipButton}<AuthScreen auth={auth} onDemo={DEMO_OK ? () => setBypass(true) : undefined} initialRole={DRIVE_INTENT ? "driver" : "customer"} /></>;
+  // Customers can map their driveway and see their price before making an account
+  // (they sign up at checkout). Drivers, and anyone who taps "Sign in", get the sign-in screen.
+  const guestMode = supabaseEnabled && !auth.session && !bypass;
+  if (guestMode && (DRIVE_INTENT || wantAuth || state.role === "driver")) {
+    return <>{SkipButton}<AuthScreen auth={auth} onDemo={DEMO_OK ? () => setBypass(true) : undefined}
+      initialRole={DRIVE_INTENT || state.role === "driver" ? "driver" : "customer"} initialMode={wantAuth ? "signin" : "signup"}
+      onBack={DRIVE_INTENT ? undefined : () => { setWantAuth(false); if (state.role === "driver") dispatch({ type: "ROLE", role: "rider" }); }} /></>;
   }
+  if (guestMode) guestSeen.current = true;
 
   return (
     <StoreCtx.Provider value={store}>
@@ -6443,6 +6820,10 @@ function Shell({ startEntered = false }) {
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               {/* During signup only: a quiet link for people who meant to drive (or meant to order). */}
+              {supabaseEnabled && !auth.session && !bypass && (
+                <button onClick={() => setWantAuth(true)} style={{ background: "none", border: "none", cursor: "pointer", font: `600 13px ${FB}`, color: C.ice,
+                  padding: "8px 4px", WebkitTapHighlightColor: "transparent" }}>Sign in</button>
+              )}
               {inSetup && (
                 <button onClick={() => dispatch({ type: "ROLE", role: onboarding ? "driver" : "rider" })}
                   style={{ background: "none", border: "none", cursor: "pointer", font: `600 13px ${FB}`, color: C.mist,
@@ -6454,6 +6835,16 @@ function Shell({ startEntered = false }) {
           </header>
 
           <OfflineBanner />
+          {stillThere && state.role === "driver" && (
+            <div role="alert" style={{ margin: "10px 20px 0", background: C.amber + "1A", border: `1px solid ${C.amber}88`, borderRadius: 14,
+              padding: "12px 12px 12px 14px", display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ font: `600 15px ${FB}`, color: C.ice }}>Still there?</div>
+                <div style={{ font: `400 13px/1.4 ${FB}`, color: C.mist, marginTop: 2 }}>You'll go offline in a few minutes unless you tap.</div>
+              </div>
+              <Btn sm onClick={imHere}>I'm here</Btn>
+            </div>
+          )}
 
           {/* Demo-only hint (hidden once real accounts are on) */}
           {state.order && !inSetup && !supabaseEnabled && (

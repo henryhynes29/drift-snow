@@ -154,6 +154,10 @@ export function rowToOrder(r, driver) {
     scheduledFor: r.scheduled_for ? new Date(r.scheduled_for).getTime() : null,
     windowEnd: r.window_end ? new Date(r.window_end).getTime() : null,
     checkedInAt: r.checked_in_at ? new Date(r.checked_in_at).getTime() : null,
+    arrivedAt: r.arrived_at ? new Date(r.arrived_at).getTime() : null,
+    confirmAskedAt: r.confirm_asked_at ? new Date(r.confirm_asked_at).getTime() : null,
+    disputedAt: r.disputed_at ? new Date(r.disputed_at).getTime() : null,
+    completedBy: r.completed_by || null,
     lat: r.lat, lng: r.lng, address: r.address, driverPay: Number(r.driver_pay || 0),
     preferredDriverIds: r.preferred_driver_ids || [],
     timeline: [{ k: "requested", t: "now", label: "Request sent" }],
@@ -377,6 +381,17 @@ export function subscribeToMessages(jobId, onMessage) {
         (payload) => onMessage(payload.new))
     .subscribe();
   return () => supabase.removeChannel(ch);
+}
+
+// ---------- Driver presence (while online) ----------
+// The phone checks in about once a minute. Returns the server's view, so the app
+// notices when it was switched offline (idle or lost signal).
+export async function driverHeartbeat(userId, loc) {
+  if (!supabaseEnabled || !isUuid(userId)) return { data: null };
+  if (loc) supabase.from("driver_locations").upsert({ driver_id: userId, lng: loc.lng, lat: loc.lat, heading: loc.heading || 0,
+    updated_at: new Date().toISOString() }).then(() => {}, () => {});
+  return supabase.from("profiles").update({ last_seen_at: new Date().toISOString() }).eq("id", userId)
+    .select("is_online, offline_reason, idle_warned_at, active_at, online_since").maybeSingle();
 }
 
 // ---------- Driver location (live tracking) ----------

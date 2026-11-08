@@ -58,6 +58,17 @@ export function AuthProvider({ children }) {
     if (!supabaseEnabled) return { error: notConfigured() };
     return supabase.auth.verifyOtp({ phone, token, type: "sms" });
   };
+  // Passwordless email: a 6-digit code (and a sign-in link) by email. Creates the
+  // account if it's new. Used at checkout so customers don't need a password.
+  const sendEmailCode = async ({ email, name, phone }) => {
+    if (!supabaseEnabled) return { error: notConfigured() };
+    return supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: true,
+      data: { name: name || "", phone: phone || "", role: "customer" }, emailRedirectTo: window.location.origin } });
+  };
+  const verifyEmailCode = async (email, token) => {
+    if (!supabaseEnabled) return { error: notConfigured() };
+    return supabase.auth.verifyOtp({ email, token, type: "email" });
+  };
   const signOut = async () => {
     if (!supabaseEnabled) return;
     await supabase.auth.signOut();
@@ -88,7 +99,7 @@ export function AuthProvider({ children }) {
     profileReady: !!session && profileFor === session.user.id,
     role: profile?.role || null,
     recovering: recovering && !!session,
-    signUp, signIn, sendPhoneOtp, verifyPhoneOtp, signOut, refreshProfile, resetPassword, updatePassword,
+    signUp, signIn, sendPhoneOtp, verifyPhoneOtp, sendEmailCode, verifyEmailCode, signOut, refreshProfile, resetPassword, updatePassword,
   };
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
 }
