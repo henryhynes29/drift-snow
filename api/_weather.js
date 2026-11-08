@@ -7,7 +7,7 @@
 import { admin, pushTo } from "./_lib.js";
 
 export const MARKET = { name: "Duluth", lat: 46.7867, lng: -92.1005 };
-const UA = { "User-Agent": "DRIFT snow app (support@driftplowing.com)", Accept: "application/geo+json" };
+const UA = { "User-Agent": "DRIFT snow app (driftplowing@gmail.com)", Accept: "application/geo+json" };
 const ALERT_MIN_INCHES = Number(process.env.SNOW_ALERT_MIN_INCHES || 2);
 
 // ISO-8601 duration like PT6H, P1D, P1DT12H -> milliseconds

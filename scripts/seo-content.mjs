@@ -3,7 +3,7 @@
 import { SIZES, estimateRange, sidewalkPrice, digoutPrice, jumpstartPrice } from "../src/lib/estimate.js";
 
 export const SITE = "https://driftplowing.com";
-export const UPDATED = { iso: "2026-10-21", label: "October 2026" };
+export const UPDATED = { iso: "2026-11-08", label: "November 2026" };
 
 const driveways = SIZES.map((s) => ({ label: `${s.label} driveway`, hint: s.hint, text: estimateRange(s.sqft).text }));
 const from = (r) => `$${r.standardTotal}`;
@@ -13,6 +13,9 @@ const SIDEWALK = sidewalkPrice(60), DIGOUT = digoutPrice(), JUMP = jumpstartPric
 const SRC = {
   duluthSnow: ["City of Duluth: snow removal requirements", "https://duluthmn.gov/snow/snow-removal-requirements/"],
   duluthParking: ["City of Duluth: winter parking rules", "https://duluthmn.gov/snow/winter-parking-rules"],
+  duluthCalendar: ["City of Duluth: alternate side parking calendar", "https://duluthmn.gov/parking/alternate-side-parking/"],
+  duluthEmergency: ["City of Duluth: snow emergencies", "https://duluthmn.gov/snow/"],
+  duluthFines: ["City of Duluth: parking fines", "https://duluthmn.gov/parking/parking-tickets/fines/"],
   nws: ["National Weather Service Duluth: winter climate", "https://www.weather.gov/dlh/duluthwinterclimate"],
   superior: ["B105: Superior's sidewalk snow rule (ordinance 106-10)", "https://b105country.com/city-of-superior-explains-sidewalk-snow-removal-service/"],
   mndot: ["MnDOT: don't put snow on roads", "https://www.dot.state.mn.us/news/2025/12/11-d3-snow-on-roads.html"],
@@ -25,19 +28,27 @@ const COMMON_FAQ = {
   price: ["How is the price set?", "You name it. DRIFT suggests a fair price from the size of the area you outline on the map, the slope and the snow depth. Offer more in a big storm and drivers pick you up faster. Total = your offer + a $10 call-out that goes to the driver + a $5 booking fee."],
 };
 
+// Duluth's 2026–27 alternate side calendar: weeks run Mon–Sun and alternate, starting EVEN on Nov 2, 2026.
+const ASP_WEEKS = Array.from({ length: 26 }, (_, i) => {
+  const s = new Date(Date.UTC(2026, 10, 2 + i * 7)), e = new Date(Math.min(Date.UTC(2026, 10, 8 + i * 7), Date.UTC(2027, 3, 30)));
+  const f = (d) => d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  return { s: s.toISOString().slice(0, 10), e: e.toISOString().slice(0, 10), label: `${f(s)} – ${f(e)}`, side: i % 2 ? "ODD" : "EVEN" };
+});
+
 const city = (o) => ({ kind: "city", prices: driveways, drivewayFrom: DRIVEWAY_FROM, ...o });
 
 export const PAGES = [
   // ---------------- cities ----------------
   city({
     slug: "snow-plowing-duluth-mn", short: "Duluth, MN", place: "Duluth", geoRegion: "US-MN", areaServed: [["Duluth", "MN"]],
-    title: "Snow Plowing Duluth MN | On-Demand, No Contract | DRIFT",
-    description: "On-demand snow plowing in Duluth, MN. Map your driveway, name your price, track a local plow live and pay only when it's done. No seasonal contract.",
-    h1: "Snow plowing in <em>Duluth, MN</em>", h1Plain: "Snow plowing in Duluth, MN", serviceName: "Driveway snow plowing in Duluth, MN",
-    lead: "Book a local plow for your driveway in about a minute, any time it snows. Name your price, watch the truck come up the hill, and pay only when it's cleared. No seasonal contract.",
+    title: "Snow Plowing & Snow Removal Duluth MN | No Contract | DRIFT",
+    description: "Snow plowing and snow removal in Duluth, MN on demand. Local plow trucks for your driveway, sidewalk clearing and car dig-outs. Name your price, pay when it's done.",
+    h1: "Snow plowing &amp; snow removal in <em>Duluth, MN</em>", h1Plain: "Snow plowing and snow removal in Duluth, MN", serviceName: "Snow plowing and snow removal in Duluth, MN",
+    lead: "Local plow trucks for your driveway, booked in about a minute any time it snows. Add the sidewalk or a car dig-out to the same trip. Name your price, watch the truck come up the hill, and pay only when it's cleared. No seasonal contract.",
     priceFrom: estimateRange(SIZES[0].sqft).lo,
-    localTitle: "Plowing built for <em>Duluth</em>",
+    localTitle: "Snow removal built for <em>Duluth</em>",
     local: `
+<p><b>Looking for a snow plow in Duluth?</b> DRIFT connects you with independent local operators who have plow trucks and snowblowers. They see your request on their phones, accept it, and head over. You don't have to call around or sign a contract.</p>
 <p>Duluth gets about <b>86 inches of snow</b> in a normal winter, and the record is more than 135. A seasonal contract charges the same either way. With DRIFT you pay for the storms that actually happen.</p>
 <p><b>Hills are part of the price, not a surprise.</b> When you set up, you mark how steep your driveway is. Steeper drives get a slightly higher suggested price so drivers want the job. Mark retaining walls, curbs, wells and spots that ice over too. The driver sees all of it before they accept.</p>
 <p><b>Tell them where the snow goes.</b> You draw where to plow and where to pile it on a satellite map. It's against city rules to push snow into the street or alley, so the pile goes in your yard where you choose.</p>
@@ -48,6 +59,8 @@ export const PAGES = [
     faq: [
       ["How much does it cost to plow a driveway in Duluth?", `Most single-car driveways come in around ${driveways[0].text} and most two-car driveways around ${driveways[1].text} per storm, including fees. Steep drives and deep snow cost a bit more. You can offer whatever you want. <a href="/snow-plowing-cost-duluth/">See the full price guide</a>.`],
       ["How fast can a plow get to me?", "Your request goes to drivers nearby right away and you see when one accepts and how far away they are. On a big storm night it depends on how many drivers are out. Offering a little more gets you picked up first, and you can also schedule a plow ahead of time for a 2-hour window."],
+      ["Where can I find a snow plow in Duluth, MN?", "Book one on DRIFT. Independent local operators with plow trucks get your request right away, and you see when one accepts and where the truck is. No phone calls and no seasonal contract."],
+      ["Do you do snow removal or just plowing?", `Both. Plow trucks clear driveways and garage aprons, and drivers with snowblowers and shovels clear sidewalks, steps and walkways. You can also book a <a href="/car-dig-out-duluth/">car dig-out</a> or a <a href="/sidewalk-snow-removal-duluth/">sidewalk clearing</a> on its own.`],
       COMMON_FAQ.contract, COMMON_FAQ.who,
       ["Can I schedule plowing before a storm?", "Yes. Pick a day and a 2-hour window up to 6 days ahead. Your card is held when you book and charged only when the job is done."],
     ],
@@ -55,7 +68,7 @@ export const PAGES = [
   }),
   city({
     slug: "snow-removal-superior-wi", short: "Superior, WI", place: "Superior", geoRegion: "US-WI", areaServed: [["Superior", "WI"]],
-    title: "Snow Removal Superior WI | Driveway Plowing On Demand | DRIFT",
+    title: "Snow Removal & Snow Plowing Superior WI | No Contract | DRIFT",
     description: "On-demand snow removal in Superior, WI. Book a local plow for your driveway, garage apron or sidewalk, name your price, and pay only when it's done. No contract.",
     h1: "Snow removal in <em>Superior, WI</em>", h1Plain: "Snow removal in Superior, WI", serviceName: "Snow removal in Superior, WI",
     lead: "Driveways, garage aprons and sidewalks cleared by local plow operators across the bridge. Book in a minute, track the truck, and pay only when it's done.",
@@ -78,9 +91,9 @@ export const PAGES = [
   }),
   city({
     slug: "snow-plowing-hermantown-mn", short: "Hermantown, MN", place: "Hermantown", geoRegion: "US-MN", areaServed: [["Hermantown", "MN"]],
-    title: "Snow Plowing Hermantown MN | Driveway Plowing On Demand | DRIFT",
-    description: "Driveway snow plowing in Hermantown, MN on demand. Long driveway? Outline it once, name your price each storm, track your plow live, pay only when it's done.",
-    h1: "Snow plowing in <em>Hermantown, MN</em>", h1Plain: "Snow plowing in Hermantown, MN",
+    title: "Snow Plowing & Snow Removal Hermantown MN | DRIFT",
+    description: "Driveway snow plowing and snow removal in Hermantown, MN on demand. Long driveway? Outline it once, name your price each storm, track your plow live, pay only when it's done.",
+    h1: "Snow plowing &amp; snow removal in <em>Hermantown, MN</em>", h1Plain: "Snow plowing and snow removal in Hermantown, MN",
     lead: "Bigger lots and longer driveways, plowed by local operators when you need it. Outline it once and book every storm in a tap.",
     priceFrom: estimateRange(SIZES[0].sqft).lo,
     localTitle: "Long driveways, <em>fair prices</em>",
@@ -98,9 +111,9 @@ export const PAGES = [
   }),
   city({
     slug: "snow-plowing-cloquet-mn", short: "Cloquet, MN", place: "Cloquet", geoRegion: "US-MN", areaServed: [["Cloquet", "MN"], ["Scanlon", "MN"]],
-    title: "Snow Plowing Cloquet MN | On-Demand Driveway Plowing | DRIFT",
-    description: "On-demand driveway snow plowing in Cloquet, MN. Name your price, track your local plow live and pay only when it's done. No contract.",
-    h1: "Snow plowing in <em>Cloquet, MN</em>", h1Plain: "Snow plowing in Cloquet, MN",
+    title: "Snow Plowing & Snow Removal Cloquet MN | No Contract | DRIFT",
+    description: "On-demand driveway snow plowing and snow removal in Cloquet, MN. Name your price, track your local plow live and pay only when it's done. No contract.",
+    h1: "Snow plowing &amp; snow removal in <em>Cloquet, MN</em>", h1Plain: "Snow plowing and snow removal in Cloquet, MN",
     lead: "Local plow operators for your driveway when the snow piles up. Book in a minute, pay per storm.",
     priceFrom: estimateRange(SIZES[0].sqft).lo,
     localTitle: "Plowing in <em>Cloquet</em>",
@@ -118,9 +131,9 @@ export const PAGES = [
   }),
   city({
     slug: "snow-plowing-proctor-mn", short: "Proctor, MN", place: "Proctor", geoRegion: "US-MN", areaServed: [["Proctor", "MN"]],
-    title: "Snow Plowing Proctor MN | Driveway Plowing On Demand | DRIFT",
-    description: "On-demand driveway snow plowing in Proctor, MN. Local plow operators, your price, live tracking, pay only when it's done. No contract.",
-    h1: "Snow plowing in <em>Proctor, MN</em>", h1Plain: "Snow plowing in Proctor, MN",
+    title: "Snow Plowing & Snow Removal Proctor MN | No Contract | DRIFT",
+    description: "On-demand driveway snow plowing and snow removal in Proctor, MN. Local plow operators, your price, live tracking, pay only when it's done. No contract.",
+    h1: "Snow plowing &amp; snow removal in <em>Proctor, MN</em>", h1Plain: "Snow plowing and snow removal in Proctor, MN",
     lead: "Driveway plowing from local operators, booked in a minute. Name your price, track the truck, pay when it's clear.",
     priceFrom: estimateRange(SIZES[0].sqft).lo,
     localTitle: "Plowing in <em>Proctor</em>",
@@ -249,30 +262,37 @@ export const PAGES = [
     sources: [SRC.duluthSnow, SRC.superior],
   },
   {
-    kind: "guide", slug: "guides/duluth-winter-parking", short: "Duluth winter parking & snow emergencies",
-    crumbs: [["Home", "/"], ["Guides", null], ["Winter parking", null]],
-    place: "Duluth", title: "Duluth Winter Parking Rules & Snow Emergencies (2026 Guide)",
-    description: "Duluth's alternate side parking changeover, what happens in a snow emergency, the free parking lots, and how to avoid a ticket or tow.",
-    h1: "Duluth winter parking &amp; <em>snow emergencies</em>", h1Plain: "Duluth winter parking and snow emergencies",
-    lead: "Alternate side parking, snow emergency routes and free lots. Here's how Duluth's winter parking works so your car doesn't end up in the impound lot.",
-    localKicker: "The rules", localTitle: "How it <em>works</em>",
+    kind: "guide", slug: "guides/duluth-winter-parking", short: "Duluth alternate side parking",
+    crumbs: [["Home", "/"], ["Guides", null], ["Alternate side parking", null]],
+    place: "Duluth", title: "Duluth Alternate Side Parking Schedule 2026–27 + Snow Rules",
+    description: "Which side to park on this week in Duluth, the full 2026–27 odd/even alternate side parking schedule, the Sunday 4–8 pm changeover, snow emergency rules and fines.",
+    h1: "Duluth alternate side parking <em>schedule</em>", h1Plain: "Duluth alternate side parking schedule",
+    lead: "Which side of the street to park on this week, the full 2026–27 odd/even calendar, and what to do in a snow emergency so your car doesn't get ticketed or towed.",
+    localKicker: "2026–27 season", localTitle: "Which side <em>this week</em>",
     local: `
-<h3>Alternate side parking</h3>
-<p>Every week, cars switch to the other side of the street during a changeover window on <b>Sunday between 4 and 8 p.m.</b> Parking on both sides is allowed only during that window. The city publishes a schedule each season showing which side is which.</p>
+<div class="callout"><p id="asp-now"><b>The rule:</b> park on the side the calendar shows for that week (odd or even house numbers). Weeks run Monday to Sunday, and you switch sides on <b>Sunday between 4 and 8 p.m.</b>, the only time both sides are allowed.</p></div>
+<table><thead><tr><th>Week (Mon–Sun)</th><th>Park on the</th></tr></thead><tbody>
+${ASP_WEEKS.map((w) => `<tr data-s="${w.s}" data-e="${w.e}"><td>${w.label}</td><td><b>${w.side}</b> side</td></tr>`).join("\n")}
+</tbody></table>
+<p class="fine">From the City of Duluth's 2026–27 calendar. Posted street signs override the calendar, so always check the sign on your block.</p>
+<script>(function(){var d=new Date(),t=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");document.querySelectorAll("tr[data-s]").forEach(function(r){if(t>=r.dataset.s&&t<=r.dataset.e){r.style.background="rgba(255,176,32,.16)";var c=r.children;document.getElementById("asp-now").innerHTML="<b>This week ("+c[0].textContent+"): park on the "+c[1].textContent.replace(/ side$/,"")+" side.</b> Switch sides Sunday between 4 and 8 p.m."}})})();</script>
 <h3>Snow emergencies</h3>
-<p>When the city declares a snow emergency, you have to keep cars off designated snow emergency routes so plows can get through. Free public lots open from <b>4 p.m. on day one to 8 p.m. on day two</b>, first come, first served. You can stay parked there until two hours after the emergency ends.</p>
+<p>The city can declare a snow emergency by <b>4 p.m.</b> on any day except Sunday, and it takes effect at <b>8 p.m.</b> that day. Move your car to the plowed side of the street between 4 and 8 p.m. When the emergency ends, move it back to the scheduled side by 8 p.m. The city says residents no longer need to move cars to amnesty lots. To get alerts, sign up for <a href="https://duluthmn.gov/northlandalert/" rel="nofollow">Northland Alert</a>.</p>
 <h3>Tickets and towing</h3>
-<p>Breaking the rules can mean a ticket and a tow to the impound lot. If your car was towed, the city's number is (218) 730-5400.</p>
+<p>An alternate side ticket is <b>$36</b> and a snow emergency ticket is <b>$42</b>, and your car can also be towed. If it was towed, call the city at (218) 730-5400.</p>
 <h3>The easy fix: a clear driveway</h3>
-<p>The simplest way to stay out of all of it is to park off the street. If your driveway is buried, <a href="/snow-plowing-duluth-mn/">book a plow on DRIFT</a> and have it cleared before the emergency starts. Already buried by the city plow? <a href="/car-dig-out-duluth/">Book a car dig-out</a>.</p>`,
-    facts: [["Sun 4–8 pm", "Weekly alternate side changeover"], ["Free lots", "4 pm day 1 to 8 pm day 2 of an emergency"], ["(218) 730-5400", "Towed vehicle line"]],
+<p>The simplest way to skip all of it is to park off the street. If your driveway is buried, <a href="/snow-plowing-duluth-mn/">book a plow on DRIFT</a> before the emergency starts. Already buried by the city plow? <a href="/car-dig-out-duluth/">Book a car dig-out</a>. And if you're stuck behind a plow on the way home, here's <a href="/learn/can-you-pass-a-snow-plow-minnesota/">when you can pass one</a>.</p>`,
+    facts: [["Sun 4–8 pm", "Switch to the other side of the street"], ["$36", "Alternate side ticket ($42 in a snow emergency)"], ["(218) 730-5400", "Towed vehicle line"]],
     drivewayFrom: DRIVEWAY_FROM,
     faq: [
+      ["What is the alternate side parking schedule in Duluth?", "Duluth uses an odd/even calendar. Each week (Monday to Sunday) you park on either the odd-numbered or even-numbered side of the street, and the sides switch every week. The full 2026–27 schedule is in the table on this page. Posted street signs take priority."],
       ["When is alternate side parking changeover in Duluth?", "Every Sunday between 4 p.m. and 8 p.m. Both sides are allowed only during that window."],
-      ["Where can I park during a Duluth snow emergency?", "In the free public lots the city opens, from 4 p.m. on day one to 8 p.m. on day two. Spaces are first come, first served."],
+      ["What do I do in a Duluth snow emergency?", "Move your car to the plowed side of the street between 4 and 8 p.m. on the day it's declared, then back to the scheduled side by 8 p.m. after it ends. Sign up for Northland Alert to get notified."],
+      ["How much is an alternate side parking ticket in Duluth?", "$36. A snow emergency ticket is $42, and your car can be towed."],
       ["What number do I call if my car was towed in Duluth?", "The city lists (218) 730-5400."],
     ],
-    sources: [SRC.duluthParking],
+    related: ["car-dig-out-duluth", "learn/can-you-pass-a-snow-plow-minnesota", "snow-plowing-duluth-mn"],
+    sources: [SRC.duluthCalendar, SRC.duluthEmergency, SRC.duluthParking, SRC.duluthFines],
   },
   {
     kind: "guide", slug: "snow-plowing-cost-duluth", short: "How much snow plowing costs",

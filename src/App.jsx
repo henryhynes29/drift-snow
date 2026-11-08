@@ -2878,6 +2878,7 @@ function RiderTracking() {
         <div style={{ font: `800 ${finding || shownArrived || !/min$/.test(big) ? 42 : 64}px/.92 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice, marginTop: 8 }}>{big}</div>
         <div style={{ font: `400 15.5px/1.4 ${FB}`, color: C.mist, marginTop: 8 }}>{line}</div>
       </div>
+      {LIVE && <JobAlertsPrompt jobKey={o.jobId} ready={!!o.jobId && !needsCard} />}
 
       {/* driver checked in but never finished */}
       {LIVE && o.confirmAskedAt && !o.disputedAt && (
@@ -2998,6 +2999,101 @@ function RiderTracking() {
 }
 
 // A scheduled plow: when it is, who's on it, and the card hold.
+// Right after booking: ask to turn on notifications (and add DRIFT to the Home Screen)
+// so they hear when the plow is coming. Opens once per job; after that it's a small banner.
+function JobAlertsPrompt({ jobKey, ready = true, scheduled = false }) {
+  const { state, dispatch } = useStore();
+  const [, bump] = useState(0);
+  const [pushOn, setPushOn] = useState(null);   // null = still checking
+  const [open, setOpen] = useState(false);
+  const [howTo, setHowTo] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [hidden, setHidden] = useState(false);
+  useEffect(() => onInstallChange(() => bump((x) => x + 1)), []);
+  useEffect(() => { pushEnabled().then(setPushOn).catch(() => setPushOn(false)); }, []);
+  const installed = isStandalone(), ios = isIOS();
+  const needsInstallFirst = ios && !installed;             // iPhone: notifications only work from the Home Screen app
+  const canPush = pushSupported() && !needsInstallFirst;
+  const unavailable = !pushSupported() && !needsInstallFirst;
+  useEffect(() => {
+    if (!ready || !jobKey || pushOn !== false || unavailable) return;
+    const key = `drift.jobAlerts.${jobKey}`;
+    try { if (localStorage.getItem(key)) return; } catch { /* private mode: still ask once this session */ }
+    const t = setTimeout(() => { setOpen(true); try { localStorage.setItem(key, "1"); } catch { /* ignore */ } }, 1200);
+    return () => clearTimeout(t);
+  }, [ready, jobKey, pushOn, unavailable]);
+  if (pushOn === null || unavailable || (pushOn && installed)) return null;
+
+  const install = async () => { if (canPromptInstall()) { await promptInstall(); bump((x) => x + 1); } else setHowTo(true); };
+  const turnOn = async () => {
+    if (!canPush) { setHowTo(true); return; }
+    setBusy(true); setErr("");
+    try {
+      await enablePush(state.userId); setPushOn(true);
+      dispatch({ type: "TOAST", msg: "Notifications on — we'll tell you when your plow is coming" });
+      if (installed || !canPromptInstall()) setOpen(false);   // Android with install offer: show step 2
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+  const row = (icon, text) => (
+    <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "8px 0" }}>
+      <div style={{ width: 32, height: 32, borderRadius: 10, background: C.amber + "1F", color: C.amber, display: "grid", placeItems: "center", flexShrink: 0 }}>
+        <Icon e={icon} s={16} /></div>
+      <div style={{ font: `400 15px/1.35 ${FB}`, color: C.ice }}>{text}</div>
+    </div>
+  );
+  return (
+    <>
+      {!open && !hidden && !pushOn && (
+        <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 14, padding: "11px 10px 11px 14px", borderRadius: 14,
+          background: C.amber + "12", border: `1px solid ${C.amber}55` }}>
+          <span style={{ color: C.amber, display: "flex", flexShrink: 0 }}><Icon e="bell" s={18} /></span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ font: `600 14px ${FB}`, color: C.ice }}>{needsInstallFirst ? "Get alerts for this plow" : "Notifications are off"}</div>
+            <div style={{ font: `400 12.5px/1.35 ${FB}`, color: C.mist, marginTop: 1 }}>
+              {needsInstallFirst ? "Add DRIFT to your Home Screen to hear when it's on the way." : "You won't hear when your driver is on the way or done."}</div>
+          </div>
+          <button onClick={() => setOpen(true)} style={{ ...miniBtn, minHeight: 38, padding: "0 13px", fontSize: 13, flexShrink: 0,
+            background: C.amber, color: C.onAmber, border: "none" }}>Turn on</button>
+          <button onClick={() => setHidden(true)} aria-label="Dismiss" style={{ background: "none", border: "none", color: C.mistDim, cursor: "pointer",
+            padding: 4, display: "grid", placeItems: "center" }}><Icon e="close" s={15} /></button>
+        </div>
+      )}
+      {open && (
+        <Sheet onClose={() => setOpen(false)}>
+          {pushOn ? <>
+            <h3 style={{ ...H(24), margin: "0 0 4px" }}>Notifications are on</h3>
+            <p style={{ ...sub, margin: "0 0 10px" }}>One more thing: add DRIFT to your Home Screen so it opens like an app and booking the next storm is one tap.</p>
+            <div style={{ display: "grid", gap: 8 }}>
+              <Btn full onClick={async () => { await install(); setOpen(false); }}>Add to Home Screen</Btn>
+              <Btn full kind="ghost" onClick={() => setOpen(false)}>Done</Btn>
+            </div>
+          </> : <>
+            <h3 style={{ ...H(24), margin: "0 0 4px" }}>{scheduled ? "Get a heads-up on plow day" : "Know when your plow shows up"}</h3>
+            <p style={{ ...sub, margin: "0 0 6px" }}>Turn on notifications and we'll let you know when:</p>
+            {row("check", scheduled ? "A driver claims your plow" : "A driver takes your job")}
+            {row("truck", "They're on the way, and when they get there")}
+            {row("camera", "It's done, with before and after photos")}
+            {row("bell", "We need a quick answer from you, like confirming the job")}
+            {needsInstallFirst && (
+              <div style={{ marginTop: 8, padding: "11px 13px", borderRadius: 12, background: C.slate, border: `1px solid ${C.line}`,
+                font: `400 13.5px/1.45 ${FB}`, color: C.mist }}>
+                On iPhone, notifications only work from the Home Screen app. Add it in about 20 seconds, open DRIFT from the new icon, and turn them on there.</div>
+            )}
+            {err && <div role="alert" style={{ marginTop: 10, font: `500 13.5px/1.4 ${FB}`, color: C.amber }}>{err}</div>}
+            <div style={{ display: "grid", gap: 8, marginTop: 14 }}>
+              <Btn full onClick={turnOn} disabled={busy}>{busy ? "Turning on…" : needsInstallFirst ? "Show me how" : "Turn on notifications"}</Btn>
+              <Btn full kind="ghost" onClick={() => setOpen(false)}>Not now</Btn>
+            </div>
+          </>}
+        </Sheet>
+      )}
+      {howTo && <InstallSheet onClose={() => setHowTo(false)} />}
+    </>
+  );
+}
+
 function RiderScheduled({ o, d, cancelOffer, needsCard, onAuthorized }) {
   const first = d?.name ? d.name.split(" ")[0] : null;
   const steps = [
@@ -3012,6 +3108,7 @@ function RiderScheduled({ o, d, cancelOffer, needsCard, onAuthorized }) {
       <div style={{ font: `800 44px/.95 ${FD}`, textTransform: "uppercase", color: C.ice, marginTop: 8 }}>{fmtWindowLocal(o.scheduledFor)}</div>
       <div style={{ font: `400 15px ${FB}`, color: C.mist, marginTop: 8 }}>
         {o.property?.addr || o.property?.label || "Your property"} · ${o.quote?.riderTotal} total · charged only after it's plowed</div>
+      {o.jobId && <JobAlertsPrompt jobKey={o.jobId} ready={!needsCard} scheduled />}
       <div style={{ marginTop: 18, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 18, padding: "6px 16px" }}>
         {steps.map(([label, done], i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderTop: i ? `1px solid ${C.lineSoft}` : "none" }}>
@@ -3828,8 +3925,8 @@ function RiderAccount({ onReferral }) {
           onClick={() => setFavsOpen(true)} />}
         {!supabaseEnabled && <ListRow icon="gift" tint={C.amber} title={`Invite neighbors · $${ref.reward} each`}
           sub={ref.credit > 0 ? `$${ref.credit} earned · ${ref.invited} invited` : `You both get $${ref.reward}`} onClick={onReferral} />}
-        <ListRow icon="lifebuoy" tint={C.push} title="Help" sub="Email support@driftplowing.com" last
-          onClick={() => { window.location.href = "mailto:support@driftplowing.com?subject=DRIFT%20help"; }} />
+        <ListRow icon="lifebuoy" tint={C.push} title="Help" sub="Email driftplowing@gmail.com" last
+          onClick={() => { window.location.href = "mailto:driftplowing@gmail.com?subject=DRIFT%20help"; }} />
       </ListGroup>
 
       <div style={{ height: 14 }} />

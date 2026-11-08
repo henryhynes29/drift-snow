@@ -16,7 +16,7 @@
 export const LEGAL_VERSION = "2026-11-08.1";
 export const LEGAL_UPDATED = "November 8, 2026";
 export const ENTITY = "Drift Plowing LLC, a Minnesota limited liability company"; // doing business as DRIFT
-export const EMAIL = "support@driftplowing.com";
+export const EMAIL = "driftplowing@gmail.com";
 export const VENUE = "St. Louis County, Minnesota";
 
 // Each section: { h: heading, p: [paragraphs], loud: true → rendered bold (conspicuous) }

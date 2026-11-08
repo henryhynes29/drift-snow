@@ -25,6 +25,9 @@ const SRC = {
   mileageJuly: ["IFEBP: 2026 mid-year mileage rate increase", "https://www.ifebp.org/detail-pages/news/2026/07/14/irs-increases-2026-standard-mileage-rates"],
   mnSales: ["MN Revenue: snow plowing listed as non-taxable", "https://revenue.state.mn.us/revenue-notice/08-07-sales-and-use-tax-lawn-and-tree-services-revocation-revenue-notice-04-05"],
   wiSales: ["Wisconsin DOR: snow removal is not taxable", "https://WWW.REVENUE.WI.GOV/SalesUseTaxReport/13-3.pdf"],
+  mnPass: ["Minnesota Statutes 169.18: passing and move-over rules", "https://www.revisor.mn.gov/statutes/cite/169.18"],
+  cbsPlow: ["WCCO / CBS Minnesota: Can you pass a snow plow? (MnDOT)", "https://www.cbsnews.com/minnesota/news/can-you-pass-snow-plows/"],
+  stribPlow: ["Star Tribune: plow drivers and passing (MnDOT)", "https://www.startribune.com/plow-drivers-can-t-run-red-lights/600011924"],
 };
 
 // ============================================================ FAQ hub
@@ -33,7 +36,7 @@ const FAQ = {
   title: "Snow Plowing FAQ: Duluth, Superior & Hermantown | DRIFT",
   description: "Answers on booking a snow plow with DRIFT in the Twin Ports: prices, fees, scheduling, payments, hazards, cancellations, local snow rules and driving.",
   h1: "Questions, <em>answered</em>", h1Plain: "DRIFT frequently asked questions",
-  lead: "Everything about booking a plow in Duluth, Superior, Hermantown, Proctor, Esko and Cloquet, and about driving for DRIFT. Can't find it? Email support@driftplowing.com.",
+  lead: "Everything about booking a plow in Duluth, Superior, Hermantown, Proctor, Esko and Cloquet, and about driving for DRIFT. Can't find it? Email driftplowing@gmail.com.",
   sections: [
     { id: "booking", title: "Booking a plow", qs: [
       ["How do I book a snow plow with DRIFT?", "Open driftplowing.com, map your driveway on the satellite map once (outline where to plow and where the snow goes), and you'll get a recommended price. When it snows, tap once to send your request to local drivers. You'll see when one accepts and can watch them head over."],
@@ -230,12 +233,13 @@ ${[[4, 2], [6, 2], [6, 3], [8, 2.5]].map(([h, r]) => `<tr><td>${h}</td><td>${r}<
   art({
     slug: "learn/snow-plowing-taxes-minnesota-wisconsin", cat: "For plow operators", audience: "driver",
     short: "Snow plowing taxes (MN & WI)", cardText: "Sales tax vs income tax, self-employment tax, 1099s and the mileage deduction.",
-    title: "Snow Plowing Taxes in MN & WI: Sales Tax, 1099s, Mileage",
-    description: "Do you charge sales tax on snow plowing in Minnesota or Wisconsin? What income and self-employment tax you owe, 1099s, quarterly payments and the 2026 mileage rate.",
-    h1: "Snow plowing taxes in <em>MN &amp; WI</em>", h1Plain: "Snow plowing taxes in Minnesota and Wisconsin",
-    lead: "Two different taxes get mixed up: sales tax (what you charge customers) and income tax (what you owe on your profit). Here's the difference.",
+    title: "Is Snow Removal Taxable in MN? Sales Tax, 1099s & Mileage",
+    description: "No. Snow plowing and snow removal aren't subject to sales tax in Minnesota or Wisconsin. Here's what you do owe: income tax, self-employment tax, 1099s and the 2026 mileage rate.",
+    h1: "Is snow removal <em>taxable in MN?</em>", h1Plain: "Is snow removal taxable in Minnesota?",
+    lead: "Short answer: there's no sales tax on snow plowing or snow removal in Minnesota or Wisconsin. But if you're the one doing the plowing, what you earn is taxable income. Here's the difference.",
     facts: [["$0", "Sales tax on snow plowing in MN and WI"], ["15.3%", "Self-employment tax rate (Social Security + Medicare)"], ["76¢", "IRS mileage rate per business mile from July 1, 2026"]],
     body: `
+<div class="callout"><p><b>Is snow removal taxable in Minnesota?</b> No sales tax. Minnesota Revenue lists snow plowing and shoveling as non-taxable services, so homeowners shouldn't see sales tax on a plowing bill. Wisconsin is the same. Plow operators still owe income tax and self-employment tax on their profit.</p></div>
 <h2 id="sales">Sales tax: plowing isn't taxable</h2>
 <p>Minnesota lists snow shoveling and plowing as non-taxable services, and Wisconsin's Department of Revenue says the sale of snow removal services is not taxable. Supplies you buy for the business, like fuel and blades, still get sales tax at the store.</p>
 <h2 id="income">Income tax: yes, it's income</h2>
@@ -247,8 +251,60 @@ ${[[4, 2], [6, 2], [6, 3], [8, 2.5]].map(([h, r]) => `<tr><td>${h}</td><td>${r}<
 <h2 id="mileage">The mileage deduction</h2>
 <p>Business miles are deductible. The IRS standard mileage rate for 2026 was <b>72.5¢ a mile</b> from January 1, raised to <b>76¢ a mile from July 1, 2026</b>. The DRIFT driver app logs miles on each job and lets you download the year as a spreadsheet.</p>
 <div class="callout"><p><b>Not tax advice.</b> Talk to a tax pro about your situation, especially if you sell other services too.</p></div>`,
+    faq: [
+      ["Is snow removal taxable in Minnesota?", "No. Minnesota Revenue lists snow plowing and shoveling as non-taxable services, so there's no sales tax on a snow removal bill. Supplies a plow business buys, like fuel and blades, are still taxed at the store."],
+      ["Is snow removal taxable in Wisconsin?", "No. Wisconsin's Department of Revenue says the sale of snow removal services is not taxable."],
+      ["Do I pay taxes on snow plowing income?", "Yes. Plowing income is business income. You pay income tax and 15.3% self-employment tax on your profit, after expenses like fuel, repairs and business miles."],
+      ["Will I get a 1099 for plowing with DRIFT?", "DRIFT pays drivers through Stripe, and you'll get a 1099 for your earnings."],
+    ],
     related: ["learn/how-much-do-snow-plow-drivers-make-duluth", "learn/how-to-start-a-snow-plow-business-duluth-mn"],
     sources: [SRC.mnSales, SRC.wiSales, SRC.se, SRC.est, SRC.mileage, SRC.mileageJuly],
+  }),
+  art({
+    slug: "learn/can-you-pass-a-snow-plow-minnesota", cat: "For homeowners",
+    short: "Can you pass a snow plow?", cardText: "What Minnesota law says, when it's OK, and why MnDOT says to stay back.",
+    title: "Can You Pass a Snow Plow in Minnesota? What the Law Says",
+    description: "Is it legal to pass a snow plow in Minnesota? No law bans it, but the normal passing rules apply and MnDOT says to stay back. When it's OK, when it isn't, and the move-over law.",
+    h1: "Can you pass a <em>snow plow?</em>", h1Plain: "Can you pass a snow plow in Minnesota?",
+    lead: "Stuck behind a plow on Skyline or Highway 53? Here's what Minnesota law actually says, when passing is OK, and why it's usually better to wait.",
+    facts: [["No law", "Specifically bans passing a plow in Minnesota"], ["~100", "MnDOT plow crashes a season, most while passing (reported)"], ["10 ft", "How far a plow's blade can stick out"]],
+    body: `
+<div class="callout"><p><b>Short answer:</b> yes, it can be legal. No Minnesota law specifically bans passing a snow plow. But the normal passing rules still apply, and MnDOT's advice is that most of the time it's safer to stay back.</p></div>
+<h2 id="law">What the law says</h2>
+<p>Snow plows aren't emergency vehicles, and Minnesota's statutes don't have a rule just for passing them. When you pass one, the same rules apply as for any vehicle (Minnesota Statutes 169.18):</p>
+<ul>
+<li>Pass on the <b>left</b> at a safe distance.</li>
+<li>Don't cross the center line when you can't see clearly for 700 feet ahead, within 100 feet of an intersection in town, or in a no-passing zone.</li>
+<li>Passing on the <b>right</b> is only allowed in limited cases, like on a road with two or more clear lanes going your way, and <b>never on the shoulder</b>, paved or not.</li>
+</ul>
+<h2 id="stopped">Plow stopped with its lights on? Move over</h2>
+<p>Minnesota's move-over law covers road maintenance vehicles that are stopped with their flashing or warning lights on. Move over a lane if you safely can. If you can't, slow down until you're past.</p>
+<h2 id="risky">Why passing is risky</h2>
+<p>MnDOT has told reporters its plows are in about 100 crashes a season, and that most happen when drivers try to pass. A few reasons:</p>
+<ul>
+<li><b>The blade is wider than it looks.</b> Front and wing blades can stick out up to about 10 feet, and they can be hidden in the snow cloud.</li>
+<li><b>You can't see.</b> A working plow throws up a cloud of snow. Driving into it means driving blind.</li>
+<li><b>The road ahead is worse.</b> Behind the plow is the cleared, salted lane. In front of it is the snow it hasn't gotten to yet.</li>
+<li><b>They're huge.</b> A fully loaded plow truck can weigh tens of thousands of pounds and needs a lot of room to stop.</li>
+</ul>
+<h2 id="tips">How to drive around plows</h2>
+<ul>
+<li><b>Stay back.</b> MnDOT's rule of thumb, as reported by the Star Tribune, is at least 10 car lengths.</li>
+<li><b>Only pass when it's clearly safe:</b> dry pavement, good visibility, the plow over to one side and plenty of room. MnDOT has said that's an OK time to pass.</li>
+<li><b>Give them room at intersections.</b> Plows turn wide and sometimes back up.</li>
+<li><b>Be patient.</b> A plow usually pulls over or turns off within a few miles.</li>
+</ul>
+<h2 id="driveway">The city plow won't do your driveway</h2>
+<p>City and county plows clear the street, and they often leave a heavy ridge of snow across the end of your driveway. On DRIFT you can book a local plow to clear your driveway and that end-of-driveway ridge, or a ${L("car-dig-out-duluth", "car dig-out")} if your car got buried. Parking on the street? Check ${L("guides/duluth-winter-parking", "Duluth's alternate side parking schedule")}.</p>
+<div class="callout"><p><b>Not legal advice.</b> Traffic laws change. Check the statute or ask local law enforcement if you're unsure.</p></div>`,
+    faq: [
+      ["Is it illegal to pass a snow plow in Minnesota?", "No law specifically bans it. The normal passing rules apply: pass on the left, only where passing is allowed and you can see far enough ahead, and never on the shoulder. MnDOT says it's usually safer to stay back."],
+      ["Can you pass a snow plow on the right?", "Only where Minnesota allows passing on the right, like a road with two or more clear lanes going your way. Never on the shoulder. Plow blades can stick out about 10 feet, so it's risky either way."],
+      ["How far should you stay behind a snow plow?", "MnDOT's rule of thumb, as reported by the Star Tribune, is at least 10 car lengths. That keeps you out of the snow cloud and gives you room to stop."],
+      ["Do you have to move over for a snow plow?", "If it's stopped with its flashing or warning lights on, yes. Minnesota's move-over law covers road maintenance vehicles. Move over a lane if you safely can, or slow down until you're past."],
+    ],
+    related: ["guides/duluth-winter-parking", "learn/when-to-plow-during-a-snowstorm", "car-dig-out-duluth"],
+    sources: [SRC.mnPass, SRC.cbsPlow, SRC.stribPlow],
   }),
   art({
     slug: "learn/per-storm-vs-seasonal-snow-plowing-contract", cat: "For homeowners",

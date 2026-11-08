@@ -343,7 +343,7 @@ function footer(all) {
   return `<footer><div class="wrap">
   <div class="fgrid">
     <div><div style="font-family:var(--fd);font-weight:900;font-size:28px;letter-spacing:.05em;color:var(--ice)">DRIFT</div>
-      <p style="margin:8px 0 0;max-width:300px">The app that connects you with independent local plow operators in the Twin Ports. <a href="mailto:support@driftplowing.com" style="display:inline;text-decoration:underline">support@driftplowing.com</a></p>
+      <p style="margin:8px 0 0;max-width:300px">The app that connects you with independent local plow operators in the Twin Ports. <a href="mailto:driftplowing@gmail.com" style="display:inline;text-decoration:underline">driftplowing@gmail.com</a></p>
       <p style="margin:14px 0 0"><a href="/faq/" style="display:inline;margin-right:14px">FAQ</a><a href="/learn/" style="display:inline">Learning center</a></p></div>
     <div><p class="fh">Areas</p>${cities.map((c) => `<a href="/${c.slug}/">${esc(c.short)}</a>`).join("")}</div>
     <div><p class="fh">Services</p><a href="/snow-plowing-duluth-mn/">Driveway plowing</a>${services.map((s) => `<a href="/${s.slug}/">${esc(s.cardTitle)}</a>`).join("")}<a href="/plow-jobs-duluth-mn/">Plow jobs</a><a href="/drive.html">Drive with DRIFT</a></div>
@@ -414,7 +414,7 @@ Key facts:
 - Pricing: the customer's price comes from mapping their driveway. They pay their offer plus a $10 call-out fee (goes to the driver) and a $5 booking fee. The card is held, then charged only when the job is done.
 - Drivers are independent local plow operators, not DRIFT employees. They keep 80% of the offer, the full $10 call-out and 100% of tips, and are paid through Stripe.
 - Customers can book now or schedule a day and 2-hour window up to 6 days ahead.
-- Website: ${SITE}/ · Support: support@driftplowing.com
+- Website: ${SITE}/ · Support: driftplowing@gmail.com
 
 ## Service areas
 ${grp(["city", "hood"]).map(line).join("\n")}

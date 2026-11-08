@@ -1017,7 +1017,7 @@ export default function Landing({ onStart, onLegal }) {
             <div style={{ font: `900 30px/1 ${DISPLAY}`, letterSpacing: ".06em" }}>DRIFT</div>
             <p style={{ font: `400 13px/1.55 ${BODY}`, color: L.dim, margin: "10px 0 0" }}>
               The app that connects you with independent local plow operators. Duluth, MN ·{" "}
-              <a href="mailto:support@driftplowing.com" style={{ color: L.mist }}>support@driftplowing.com</a></p>
+              <a href="mailto:driftplowing@gmail.com" style={{ color: L.mist }}>driftplowing@gmail.com</a></p>
           </div>
           <nav aria-label="Snow plowing by town" className="lp-fcol">
             <Mono style={{ color: L.dim }}>Areas</Mono>
