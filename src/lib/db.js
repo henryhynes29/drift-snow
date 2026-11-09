@@ -307,7 +307,7 @@ export async function loadAccountStats(userId) {
   const history = rows.filter(r => r.customer_id === userId).map(r => ({
     id: r.id, date: fmt(when(r)), size: r.site?.size?.label || "", jobType: r.job_type,
     total: Number(r.price || 0) + Number(r.tip || 0), driver: (names[r.driver_id] || "Your driver").split(" ")[0],
-    rating: 0, photos: r.photos || null, address: r.address,
+    rating: 0, photos: r.photos || null, address: r.address, completedAt: r.completed_at,
   }));
   const mine = rows.filter(r => r.driver_id === userId);
   const pay = (r) => Number(r.driver_pay || 0) + Number(r.tip || 0);
@@ -367,7 +367,7 @@ export function subscribeToJob(jobId, onChange) {
 // ---------- Messages ----------
 export async function sendMessage(jobId, senderId, body) {
   if (!supabaseEnabled) return off();
-  return supabase.from("messages").insert({ job_id: jobId, sender_id: senderId, body });
+  return supabase.from("messages").insert({ job_id: jobId, sender_id: senderId, body }).select().single();
 }
 export async function loadMessages(jobId) {
   if (!supabaseEnabled || !isUuid(jobId)) return { data: [] };
@@ -410,10 +410,12 @@ export function subscribeToDriverLocation(driverId, onMove) {
 }
 
 // ---------- Ratings ----------
-export async function rateJob({ jobId, raterId, rateeId, stars, comment }) {
+export async function rateJob({ jobId, raterId, rateeId, stars, comment, publicOk }) {
   if (!supabaseEnabled || !isUuid(jobId) || !isUuid(rateeId)) return off();
   const text = (comment || "").trim().slice(0, 500) || null;
-  return supabase.from("ratings").insert({ job_id: jobId, rater_id: raterId, ratee_id: rateeId, stars, comment: text });
+  const row = { job_id: jobId, rater_id: raterId, ratee_id: rateeId, stars, comment: text };
+  if (publicOk) row.public_ok = true;   // only sent when they ticked the box
+  return supabase.from("ratings").insert(row);
 }
 
 // ---------- favorite drivers ----------
@@ -462,6 +464,15 @@ export async function recordLegalAcceptance(userId, rec) {
     accepted_at: rec.at,
     user_agent: rec.ua || null,
   });
+}
+
+// Agreements this account already accepted for the current version, so signing in on
+// a new phone doesn't ask again. (Reading only — nothing is re-recorded.)
+export async function loadMyAcceptances(userId, version) {
+  if (!supabaseEnabled || !isUuid(userId)) return [];
+  const { data } = await supabase.from("legal_acceptances").select("role, documents, version, accepted_at")
+    .eq("user_id", userId).eq("version", version).order("accepted_at", { ascending: false });
+  return data || [];
 }
 
 // ---------- Account settings ----------

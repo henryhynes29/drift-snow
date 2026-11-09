@@ -39,7 +39,7 @@ export function LegalReader({ docId, onClose }) {
           borderBottom: `1px solid ${C.line}`, background: C.glass, backdropFilter: "blur(20px)" }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ font: `600 16px ${FB}`, color: C.ice }}>{doc.title}</div>
-            <div style={{ font: `400 12px ${FB}`, color: C.mistDim, marginTop: 1 }}>Last updated {LEGAL_UPDATED}</div>
+            <div style={{ font: `400 12px ${FB}`, color: C.mistDim, marginTop: 1 }}>Last updated {doc.updated || LEGAL_UPDATED}</div>
           </div>
           <button onClick={onClose} aria-label="Close"
             style={{ width: 36, height: 36, borderRadius: "50%", border: "none", cursor: "pointer", background: C.slate,
@@ -57,7 +57,7 @@ export function LegalReader({ docId, onClose }) {
             </section>
           ))}
           <p style={{ font: `400 12px/1.5 ${FB}`, color: C.mistDim, marginTop: 24 }}>
-            Version {LEGAL_VERSION}. Questions about these terms: {EMAIL}</p>
+            {doc.id === "privacy" ? <>Questions about your privacy: {EMAIL}</> : <>Version {LEGAL_VERSION}. Questions about these terms: {EMAIL}</>}</p>
         </div>
       </div>
     </div>
@@ -112,7 +112,8 @@ export function CustomerConsent({ onAgree, agreeLabel = "Agree and continue", on
 
       <p style={{ font: `400 13.5px/1.5 ${FB}`, color: C.mist, margin: "14px 2px 8px" }}>
         Read the full <DocLink id="customerTerms" onOpen={open}>Terms of Service</DocLink> and{" "}
-        <DocLink id="customerRelease" onOpen={open}>Release, Waiver of Liability and Assumption of Risk</DocLink>.</p>
+        <DocLink id="customerRelease" onOpen={open}>Release, Waiver of Liability and Assumption of Risk</DocLink>.
+        Here's how we handle your information: <DocLink id="privacy" onOpen={open}>Privacy Policy</DocLink>.</p>
       <div onClick={() => setOn(v => !v)} role="checkbox" aria-checked={on} tabIndex={0}
         onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); setOn(v => !v); } }}
         style={{ width: "100%", display: "flex", gap: 12, alignItems: "flex-start", textAlign: "left", cursor: "pointer",
@@ -161,7 +162,8 @@ export function DriverConsent({ onAgree, agreeLabel = "Agree and continue", onOp
       <p style={{ font: `400 13px/1.5 ${FB}`, color: C.mist, margin: "14px 2px" }}>
         These are summaries. The full{" "}
         <DocLink id="driverAgreement" onOpen={open}>Independent Contractor Agreement, Release and Waiver</DocLink>{" "}
-        controls — please read it.
+        controls — please read it. Here's how we handle your information, including your location while online:{" "}
+        <DocLink id="privacy" onOpen={open}>Privacy Policy</DocLink>.
       </p>
       <AgreeButton tone="push" disabled={!all} onClick={() => onAgree(makeAcceptance("driver", ["driverAgreement"]))}>
         {all ? agreeLabel : `Check all ${DRIVER_ACKS.length} to continue`}</AgreeButton>
@@ -198,7 +200,7 @@ export function ConsentGate({ role, onAgree, onClose }) {
 // ---------- hub: every document, from Account ----------
 export function LegalHub({ onClose, acceptance }) {
   const [reading, setReading] = useState(null);
-  const rows = [["customerTerms", "doc"], ["customerRelease", "warning"], ["driverAgreement", "handshake"]];
+  const rows = [["customerTerms", "doc"], ["customerRelease", "warning"], ["driverAgreement", "handshake"], ["privacy", "lock"]];
   return (
     <div role="dialog" aria-modal="true" aria-label="Legal"
       style={{ position: "fixed", inset: 0, zIndex: 75, background: C.night, display: "flex", justifyContent: "center" }}>

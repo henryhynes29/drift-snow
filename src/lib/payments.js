@@ -95,3 +95,20 @@ export async function raiseOffer(jobId, add) {
 export async function refundJob(jobId, amount, fromDriver, note) {
   return pay("refund", { jobId, amount, fromDriver: !!fromDriver, note });
 }
+
+// Customer: report a problem with a finished job (within 48 hours, with photos already uploaded).
+export async function reportJobProblem(jobId, kind, note, photos) {
+  return pay("report-job", { jobId, kind, note, photos });
+}
+
+// Delete my account (personal details + login; job and payment records are kept without the name).
+export async function deleteMyAccount() {
+  return pay("delete-account", {});
+}
+
+// Public: real reviews for the homepage ({ show:false } until there are 5 ratings).
+export async function fetchReviews() {
+  const res = await fetch("/api/pay?action=reviews");
+  if (!res.ok) return { show: false };
+  return res.json();
+}

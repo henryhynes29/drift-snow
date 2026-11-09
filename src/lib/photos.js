@@ -64,3 +64,13 @@ export async function signedUrl(bucket, path) {
   if (data?.signedUrl) cache.set(key, { url: data.signedUrl, exp: Date.now() + 25 * 60 * 1000 });
   return data?.signedUrl || null;
 }
+
+// Customer: a photo of a problem with a finished job. issue-photos/<user id>/<job id>/<time>.jpg
+export async function uploadIssuePhoto(userId, jobId, file) {
+  if (!supabaseEnabled || !userId) throw new Error("Photo upload isn't set up");
+  const blob = await compressImage(file);
+  const path = `${userId}/${jobId}/${Date.now()}.${extFor(blob)}`;
+  const { error } = await supabase.storage.from("issue-photos").upload(path, blob, { contentType: blob.type || "image/jpeg", upsert: false });
+  if (error) throw new Error(error.message);
+  return path;
+}

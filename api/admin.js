@@ -213,16 +213,23 @@ const ACTIONS = {
 
   // ---------- problems reported on jobs ----------
   async issues({ all: everything } = {}) {
-    let rows = await all("job_issues", "id, job_id, reporter_id, kind, note, released, status, created_at, resolved_at",
+    let rows = await all("job_issues", "id, job_id, reporter_id, kind, note, released, status, created_at, resolved_at, photos",
       (q) => (everything ? q : q.eq("status", "open")).order("created_at", { ascending: false }).limit(100));
     if (!rows.length) return { issues: [] };
-    const jobs = await all("jobs", "id, address, status, customer_id, driver_id", (q) => q.in("id", [...new Set(rows.map((r) => r.job_id))]));
+    const jobs = await all("jobs", "id, address, status, customer_id, driver_id, price, refunded_amount, payment_status, completed_at", (q) => q.in("id", [...new Set(rows.map((r) => r.job_id))]));
     const ids = [...new Set([...rows.map((r) => r.reporter_id), ...jobs.flatMap((j) => [j.customer_id, j.driver_id])].filter(Boolean))];
     const people = await all("profiles", "id, name, email, phone", (q) => q.in("id", ids));
     const who = (id) => { const p = people.find((x) => x.id === id); return p ? { name: p.name || p.email, phone: p.phone || null } : null; };
-    return { issues: rows.map((r) => { const j = jobs.find((x) => x.id === r.job_id) || {};
-      return { ...r, address: j.address || null, jobStatus: j.status || null, reporter: who(r.reporter_id),
-        byDriver: r.reporter_id && r.reporter_id === j.driver_id || r.released, customer: who(j.customer_id), driver: who(j.driver_id) }; }) };
+    const out = [];
+    for (const r of rows) {
+      const j = jobs.find((x) => x.id === r.job_id) || {};
+      const photoUrls = await Promise.all((Array.isArray(r.photos) ? r.photos : []).slice(0, 5).map((p) => signed("issue-photos", p)));
+      out.push({ ...r, address: j.address || null, jobStatus: j.status || null, reporter: who(r.reporter_id),
+        byDriver: r.reporter_id && r.reporter_id === j.driver_id || r.released, customer: who(j.customer_id), driver: who(j.driver_id),
+        photoUrls: photoUrls.filter(Boolean),
+        job: { id: j.id, price: j.price, refunded_amount: j.refunded_amount, payment_status: j.payment_status, address: j.address, customer: who(j.customer_id)?.name || null } });
+    }
+    return { issues: out };
   },
   async "resolve-issue"({ id }) {
     const { error } = await admin.from("job_issues").update({ status: "resolved", resolved_at: new Date().toISOString() }).eq("id", id);

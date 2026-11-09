@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PAGES as BASE_PAGES, SITE, UPDATED } from "./seo-content.mjs";
 import { LEARN_PAGES } from "./seo-learn.mjs";
+import { DOCS, LEGAL_UPDATED, EMAIL } from "../src/legal.js";
 const PAGES = [...BASE_PAGES, ...LEARN_PAGES];
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -212,7 +213,7 @@ function hero(page, crumbs) {
   <div class="crumbs">${crumbs.map(([n, h]) => (h ? `<a href="${h}">${esc(n)}</a>` : `<span>${esc(n)}</span>`)).join(" &nbsp;/&nbsp; ")}</div>
   <h1>${page.h1}</h1>
   <p class="lead">${page.lead}</p>
-  ${page.kind === "faq" || page.kind === "hub" ? "" : `<div class="ctas"><a class="btn" href="${ctaHref}">${esc(page.cta || (driver ? "Start driving" : "Map my driveway"))} ${svg("arrow", 18)}</a>${page.prices ? `<a class="btn ghost" href="#prices">See prices</a>` : ""}</div>
+  ${["faq", "hub", "legal"].includes(page.kind) ? "" : `<div class="ctas"><a class="btn" href="${ctaHref}">${esc(page.cta || (driver ? "Start driving" : "Map my driveway"))} ${svg("arrow", 18)}</a>${page.prices ? `<a class="btn ghost" href="#prices">See prices</a>` : ""}</div>
   <div class="ticks">${ticks.map((t) => `<span>${svg("check", 17)}${t}</span>`).join("")}</div>`}
   ${longform ? `<div class="updated">Updated ${UPDATED.label}${page.body ? ` · ${Math.max(2, Math.round(words(page.body) / 230))} min read` : ""}</div>` : ""}
 </div></header>`;
@@ -344,7 +345,8 @@ function footer(all) {
   <div class="fgrid">
     <div><div style="font-family:var(--fd);font-weight:900;font-size:28px;letter-spacing:.05em;color:var(--ice)">DRIFT</div>
       <p style="margin:8px 0 0;max-width:300px">The app that connects you with independent local plow operators in the Twin Ports. <a href="mailto:driftplowing@gmail.com" style="display:inline;text-decoration:underline">driftplowing@gmail.com</a></p>
-      <p style="margin:14px 0 0"><a href="/faq/" style="display:inline;margin-right:14px">FAQ</a><a href="/learn/" style="display:inline">Learning center</a></p></div>
+      <p style="margin:14px 0 0"><a href="/faq/" style="display:inline;margin-right:14px">FAQ</a><a href="/learn/" style="display:inline">Learning center</a></p>
+      <p style="margin:10px 0 0;font-size:13px"><a href="/terms/" style="display:inline;margin-right:14px">Terms</a><a href="/privacy/" style="display:inline">Privacy</a></p></div>
     <div><p class="fh">Areas</p>${cities.map((c) => `<a href="/${c.slug}/">${esc(c.short)}</a>`).join("")}</div>
     <div><p class="fh">Services</p><a href="/snow-plowing-duluth-mn/">Driveway plowing</a>${services.map((s) => `<a href="/${s.slug}/">${esc(s.cardTitle)}</a>`).join("")}<a href="/plow-jobs-duluth-mn/">Plow jobs</a><a href="/drive.html">Drive with DRIFT</a></div>
     <div><p class="fh">Learn</p>${learn.slice(0, 9).map((g) => `<a href="/${g.slug}/">${esc(g.short)}</a>`).join("")}<a href="/learn/">All guides →</a></div>
@@ -376,6 +378,31 @@ for (const page of PAGES) {
   const file = join(PUB, page.slug, "index.html");
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, layout(page, PAGES));
+}
+
+// Legal pages: the same text as the app's Terms / Privacy screens (src/legal.js), at public URLs
+// for Google, Stripe and anyone who asks. Re-run this script when src/legal.js changes.
+const LEGAL = [["privacy", "privacy"], ["terms", "customerTerms"], ["release", "customerRelease"], ["driver-agreement", "driverAgreement"]];
+for (const [slug, id] of LEGAL) {
+  const d = DOCS[id];
+  const pg = { kind: "legal", slug, short: d.title, title: `${d.title} | DRIFT`,
+    description: {
+      privacy: "What information DRIFT collects, how it's used and shared, and your choices, including deleting your account.",
+      customerTerms: "The terms for booking snow plowing, sidewalk clearing and other help through the DRIFT app in the Twin Ports: pricing, payments, cancellations and disputes.",
+      customerRelease: "The release, waiver of liability and assumption of risk customers agree to when booking independent snow removal operators through DRIFT.",
+      driverAgreement: "The independent contractor agreement, release and waiver for plow operators who find jobs through the DRIFT app.",
+    }[id],
+    h1: esc(d.title), h1Plain: d.title, lead: `Last updated ${d.updated || LEGAL_UPDATED}` };
+  const crumbs = [["Home", "/"], [d.title, null]];
+  const body = `<section><div class="wrap"><div class="prose" style="max-width:780px">
+<p><b>${esc(d.intro)}</b></p>
+${d.sections.map((s) => `<h2 style="font-size:22px;margin:28px 0 10px">${esc(s.h)}</h2>\n${s.p.map((t) => `<p${s.loud ? ' style="font-weight:600;color:var(--ice)"' : ""}>${esc(t)}</p>`).join("\n")}`).join("\n")}
+<p style="margin-top:28px;font-size:14px">Questions: <a href="mailto:${EMAIL}" style="display:inline;text-decoration:underline">${EMAIL}</a></p>
+</div></div></section>`;
+  const ld = [{ "@context": "https://schema.org", "@type": "BreadcrumbList", itemListElement: crumbs.map(([name, href], i) => ({ "@type": "ListItem", position: i + 1, name, item: href ? SITE + href : url(slug) })) }];
+  const file = join(PUB, slug, "index.html");
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, [head(pg, ld), hero(pg, crumbs), body, footer(PAGES)].join("\n\n"));
 }
 
 // 404 page (Vercel serves /404.html for any unknown URL). Not indexed, but every link works.
@@ -440,6 +467,7 @@ const urls = [
   { loc: `${SITE}/`, pri: "1.0" },
   ...PAGES.map((p) => ({ loc: url(p.slug), pri: p.kind === "city" ? (p.slug.includes("duluth") ? "0.9" : "0.8") : ["service", "faq", "hub", "jobs"].includes(p.kind) ? "0.7" : "0.6" })),
   { loc: `${SITE}/drive.html`, pri: "0.6" },
+  ...LEGAL.map(([slug]) => ({ loc: url(slug), pri: "0.3" })),
 ];
 writeFileSync(join(PUB, "sitemap.xml"), `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
@@ -454,4 +482,4 @@ delete vercel.redirects;
 vercel.headers = (vercel.headers || []).filter((h) => h.source !== "/fonts/(.*)");
 vercel.headers.push({ source: "/fonts/(.*)", headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }] });
 writeFileSync(vpath, JSON.stringify(vercel, null, 2) + "\n");
-console.log(`Wrote ${PAGES.length} pages + 404.html + llms.txt + robots.txt + sitemap.xml + vercel.json`);
+console.log(`Wrote ${PAGES.length} pages + ${LEGAL.length} legal pages + 404.html + llms.txt + robots.txt + sitemap.xml + vercel.json`);

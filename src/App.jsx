@@ -13,11 +13,11 @@ function LiveMap(props) {
 import { useAuth } from "./lib/auth.jsx";
 import { supabaseEnabled } from "./lib/supabase.js";
 import { recordLegalAcceptance, loadProperties, replaceProperties, rateJob, pushDriverLocation, driverHeartbeat, subscribeToDriverLocation, createJobFromOrder, patchJob, sendMessage, subscribeToMessages, loadMessages,
-  updateMyProfile, rowToOrder, fetchJob, listOpenJobs, listScheduledJobs, listMyQueue, queuePosition, lastCompletedJob, subscribeOpenJobs, claimJob, getProfile, profileToDriver, setDriverStatus, becomeDriver, cancelJob, expireJob, subscribeToJob, loadActiveJob, loadAccountStats, loadReviews, listFavorites, addFavorite, removeFavorite, setSnowAlerts, listRegulars, driverYear, saveJobMiles } from "./lib/db.js";
+  updateMyProfile, loadMyAcceptances, rowToOrder, fetchJob, listOpenJobs, listScheduledJobs, listMyQueue, queuePosition, lastCompletedJob, subscribeOpenJobs, claimJob, getProfile, profileToDriver, setDriverStatus, becomeDriver, cancelJob, expireJob, subscribeToJob, loadActiveJob, loadAccountStats, loadReviews, listFavorites, addFavorite, removeFavorite, setSnowAlerts, listRegulars, driverYear, saveJobMiles } from "./lib/db.js";
 import { STRIPE_ENABLED, STRIPE_PK, getStripe, startHold, confirmHold, cancelJobPaid, completeJobPaid, arriveAtJob, confirmJobDone, disputeJob, stayOnline, releasePayout, tipJob, connectSession, connectStatus, connectDashboard, authedFetch, announceJob,
-  schedClaim, schedBackout, schedCheckin, schedStart, schedTick, previewJobs, reportIssue, marketStats, raiseOffer } from "./lib/payments.js";
+  schedClaim, schedBackout, schedCheckin, schedStart, schedTick, previewJobs, reportIssue, marketStats, raiseOffer, reportJobProblem, deleteMyAccount } from "./lib/payments.js";
 import { LEVELS, driverLevel, nextLevel, mileageRate } from "./lib/levels.js";
-import { uploadJobPhoto, uploadDriverDoc, myDriverDocs, signedUrl } from "./lib/photos.js";
+import { uploadJobPhoto, uploadDriverDoc, myDriverDocs, signedUrl, uploadIssuePhoto } from "./lib/photos.js";
 import { unlockRinger, startRing, stopRing, keepAwake, isStandalone, isIOS, canPromptInstall, promptInstall,
   onInstallChange, pushSupported, enablePush, pushEnabled, localAlert } from "./lib/alerts.js";
 import { track, setTrackUser, logError } from "./lib/track.js";
@@ -31,6 +31,7 @@ import Landing from "./Landing.jsx";
 import Icon from "./Icon.jsx";
 import { C, E, FD, FB, FM, applyTheme, getThemeMode, onThemeChange, isLight } from "./theme.js";
 import { LegalReader, LegalHub, CustomerConsent, DriverConsent, ConsentGate, hasCurrentAcceptance } from "./LegalDocs.jsx";
+import { LEGAL_VERSION } from "./legal.js";
 
 // ============================================================
 // DRIFT — two-sided snowplow marketplace
@@ -2521,25 +2522,30 @@ function JobChat({ jobId, senderId, peerName, seed }) {
   const live = supabaseEnabled && !!jobId && !!senderId;
   const [msgs, setMsgs] = useState(live || (supabaseEnabled && senderId) ? [] : (seed || []));
   const [text, setText] = useState("");
+  const add = (list) => setMsgs(cur => {
+    const seen = new Set(cur.map(m => m.id));
+    return [...cur, ...(list || []).filter(m => m && !seen.has(m.id)).map(m => ({ id: m.id, me: m.sender_id === senderId, t: m.body }))];
+  });
 
   useEffect(() => {
     if (!live) return;
     let on = true;
-    const add = (list) => setMsgs(cur => {
-      const seen = new Set(cur.map(m => m.id));
-      return [...cur, ...list.filter(m => !seen.has(m.id)).map(m => ({ id: m.id, me: m.sender_id === senderId, t: m.body }))];
-    });
-    loadMessages(jobId).then(({ data }) => { if (on) add(data); });
+    const load = () => loadMessages(jobId).then(({ data }) => { if (on) add(data); });
+    load();
     const unsub = subscribeToMessages(jobId, (m) => add([m]));
-    return () => { on = false; unsub(); };
+    // Realtime can drop when a phone sleeps or switches networks — check every 8 seconds too.
+    const iv = setInterval(() => { if (!document.hidden) load(); }, 8000);
+    return () => { on = false; unsub(); clearInterval(iv); };
   }, [jobId, senderId]);
 
-  const send = () => {
+  const send = async () => {
     const body = hideContact(text.trim()); // the database does this too
     if (!body) return;
     setText("");
     if (live) {
-      sendMessage(jobId, senderId, body); // the realtime subscription echoes it back
+      const { data, error } = await sendMessage(jobId, senderId, body);
+      if (data) add([data]);                       // show it right away (no waiting on realtime)
+      else if (error) { setText(body); }           // keep what they typed so they can resend
     } else {
       setMsgs(c => [...c, { me: true, t: body }]);
     }
@@ -3179,6 +3185,118 @@ function RiderScheduled({ o, d, cancelOffer, needsCard, onAuthorized }) {
   );
 }
 
+// ---- After a job: report a problem (within 48 hours, photo required) ----
+const REPORT_KINDS = [["missed", "Spots were missed"], ["piles", "Snow piled in the wrong spot"], ["damage", "Something got damaged"], ["not_done", "It wasn't plowed"], ["other", "Something else"]];
+const within48h = (t) => !!t && Date.now() - new Date(t).getTime() < 48 * 3600e3;
+function ReportJobSheet({ jobId, onClose }) {
+  const { state, dispatch } = useStore();
+  const [kind, setKind] = useState(null);
+  const [note, setNote] = useState("");
+  const [photos, setPhotos] = useState([]);   // [{ path, url }]
+  const [uploading, setUploading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const fileRef = useRef(null);
+  const addPhotos = async (e) => {
+    const files = [...(e.target.files || [])].slice(0, 5 - photos.length);
+    e.target.value = "";
+    if (!files.length) return;
+    setUploading(true); setErr("");
+    try {
+      for (const f of files) {
+        const path = await uploadIssuePhoto(state.userId, jobId, f);
+        setPhotos((ps) => [...ps, { path, url: URL.createObjectURL(f) }]);
+      }
+    } catch (e2) { setErr(`That photo didn't upload — ${e2.message}`); }
+    setUploading(false);
+  };
+  const send = async () => {
+    setBusy(true); setErr("");
+    try {
+      await reportJobProblem(jobId, kind, note, photos.map((p) => p.path));
+      dispatch({ type: "TOAST", msg: "Thanks — DRIFT will look at it and get back to you" });
+      onClose(true);
+    } catch (e2) { setErr(e2.message); setBusy(false); }
+  };
+  const ready = kind && photos.length && !uploading && !busy;
+  return (
+    <Sheet onClose={() => onClose(false)}>
+      <h3 style={{ ...H(24), margin: "0 0 4px" }}>What went wrong?</h3>
+      <p style={{ ...sub, margin: "0 0 12px" }}>Report it within 48 hours of the job. Add a photo so we can sort it out fast.</p>
+      <div style={{ display: "grid", gap: 8 }}>
+        {REPORT_KINDS.map(([k, label]) => (
+          <button key={k} onClick={() => setKind(k)} aria-pressed={kind === k} style={{ ...miniBtn, minHeight: 48, justifyContent: "flex-start", padding: "0 14px",
+            font: `500 15px ${FB}`, background: kind === k ? C.amber + "22" : C.night2, border: `1px solid ${kind === k ? C.amber : C.line}`, color: C.ice }}>
+            {label}</button>
+        ))}
+      </div>
+      <textarea value={note} onChange={(e) => setNote(e.target.value.slice(0, 500))} rows={3}
+        placeholder="Tell us more (optional)" style={{ ...inp, resize: "none", margin: "12px 0 0", font: `400 15px/1.4 ${FB}` }} />
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+        {photos.map((p) => <img key={p.path} src={p.url} alt="" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 10, border: `1px solid ${C.line}` }} />)}
+        {photos.length < 5 && (
+          <button onClick={() => fileRef.current?.click()} disabled={uploading} style={{ ...miniBtn, minHeight: 64, padding: "0 14px",
+            border: `1px dashed ${photos.length ? C.line : C.amber}`, color: photos.length ? C.ice : C.amber }}>
+            <Icon e="camera" s={17} /> {uploading ? "Uploading…" : photos.length ? "Add another" : "Add a photo"}</button>
+        )}
+        <input ref={fileRef} type="file" accept="image/*" multiple onChange={addPhotos} style={{ display: "none" }} />
+      </div>
+      {!photos.length && <div style={{ font: `400 12.5px ${FB}`, color: C.mistDim, marginTop: 6 }}>A photo is required.</div>}
+      {err && <div role="alert" style={{ font: `500 13.5px/1.4 ${FB}`, color: C.danger, marginTop: 10 }}>{err}</div>}
+      <div style={{ display: "grid", gap: 8, marginTop: 14 }}>
+        <Btn full onClick={send} disabled={!ready}>{busy ? "Sending…" : "Send report"}</Btn>
+        <Btn full kind="ghost" onClick={() => onClose(false)}>Cancel</Btn>
+      </div>
+    </Sheet>
+  );
+}
+
+// ---- Account: delete my account ----
+function DeleteAccount({ auth }) {
+  const { dispatch } = useStore();
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [gone, setGone] = useState(false);
+  const go = async () => {
+    setBusy(true); setErr("");
+    try {
+      await deleteMyAccount();
+      try { Object.keys(localStorage).filter((k) => k.startsWith("drift.") && k !== "drift.aid").forEach((k) => localStorage.removeItem(k)); } catch { /* ignore */ }
+      setGone(true);
+      setTimeout(async () => { await auth.signOut().catch(() => {}); dispatch({ type: "SIGNED_OUT" }); }, 2200);
+    } catch (e) { setErr(e.message); setBusy(false); }
+  };
+  return (
+    <>
+      <button onClick={() => setOpen(true)} style={{ display: "block", margin: "18px auto 0", background: "none", border: "none", cursor: "pointer",
+        font: `500 13.5px ${FB}`, color: C.mistDim, textDecoration: "underline" }}>Delete my account</button>
+      {open && (
+        <Sheet onClose={() => !gone && setOpen(false)}>
+          {gone ? <div style={{ textAlign: "center", padding: "18px 0 10px" }}>
+            <h3 style={{ ...H(24), margin: "0 0 6px" }}>Your account was deleted</h3>
+            <p style={{ ...sub, margin: 0 }}>Thanks for using DRIFT. Signing you out…</p>
+          </div> : <>
+          <h3 style={{ ...H(24), margin: "0 0 6px" }}>Delete your account?</h3>
+          <p style={{ ...sub, margin: "0 0 10px" }}>This can't be undone. We'll delete your login, name, phone, email, saved addresses and driveway maps, saved cards and alerts.</p>
+          <p style={{ ...sub, margin: "0 0 14px", fontSize: 13.5 }}>Past jobs and payments stay in our records without your name, because we need them for taxes and payment disputes. Drivers: your Stripe payout account stays with Stripe for tax forms.</p>
+          <label style={{ font: `500 13px ${FB}`, color: C.mist }}>Type DELETE to confirm
+            <input value={typed} onChange={(e) => setTyped(e.target.value)} autoCapitalize="characters" style={{ ...inp, marginTop: 6 }} /></label>
+          {err && <div role="alert" style={{ font: `500 13.5px/1.4 ${FB}`, color: C.danger, marginTop: 10 }}>{err}</div>}
+          <div style={{ display: "grid", gap: 8, marginTop: 14 }}>
+            <button onClick={go} disabled={busy || typed.trim().toUpperCase() !== "DELETE"} style={{ minHeight: 52, borderRadius: 999, border: "none", cursor: "pointer",
+              background: C.danger, color: "#fff", font: `600 16px ${FB}`, opacity: busy || typed.trim().toUpperCase() !== "DELETE" ? .45 : 1 }}>
+              {busy ? "Deleting…" : "Delete my account"}</button>
+            <Btn full kind="ghost" onClick={() => setOpen(false)}>Keep my account</Btn>
+          </div>
+          </>}
+        </Sheet>
+      )}
+    </>
+  );
+}
+
 function RiderReceipt() {
   const { state, dispatch } = useStore();
   const o = state.order, q = o.quote, d = isLive(state) ? (o.driver || { name: "Your driver", rating: null, jobs: 0, truck: "" }) : state.driver;
@@ -3197,11 +3315,13 @@ function RiderReceipt() {
   };
   const [tip, setTip] = useState(0);
   const [done, setDone] = useState(false);
+  const [publicOk, setPublicOk] = useState(false);
+  const [report, setReport] = useState(false);
 
   const finish = () => {
     // save the rating + written review (shows on the driver's profile)
     if (rating > 0 && state.userId) {
-      rateJob({ jobId: o.jobId || o.id, raterId: state.userId, rateeId: d.id || o.driverId, stars: rating, comment })
+      rateJob({ jobId: o.jobId || o.id, raterId: state.userId, rateeId: d.id || o.driverId, stars: rating, comment, publicOk: publicOk && rating >= 4 && !!comment.trim() })
         .then((r) => { if (r?.error && isLive(state)) console.warn("rating not saved:", r.error.message); });
     }
     // route the tip to the driver: earnings + notification now, real charge when Stripe's on
@@ -3254,6 +3374,12 @@ function RiderReceipt() {
             placeholder={rating >= 4 ? "What did they do well? (optional)" : "What could have gone better? (optional)"}
             style={{ ...inp, resize: "none", margin: "4px 0 12px", font: `400 15px/1.4 ${FB}` }} />
         )}
+        {isLive(state) && rating >= 4 && comment.trim().length >= 10 && (
+          <label style={{ display: "flex", gap: 10, alignItems: "flex-start", textAlign: "left", margin: "0 2px 14px", cursor: "pointer" }}>
+            <input type="checkbox" checked={publicOk} onChange={(e) => setPublicOk(e.target.checked)} style={{ marginTop: 3, width: 18, height: 18, accentColor: C.amber }} />
+            <span style={{ font: `400 13.5px/1.4 ${FB}`, color: C.mist }}>OK to show this review on driftplowing.com with my first name and town</span>
+          </label>
+        )}
         {canFav && (
           <button onClick={toggleFav} style={{ ...miniBtn, margin: "0 auto 12px", display: "inline-flex", alignItems: "center", gap: 6,
             color: fav ? C.onAmber : C.ice, background: fav ? C.amber : C.night2, border: fav ? "none" : `1px solid ${C.line}` }}>
@@ -3270,6 +3396,11 @@ function RiderReceipt() {
       <div style={{ marginTop: 20 }}>
         <Btn full onClick={finish}>{tip ? `Submit + tip $${tip}` : "Submit"}</Btn>
       </div>
+      {isLive(state) && o.jobId && (
+        <button onClick={() => setReport(true)} style={{ display: "block", margin: "16px auto 0", background: "none", border: "none", cursor: "pointer",
+          font: `500 14px ${FB}`, color: C.mist }}>Something wrong? <span style={{ color: C.amber, fontWeight: 600 }}>Report a problem</span></button>
+      )}
+      {report && <ReportJobSheet jobId={o.jobId} onClose={() => setReport(false)} />}
     </section>
   );
 }
@@ -3519,6 +3650,7 @@ function RiderHistory() {
   const { state, dispatch } = useStore();
   const sched = state.scheduled;
   const [viewPhotos, setViewPhotos] = useState(null);
+  const [reportJob, setReportJob] = useState(null);
 
   // demo: let user "activate" a scheduled job now to see the live flow
   const activateNow = (job) => {
@@ -3623,6 +3755,10 @@ function RiderHistory() {
                         {h.rating > 0 && <Stars v={h.rating} size={11} />}
                         {hasPhotos && <span style={{ font: `600 11px ${FB}`, color: C.plow }}><Icon e="camera" s={13} /> Before / after</span>}
                       </div>
+                      {LIVE && within48h(h.completedAt) && (
+                        <button onClick={(e) => { e.stopPropagation(); setReportJob(h.id); }} style={{ background: "none", border: "none", padding: 0, marginTop: 6,
+                          cursor: "pointer", font: `600 12.5px ${FB}`, color: C.amber }}>Report a problem</button>
+                      )}
                     </div>
                   </div>
                   <div style={{ textAlign: "right", flexShrink: 0 }}>
@@ -3637,6 +3773,7 @@ function RiderHistory() {
       )}
 
       {viewPhotos && <PhotoViewer job={viewPhotos} onClose={() => setViewPhotos(null)} />}
+      {reportJob && <ReportJobSheet jobId={reportJob} onClose={() => setReportJob(null)} />}
     </section></Fade>
   );
 }
@@ -3999,6 +4136,7 @@ function RiderAccount({ onReferral }) {
           style={{ width: "100%", marginTop: 14, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14,
             color: C.danger, font: `600 15px ${FB}`, cursor: "pointer", padding: 14 }}>Sign out</button>
       )}
+      {auth?.isConfigured && auth?.session && <DeleteAccount auth={auth} />}
       {!supabaseEnabled && (
         <button onClick={() => dispatch({ type: "RESET" })}
           style={{ display: "flex", alignItems: "center", gap: 6, margin: "18px auto 0", background: "none", border: "none",
@@ -6478,6 +6616,7 @@ function DriverAccount({ onReferral }) {
           Sign out
         </button>
       )}
+      {auth?.isConfigured && auth?.session && <DeleteAccount auth={auth} />}
     </section>
   );
 }
@@ -6795,6 +6934,15 @@ function Shell({ startEntered = false }) {
         profile: { name: prof.name || "", phone: prof.phone || "", email: prof.email || auth.user.email || "" },
         properties: props });
       loadAccountStats(uid).then((st) => { if (!cancelled && st) dispatch({ type: "ACCOUNT_STATS", ...st }); }).catch(() => {});
+      // Already agreed on another phone? Don't make them agree again here.
+      loadMyAcceptances(uid, LEGAL_VERSION).then((rows) => {
+        if (cancelled) return;
+        for (const role of ["customer", "driver"]) {
+          const r = rows.find((x) => x.role === role);
+          if (r && !hasCurrentAcceptance(stateRef.current.legal?.[role]))
+            dispatch({ type: "ACCEPT_LEGAL", rec: { role, docs: r.documents, version: r.version, at: r.accepted_at } });
+        }
+      }).catch(() => {});
       // Sign-up source (?ref= link they arrived from), saved once.
       try { const ref = localStorage.getItem("drift.ref"); if (ref && !prof.ref_source) updateMyProfile(uid, { ref_source: ref }); } catch { /* ignore */ }
       // Pick up a job that was in progress (page refresh, dead battery, new phone).

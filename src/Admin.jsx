@@ -96,9 +96,12 @@ function SnowAlerts() {
 }
 
 // ---------- problems drivers/customers reported on jobs (hidden when there are none) ----------
-const ISSUE_LABEL = { blocked: "Something in the way", no_access: "Can't get to the property", damage: "Damage", unsafe: "Unsafe conditions", other: "Other problem" };
+const ISSUE_LABEL = { blocked: "Something in the way", no_access: "Can't get to the property", damage: "Damage", unsafe: "Unsafe conditions", other: "Other problem",
+  missed: "Spots were missed", piles: "Snow piled in the wrong spot", not_done: "Customer says it wasn't plowed" };
 function Issues() {
   const [rows, setRows] = useState(null);
+  const [refund, setRefund] = useState(null);
+  const [big, setBig] = useState(null);
   const load = () => api("issues").then((d) => setRows(d.issues)).catch(() => setRows([]));
   useEffect(() => { load(); }, []);
   if (!rows || !rows.length) return null;
@@ -116,16 +119,29 @@ function Issues() {
                 <span style={{ font: `400 13px ${FB}`, color: C.mistDim }}>{date(r.created_at)}</span>
               </div>
               {r.note && <div style={{ font: `400 14px/1.45 ${FB}`, color: C.ice, marginTop: 6 }}>“{r.note}”</div>}
+              {r.photoUrls?.length > 0 && (
+                <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                  {r.photoUrls.map((u, i) => <img key={i} src={u} alt="Reported problem" onClick={() => setBig(u)}
+                    style={{ width: 92, height: 92, objectFit: "cover", borderRadius: 10, cursor: "zoom-in", border: `1px solid ${C.line}` }} />)}
+                </div>
+              )}
               <div style={{ font: `400 13px/1.5 ${FB}`, color: C.mist, marginTop: 6 }}>
                 {r.address || "No address"} · reported by {r.byDriver ? "driver" : "customer"} {r.reporter?.name || ""}<br />
                 Customer: {r.customer?.name || "—"}{r.customer?.phone ? ` · ${r.customer.phone}` : ""}
                 {r.driver ? <> · Driver: {r.driver.name}{r.driver.phone ? ` · ${r.driver.phone}` : ""}</> : null}
               </div>
             </div>
-            <button onClick={() => resolve(r.id)} style={{ ...btn(), alignSelf: "center" }}>Mark handled</button>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, alignSelf: "center" }}>
+              {!r.byDriver && ["captured", "refunded"].includes(r.job?.payment_status) && Number(r.job.price) - Number(r.job.refunded_amount || 0) >= 1 &&
+                <button onClick={() => setRefund(r.job)} style={btn("amber")}>Refund…</button>}
+              <button onClick={() => resolve(r.id)} style={btn()}>Mark handled</button>
+            </div>
           </div>
         ))}
       </div>
+      {refund && <RefundSheet job={refund} onClose={() => setRefund(null)} onDone={() => { setRefund(null); load(); }} />}
+      {big && <div onClick={() => setBig(null)} style={{ position: "fixed", inset: 0, background: C.scrim, zIndex: 60, display: "grid", placeItems: "center", padding: 20, cursor: "zoom-out" }}>
+        <img src={big} alt="Reported problem" style={{ maxWidth: "100%", maxHeight: "90vh", borderRadius: 12 }} /></div>}
     </section>
   );
 }

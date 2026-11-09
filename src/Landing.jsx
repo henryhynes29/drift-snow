@@ -297,14 +297,28 @@ function ProofBar() {
   );
 }
 
-// ---------- reviews (shown only when src/lib/reviews.js has real quotes) ----------
+// ---------- reviews: real customer ratings from the app (shown once there are 5),
+// or quotes added by hand in src/lib/reviews.js ----------
 function Reviews() {
-  if (!REVIEWS.length) return null;
+  const [live, setLive] = useState(null);
+  useEffect(() => {
+    fetch("/api/pay?action=reviews").then((r) => (r.ok ? r.json() : null)).then((d) => { if (d?.show) setLive(d); }).catch(() => {});
+  }, []);
+  const list = live?.reviews?.length ? live.reviews : REVIEWS;
+  if (!live && !REVIEWS.length) return null;
   return (
     <Section kicker="From the neighborhood" title="What neighbors say." style={{ paddingTop: 40 }}>
-      <div className="lp-reviews" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14 }}>
-        {REVIEWS.slice(0, 6).map((r, k) => (
-          <figure key={k} className="rv" style={{ margin: 0, background: L.panel, border: `1px solid ${L.line}`, borderRadius: 20, padding: "24px 22px",
+      {live && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "-6px 0 20px", font: `500 15px ${BODY}`, color: L.dim }}>
+          <span style={{ display: "flex", gap: 2, color: L.amber }} aria-hidden>
+            {Array.from({ length: 5 }, (_, i) => <svg key={i} width="16" height="16" viewBox="0 0 24 24" fill="currentColor" opacity={i < Math.round(live.average) ? 1 : .3}><path d="M12 2.5l2.9 6.1 6.6.8-4.9 4.6 1.3 6.6L12 17.3 6.1 20.6l1.3-6.6L2.5 9.4l6.6-.8z" /></svg>)}
+          </span>
+          <span><b style={{ color: L.ice }}>{live.average.toFixed(1)}</b> average from {live.count} customer ratings</span>
+        </div>
+      )}
+      {list.length > 0 && <div className="lp-reviews" style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14 }}>
+        {list.slice(0, 6).map((r, k) => (
+          <figure key={k} className={live ? "rv in" : "rv"} style={{ margin: 0, background: L.panel, border: `1px solid ${L.line}`, borderRadius: 20, padding: "24px 22px",
             display: "flex", flexDirection: "column", gap: 18, transitionDelay: `${(k % 3) * 80}ms` }}>
             <div aria-label={`${r.stars || 5} out of 5 stars`} style={{ display: "flex", gap: 3, color: L.amber }}>
               {Array.from({ length: r.stars || 5 }, (_, i) => <svg key={i} width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden><path d="M12 2.5l2.9 6.1 6.6.8-4.9 4.6 1.3 6.6L12 17.3 6.1 20.6l1.3-6.6L2.5 9.4l6.6-.8z" /></svg>)}
@@ -318,7 +332,7 @@ function Reviews() {
             </figcaption>
           </figure>
         ))}
-      </div>
+      </div>}
     </Section>
   );
 }
@@ -1034,7 +1048,7 @@ export default function Landing({ onStart, onLegal }) {
           <div style={{ display: "flex", gap: "12px 26px", flexWrap: "wrap" }}>
             <button className="lp-link" onClick={onStart}>Get a plow</button>
             <button className="lp-link" onClick={goDrive}>Drive with DRIFT</button>
-            {[["customerTerms", "Terms"], ["customerRelease", "Release & Waiver"], ["driverAgreement", "Driver Agreement"]].map(([id, label]) => (
+            {[["customerTerms", "Terms"], ["customerRelease", "Release & Waiver"], ["driverAgreement", "Driver Agreement"], ["privacy", "Privacy"]].map(([id, label]) => (
               <button key={id} className="lp-link" onClick={() => onLegal && onLegal(id)}>{label}</button>
             ))}
           </div>

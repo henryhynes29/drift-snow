@@ -23,7 +23,7 @@ import { snowCheck } from "./_weather.js";
 
 const OPEN = ["requested", "scheduled"];
 const NO_STRIPE_OK = ["announce", "tick", "sched-claim", "sched-backout", "sched-checkin", "sched-start", "market", "preview-jobs", "report-issue", "release-job",
-  "arrive", "confirm-done", "dispute", "stay-online", "release-payout", "resolve-dispute", "raise"];
+  "arrive", "confirm-done", "dispute", "stay-online", "release-payout", "resolve-dispute", "raise", "report-job", "delete-account", "reviews"];
 const H = 3600e3, MIN = 60e3;
 const FREE_BACKOUT_HOURS = 3;     // drivers can drop a scheduled job for free until 3 hrs before
 const CHECKIN_DEADLINE_MIN = 45;  // ...and must check in by 45 min before the window
@@ -85,6 +85,11 @@ export default async function handler(req, res) {
     if (action === "market" && req.method === "GET") {
       res.setHeader("Cache-Control", "public, s-maxage=300, stale-while-revalidate=600");
       return send(res, 200, await marketStats());
+    }
+    // Public: real customer reviews for the homepage (hidden until there are 5 ratings).
+    if (action === "reviews" && req.method === "GET") {
+      res.setHeader("Cache-Control", "public, s-maxage=900, stale-while-revalidate=3600");
+      return send(res, 200, await publicReviews());
     }
     if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
     const body = await readJson(req);
@@ -257,6 +262,75 @@ const ACTIONS = {
     const updated = await updateJob(job.id, patch);
     try { await pushTo([job.customer_id], { title: `DRIFT refunded $${amt}`, body: "It'll show on your card in 5–10 business days.", tag: `refund-${job.id}`, url: "/" }); } catch { /* ignore */ }
     return { job: updated, warning };
+  },
+
+  // Customer: something was wrong with a finished job (within 48 hours, with a photo).
+  async "report-job"(user, { jobId, kind, note, photos }) {
+    const KINDS = { missed: "Spots were missed", piles: "Snow piled in the wrong spot", damage: "Something got damaged", not_done: "It wasn't plowed", other: "Something else" };
+    if (!KINDS[kind]) throw new HttpError(400, "Pick what went wrong");
+    const job = await getJob(jobId);
+    if (job.customer_id !== user.id) throw new HttpError(403, "Not your job");
+    const charged = ["captured", "refunded"].includes(job.payment_status);
+    const doneAt = job.completed_at ? new Date(job.completed_at).getTime() : (job.status === "cancelled" && charged ? new Date(job.arrived_at || job.created_at).getTime() : null);
+    if (!doneAt || !["completed", "cancelled"].includes(job.status)) throw new HttpError(409, "You can report a problem once the job is finished");
+    if (Date.now() - doneAt > 48 * H) throw new HttpError(409, "Problems have to be reported within 48 hours of the job. Email driftplowing@gmail.com and we'll take a look.");
+    const paths = (Array.isArray(photos) ? photos : []).map(String).filter((p) => p.startsWith(`${user.id}/${job.id}/`)).slice(0, 5);
+    // The photos have to really be there.
+    const { data: files } = await admin.storage.from("issue-photos").list(`${user.id}/${job.id}`, { limit: 50 });
+    const names = new Set((files || []).map((f) => `${user.id}/${job.id}/${f.name}`));
+    const real = paths.filter((p) => names.has(p));
+    if (!real.length) throw new HttpError(400, "Add a photo of the problem");
+    const { data: open } = await admin.from("job_issues").select("id").eq("job_id", job.id).eq("reporter_id", user.id).eq("status", "open");
+    if ((open || []).length) throw new HttpError(409, "You already reported this job. DRIFT is looking at it.");
+    const text = String(note || "").trim().slice(0, 500);
+    const { data: issue, error } = await admin.from("job_issues")
+      .insert({ job_id: job.id, reporter_id: user.id, kind, note: text || null, photos: real, status: "open" }).select().single();
+    if (error) throw new HttpError(500, error.message);
+    try {
+      await pushTo(await ownerIds(), { title: `Customer reported a problem · ${KINDS[kind]}`,
+        body: `${job.address || "A job"}${text ? ": " + text.slice(0, 120) : ""}`, tag: `issue-${issue.id}`, url: "/?admin=1" });
+    } catch { /* alerts are best effort */ }
+    return { issue };
+  },
+
+  // Delete my account: wipe personal details and the login. Job and payment records stay
+  // (with the name removed) because DRIFT needs them for taxes, Stripe and disputes.
+  async "delete-account"(user) {
+    const uid = user.id;
+    const { data: open } = await admin.from("jobs").select("id, status, customer_id, driver_id")
+      .or(`customer_id.eq.${uid},driver_id.eq.${uid}`).in("status", ["requested", "scheduled", "accepted", "enroute", "plowing"]);
+    if ((open || []).length) throw new HttpError(409, "You have a plow booked or in progress. Finish or cancel it first, then delete your account.");
+    const profile = await getProfile(uid);
+    if (profile?.stripe_customer_id && stripe) {
+      try { await stripe.customers.del(profile.stripe_customer_id); }   // removes saved cards
+      catch (e) { await logServerError("delete account: stripe customer", e, { userId: uid }); }
+    }
+    // Driver documents (license, insurance) — files and records.
+    try {
+      const { data: docs } = await admin.from("driver_documents").select("path").eq("user_id", uid);
+      const paths = (docs || []).map((d) => d.path).filter(Boolean);
+      if (paths.length) await admin.storage.from("driver-docs").remove(paths);
+      await admin.from("driver_documents").delete().eq("user_id", uid);
+    } catch (e) { await logServerError("delete account: driver docs", e, { userId: uid }); }
+    const wipe = [
+      admin.from("properties").delete().eq("owner_id", uid),
+      admin.from("favorite_drivers").delete().or(`customer_id.eq.${uid},driver_id.eq.${uid}`),
+      admin.from("push_subscriptions").delete().eq("user_id", uid),
+      admin.from("driver_locations").delete().eq("driver_id", uid),
+      admin.from("app_events").update({ user_id: null }).eq("user_id", uid),
+    ];
+    for (const w of wipe) { try { const { error } = await w; if (error) throw error; } catch (e) { await logServerError("delete account: wipe", e, { userId: uid }); } }
+    const { error: pe } = await admin.from("profiles").update({
+      name: "Deleted user", phone: null, email: null, is_online: false, truck: null, docs: {},
+      home_lat: null, home_lng: null, stripe_customer_id: null, snow_alerts: false, deleted_at: new Date().toISOString(),
+    }).eq("id", uid);
+    if (pe) throw new HttpError(500, pe.message);
+    // The login: email swapped out (so they can sign up fresh later) and blocked from signing in.
+    const { error: ae } = await admin.auth.admin.updateUserById(uid, {
+      email: `deleted-${uid}@deleted.driftplowing.com`, email_confirm: true, phone: "", user_metadata: { deleted: true }, ban_duration: "876000h",
+    });
+    if (ae) { await logServerError("delete account: login", ae, { userId: uid }); throw new HttpError(500, "Your details were removed, but we couldn't close the login. Email driftplowing@gmail.com and we'll finish it."); }
+    return { deleted: true };
   },
 
   // ---------- 2. cancel / expire: release the hold ----------
@@ -877,6 +951,35 @@ async function releaseLiveJob(job, driverId) {
 
 // How much work is open right now — safe to show publicly (no customer/driver counts).
 let marketCache = null;
+// Homepage reviews: the real average and count of ALL customer ratings of drivers, plus
+// recent 4–5 star written reviews the customer said OK to show (first name + town).
+let reviewsCache = null;
+async function publicReviews(fresh = false) {
+  if (!fresh && reviewsCache && Date.now() - reviewsCache.at < 10 * MIN) return reviewsCache.data;
+  const { data: rows } = await admin.from("ratings").select("job_id, rater_id, stars, comment, public_ok, created_at").order("created_at", { ascending: false }).limit(2000);
+  const jobIds = [...new Set((rows || []).map((r) => r.job_id))];
+  const { data: jobs } = jobIds.length ? await admin.from("jobs").select("id, customer_id, address, job_type").in("id", jobIds) : { data: [] };
+  const jobOf = Object.fromEntries((jobs || []).map((j) => [j.id, j]));
+  const byCustomers = (rows || []).filter((r) => jobOf[r.job_id] && jobOf[r.job_id].customer_id === r.rater_id);
+  const count = byCustomers.length;
+  const average = count ? Math.round((byCustomers.reduce((s, r) => s + r.stars, 0) / count) * 10) / 10 : null;
+  let reviews = [];
+  if (count >= 5) {
+    const picks = byCustomers.filter((r) => r.public_ok && r.stars >= 4 && (r.comment || "").trim().length >= 10).slice(0, 12);
+    const { data: people } = picks.length ? await admin.from("profiles").select("id, name, deleted_at").in("id", [...new Set(picks.map((r) => r.rater_id))]) : { data: [] };
+    const nameOf = Object.fromEntries((people || []).filter((p) => !p.deleted_at).map((p) => [p.id, (p.name || "").trim().split(/\s+/)[0]]));
+    const town = (addr) => { const m = /,\s*([A-Za-z .'-]+?),?\s+(MN|WI)\b/i.exec(addr || "") || /,\s*([A-Za-z .'-]+)\s*$/.exec(addr || ""); return m ? m[1].trim() : null; };
+    const SERVICE = { driveway: "Driveway", sidewalk: "Sidewalk", digout: "Car dig-out", jumpstart: "Jump-start" };
+    reviews = picks.filter((r) => nameOf[r.rater_id]).slice(0, 6).map((r) => ({
+      name: nameOf[r.rater_id], area: town(jobOf[r.job_id].address), service: SERVICE[jobOf[r.job_id].job_type] || null,
+      stars: r.stars, quote: r.comment.trim().slice(0, 280), at: r.created_at,
+    }));
+  }
+  const data = count >= 5 ? { show: true, average, count, reviews } : { show: false };
+  reviewsCache = { at: Date.now(), data };
+  return data;
+}
+
 async function marketStats() {
   if (marketCache && Date.now() - marketCache.at < 60e3) return marketCache.data;
   const now = new Date().toISOString();

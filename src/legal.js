@@ -191,6 +191,66 @@ export const DOCS = {
       ] },
     ],
   },
+
+  // ------------------------------------------------------------------ PRIVACY POLICY
+  privacy: {
+    id: "privacy",
+    title: "Privacy Policy",
+    who: "all",
+    updated: "November 9, 2026",
+    intro: `This Privacy Policy explains what information ${ENTITY} ("DRIFT," "we," "us") collects when you use the DRIFT website and app, how we use it, who we share it with, and the choices you have. We don't sell your information and we don't show ads.`,
+    sections: [
+      { h: "1. What we collect", p: [
+        `Account details: your name, email address, phone number, and (if you set one) a password, which is stored in scrambled form by our login provider.`,
+        `Your properties: addresses, the areas you outline on the map (where to plow and where snow goes), hazards you mark, notes for drivers, and how steep your driveway is.`,
+        `Jobs: what you booked, when, your offer, fees, tips, before-and-after photos the driver takes of the work area, messages in job chat (phone numbers and email addresses are hidden automatically), ratings, reviews, and any problem reports and photos you send us.`,
+        `Payments: card payments and driver payouts are handled by Stripe. DRIFT never sees or stores your full card number. We receive limited details from Stripe, such as whether a payment went through, the card brand and last four digits, and payout status. Drivers give their identity, tax and bank details to Stripe directly.`,
+        `Drivers: truck and equipment details, documents you upload (such as license, registration and insurance), your home area, job history, earnings and a mileage log.`,
+        `Location: while a driver is online or on a job, the app collects the phone's precise location. It's used to show nearby jobs, to show the customer the truck on the way, to confirm the driver is at the property before a job can be checked in or finished, and on DRIFT's live map. Customers' property locations come from the address and map they set up. We only use your phone's location if you allow it in your browser or phone settings.`,
+        `Notifications: if you turn on notifications, we store a notification address for your phone so we can send job updates and snow alerts.`,
+        `Usage and device information: a random ID saved on your phone, which pages and steps you reach (for example, visiting the site or finishing a driveway map), the link that brought you to DRIFT, error reports when something breaks, and basic device and browser type. Our hosting and database providers also process IP addresses and similar technical data to run the service and keep it secure.`,
+        `Agreements: when you accept our terms, we record which version you accepted, when, and from what kind of device, as proof of consent.`,
+      ] },
+      { h: "2. How we use it", p: [
+        `To run DRIFT: create your account, price and book jobs, match customers with drivers, show live tracking, process payments, tips, refunds and payouts, and keep your job history.`,
+        `To keep jobs honest and safe: confirm arrival and completion with location and photos, look into disputes and problem reports, prevent fraud and payments outside the app, and enforce our terms.`,
+        `To talk to you: job updates, sign-in codes, receipts, snow alerts, and replies when you contact us.`,
+        `To improve DRIFT: understand how many people use the app, where they get stuck, and fix errors.`,
+        `To meet legal, tax and accounting requirements.`,
+      ] },
+      { h: "3. Who we share it with", p: [
+        `Between customers and drivers, only what's needed for the job. A driver who takes your job sees your name, the property address and map, your hazards and notes, and job chat. A customer sees the driver's name, truck, rating and reviews, and the truck's location while the job is active.`,
+        `Service providers who help us run DRIFT and may only use the information to provide their service to us: Supabase (database, logins and file storage), Stripe (payments, payouts and identity checks), Vercel (website hosting), Mapbox (maps and address search, which receives the addresses you search and the map areas you view), and Resend (email delivery). Notifications are delivered through your phone or browser maker's notification service. Snow forecasts come from the National Weather Service, which doesn't receive your personal information.`,
+        `If the law requires it, to respond to valid legal process, or to protect the safety, rights or property of our users, the public or DRIFT.`,
+        `If DRIFT is sold, merged or reorganized, your information may move to the new owner under this policy.`,
+        `We do not sell your personal information, and we don't share it with advertisers or data brokers.`,
+      ] },
+      { h: "4. Cookies and storage on your phone", p: [
+        `DRIFT uses your browser's storage to keep you signed in, save a driveway you're mapping before you make an account, remember settings, and hold the random usage ID described above. We don't use advertising cookies or third-party tracking tools.`,
+      ] },
+      { h: "5. How long we keep it", p: [
+        `We keep your account information until you delete your account. Job, payment, payout and tax records are kept for at least seven years, even after an account is deleted, because the law and our payment processor require it. For drivers, the app keeps only your latest location, which is replaced as you move. Usage statistics and error reports are kept only as long as they're useful for running and improving DRIFT.`,
+      ] },
+      { h: "6. Your choices", p: [
+        `Update your details any time in the app's Account screen.`,
+        `Delete your account in the app: Account → Delete my account. This removes your login, name, phone, email, saved addresses and driveway maps, saved cards, driver documents and notification settings. Past jobs and payments stay in our records with your name removed. Drivers' payout accounts stay with Stripe for tax reporting.`,
+        `Turn off notifications in your phone or browser settings, and snow alerts in the app. Turn off location access in your phone settings (drivers need it on to take jobs).`,
+        `You can ask us for a copy of your information, or to correct or delete it, by emailing ${EMAIL}. Depending on where you live, you may have other privacy rights under your state's law. We'll respond within 45 days and won't treat you differently for asking.`,
+      ] },
+      { h: "7. Security", p: [
+        `Information is sent over encrypted connections, stored with access controls, and photos and documents are kept in private storage. Card details stay with Stripe. No system is perfectly secure, so please use a strong password and tell us right away if you think your account was misused.`,
+      ] },
+      { h: "8. Adults only", p: [
+        `DRIFT is for people 18 and older. We don't knowingly collect information from anyone under 18. If you think someone under 18 has an account, email us and we'll delete it.`,
+      ] },
+      { h: "9. Changes", p: [
+        `If we change this policy, we'll update the date at the top. If a change is important, we'll tell you in the app before it takes effect.`,
+      ] },
+      { h: "10. Contact us", p: [
+        `${ENTITY}, 5180 Midway Rd, Duluth, MN 55811. Email: ${EMAIL}.`,
+      ] },
+    ],
+  },
 };
 
 // Plain-English summary shown on the customer's consent screen (above the checkbox).

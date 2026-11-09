@@ -18,6 +18,21 @@ function hasSession() {
   } catch { /* private mode */ }
   return false
 }
+// After an update, a page that was already open can ask for app files that were replaced.
+// When that happens, reload once to pick up the new version (at most once every 30 seconds).
+const STALE = /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module|Unable to preload CSS/i
+function reloadForUpdate() {
+  try {
+    if (Date.now() - Number(sessionStorage.getItem('drift.reloadedAt') || 0) < 30000) return false
+    sessionStorage.setItem('drift.reloadedAt', String(Date.now()))
+  } catch { return false }
+  window.location.reload()
+  return true
+}
+window.__driftReloadForUpdate = (err) => (STALE.test(String(err?.message || err || '')) ? reloadForUpdate() : false)
+window.addEventListener('vite:preloadError', (e) => { if (reloadForUpdate()) e.preventDefault() })
+window.addEventListener('unhandledrejection', (e) => { window.__driftReloadForUpdate(e.reason) })
+
 const q = new URLSearchParams(window.location.search)
 // Remember which link brought this visitor (?ref=hermantown-moms) — saved to their profile at sign-up.
 try {
