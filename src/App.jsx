@@ -3317,6 +3317,8 @@ function RiderReceipt() {
   const [done, setDone] = useState(false);
   const [publicOk, setPublicOk] = useState(false);
   const [report, setReport] = useState(false);
+  const [install, setInstall] = useState(false);
+  const addToHome = async () => { if (canPromptInstall()) await promptInstall(); else setInstall(true); };
 
   const finish = () => {
     // save the rating + written review (shows on the driver's profile)
@@ -3392,6 +3394,21 @@ function RiderReceipt() {
           ))}
         </div>
       </div>
+
+      {isLive(state) && !isStandalone() && (
+        <div style={{ marginTop: 18, display: "flex", gap: 12, alignItems: "center", padding: "13px 14px", borderRadius: 16,
+          background: C.slate, border: `1px solid ${C.amber}55` }}>
+          <span style={{ width: 40, height: 40, borderRadius: 11, background: C.amber, color: C.onAmber, display: "grid", placeItems: "center", flexShrink: 0 }}>
+            <Icon e="snowflake" s={20} /></span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ font: `600 15px ${FB}`, color: C.ice }}>Next storm, book in one tap</div>
+            <div style={{ font: `400 13px/1.35 ${FB}`, color: C.mist, marginTop: 2 }}>Put DRIFT on your Home Screen. Your driveway's already saved.</div>
+          </div>
+          <button onClick={addToHome} style={{ ...miniBtn, minHeight: 40, padding: "0 13px", fontSize: 13, flexShrink: 0, background: C.amber, color: C.onAmber, border: "none" }}>
+            {canPromptInstall() ? "Add" : "Show me"}</button>
+        </div>
+      )}
+      {install && <InstallSheet onClose={() => setInstall(false)} />}
 
       <div style={{ marginTop: 20 }}>
         <Btn full onClick={finish}>{tip ? `Submit + tip $${tip}` : "Submit"}</Btn>
@@ -4973,38 +4990,148 @@ function DriverApp() {
 // Facebook / Instagram open links in their own browser, which can't add to the Home Screen.
 const inAppBrowser = () => typeof navigator !== "undefined" && /FBAN|FBAV|FB_IAB|Instagram|Messenger/i.test(navigator.userAgent);
 
+// Which browser are they in? Each one hides "Add to Home Screen" somewhere different.
+function browserKind() {
+  if (typeof navigator === "undefined") return "desktop";
+  const ua = navigator.userAgent;
+  if (inAppBrowser()) return "inapp";
+  if (isIOS()) return /CriOS/.test(ua) ? "ios-chrome" : /FxiOS|EdgiOS|OPiOS|DuckDuckGo/.test(ua) ? "ios-other" : "ios-safari";
+  if (/SamsungBrowser/.test(ua)) return "samsung";
+  if (/Android/.test(ua)) return /Firefox/.test(ua) ? "android-firefox" : "android-chrome";
+  return "desktop";
+}
+
+// ---- little pictures of the browser buttons, with the one to tap highlighted ----
+const TapRing = ({ children, round }) => (
+  <span style={{ position: "relative", display: "inline-grid", placeItems: "center" }}>
+    <span style={{ position: "absolute", inset: -5, borderRadius: round ? "50%" : 12, border: `2px solid ${C.amber}`, animation: "pulse 1.6s ease-in-out infinite" }} />
+    {children}
+  </span>
+);
+const ShotBox = ({ children, pad = "10px 12px", align = "center" }) => (
+  <div aria-hidden style={{ marginTop: 8, background: C.slate, border: `1px solid ${C.line}`, borderRadius: 14, padding: pad,
+    display: "flex", alignItems: "center", justifyContent: align, gap: 10, overflow: "hidden" }}>{children}</div>
+);
+const MenuRow = ({ icon, label, hot, last }) => (
+  <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 4px", width: "100%", opacity: hot ? 1 : .38,
+    borderBottom: last ? "none" : `1px solid ${C.lineSoft}`, position: "relative" }}>
+    <span style={{ font: `500 14px ${FB}`, color: C.ice, flex: 1 }}>{label}</span>
+    {icon && <span style={{ color: C.ice, display: "flex" }}>{icon}</span>}
+    {hot && <span style={{ position: "absolute", inset: "1px -6px", borderRadius: 10, border: `2px solid ${C.amber}`, animation: "pulse 1.6s ease-in-out infinite" }} />}
+  </div>
+);
+const dots = <span style={{ font: `800 18px/1 ${FB}`, letterSpacing: ".05em", color: C.ice }}>•••</span>;
+const plusSquare = <span style={{ width: 18, height: 18, border: `1.8px solid ${C.ice}`, borderRadius: 5, display: "grid", placeItems: "center", font: `700 14px/1 ${FB}` }}>+</span>;
+const urlPill = (w = "auto") => (
+  <span style={{ flex: w === "auto" ? 1 : "none", background: C.night2, border: `1px solid ${C.line}`, borderRadius: 999, padding: "8px 14px",
+    font: `500 13px ${FB}`, color: C.mist, textAlign: "center", whiteSpace: "nowrap" }}>driftplowing.com</span>
+);
+const ShotSafariBar = () => <ShotBox>{urlPill()}<TapRing round>{dots}</TapRing></ShotBox>;
+const ShotSafariMenu = () => <ShotBox pad="4px 12px"><div style={{ width: "100%" }}><MenuRow label="Bookmarks" /><MenuRow label="Share" hot icon={<Icon e="share" s={16} />} /><MenuRow label="Reader" last /></div></ShotBox>;
+const ShotShareSheet = () => <ShotBox pad="4px 12px"><div style={{ width: "100%" }}><MenuRow label="Add to Favorites" /><MenuRow label="Add to Home Screen" hot icon={plusSquare} /><MenuRow label="Find on Page" last /></div></ShotBox>;
+const ShotWebAppAdd = () => (
+  <ShotBox pad="10px 12px" align="space-between">
+    <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <span style={{ width: 40, height: 22, borderRadius: 999, background: C.push, position: "relative" }}>
+        <span style={{ position: "absolute", right: 2, top: 2, width: 18, height: 18, borderRadius: "50%", background: "#fff" }} /></span>
+      <span style={{ font: `500 14px ${FB}`, color: C.ice }}>Open as Web App</span>
+    </span>
+    <TapRing><span style={{ font: `700 15px ${FB}`, color: C.plow, padding: "2px 6px" }}>Add</span></TapRing>
+  </ShotBox>
+);
+const ShotIcon = () => (
+  <ShotBox>
+    <span style={{ display: "grid", justifyItems: "center", gap: 4 }}>
+      <TapRing><span style={{ width: 46, height: 46, borderRadius: 12, background: C.amber, color: C.onAmber, display: "grid", placeItems: "center" }}><Icon e="snowflake" s={24} /></span></TapRing>
+      <span style={{ font: `500 11px ${FB}`, color: C.ice }}>DRIFT</span>
+    </span>
+  </ShotBox>
+);
+const ShotChromeIosBar = () => <ShotBox>{urlPill()}<TapRing round><span style={{ color: C.ice, display: "flex" }}><Icon e="share" s={18} /></span></TapRing></ShotBox>;
+const ShotAndroidBar = () => <ShotBox>{urlPill()}<TapRing round><span style={{ font: `800 20px/1 ${FB}`, color: C.ice, padding: "0 4px" }}>⋮</span></TapRing></ShotBox>;
+const ShotAndroidMenu = ({ label = "Add to Home screen" }) => <ShotBox pad="4px 12px"><div style={{ width: "100%" }}><MenuRow label="New tab" /><MenuRow label={label} hot icon={plusSquare} /><MenuRow label="Settings" last /></div></ShotBox>;
+const ShotInstall = ({ word = "Install" }) => <ShotBox align="flex-end"><span style={{ font: `500 14px ${FB}`, color: C.mist, marginRight: "auto" }}>DRIFT</span><span style={{ font: `600 14px ${FB}`, color: C.mist }}>Cancel</span><TapRing><span style={{ font: `700 14px ${FB}`, color: C.plow, padding: "2px 6px" }}>{word}</span></TapRing></ShotBox>;
+const ShotSamsungBar = () => (
+  <ShotBox align="space-around">{["‹", "›", "⌂"].map((g) => <span key={g} style={{ font: `600 20px/1 ${FB}`, color: C.mistDim }}>{g}</span>)}
+    <TapRing><span style={{ display: "grid", gap: 3, padding: "3px 2px" }}>{[0, 1, 2].map((i) => <span key={i} style={{ width: 18, height: 2.5, borderRadius: 2, background: C.ice }} />)}</span></TapRing></ShotBox>
+);
+const ShotSamsungMenu = () => <ShotBox pad="4px 12px"><div style={{ width: "100%" }}><MenuRow label="Bookmarks" /><MenuRow label="Add page to" hot /><MenuRow label="Downloads" last /></div></ShotBox>;
+const ShotSamsungTo = () => <ShotBox pad="4px 12px"><div style={{ width: "100%" }}><MenuRow label="Bookmarks" /><MenuRow label="Home screen" hot icon={plusSquare} last /></div></ShotBox>;
+
+// "Add DRIFT to your Home Screen": step-by-step for the browser they're actually in, with pictures.
 function InstallSheet({ onClose }) {
-  const ios = isIOS(), inApp = inAppBrowser();
+  const kind = browserKind();
   const [copied, setCopied] = useState(false);
-  const step = (n, text) => (
-    <div style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "10px 0" }}>
-      <div style={{ width: 26, height: 26, borderRadius: 8, background: C.slate, border: `1px solid ${C.line}`, flexShrink: 0,
-        display: "grid", placeItems: "center", font: `700 13px ${FB}`, color: C.ice }}>{n}</div>
-      <div style={{ font: `400 15px/1.45 ${FB}`, color: C.ice, paddingTop: 2 }}>{text}</div>
+  const copyLink = async () => { try { await navigator.clipboard.writeText("https://driftplowing.com"); setCopied(true); } catch { /* ignore */ } };
+  const step = (n, text, pic, note) => (
+    <div style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "10px 0", borderTop: n > 1 ? `1px solid ${C.lineSoft}` : "none" }}>
+      <div style={{ width: 26, height: 26, borderRadius: 8, background: C.amber, flexShrink: 0, display: "grid", placeItems: "center",
+        font: `700 13px ${FB}`, color: C.onAmber, marginTop: 1 }}>{n}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ font: `500 15px/1.45 ${FB}`, color: C.ice }}>{text}</div>
+        {note && <div style={{ font: `400 13px/1.4 ${FB}`, color: C.mist, marginTop: 3 }}>{note}</div>}
+        {pic}
+      </div>
     </div>
   );
-  const copyLink = async () => {
-    try { await navigator.clipboard.writeText("https://driftplowing.com"); setCopied(true); } catch { /* ignore */ }
-  };
+  const down = (label) => (   // points at the browser's own toolbar, below the page
+    <div aria-hidden style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 6, marginTop: 8, color: C.amber, font: `600 13px ${FB}` }}>
+      {label}<span style={{ display: "inline-block", animation: "nudgeDown 1s ease-in-out infinite", fontSize: 20, lineHeight: 1 }}>↓</span>
+    </div>
+  );
+  const copyBtn = (where) => (
+    <button onClick={copyLink} style={{ ...miniBtn, width: "100%", minHeight: 44, marginTop: 8 }}>
+      <Icon e="link" s={15} /> {copied ? `Link copied — paste it in ${where}` : "Copy the link"}</button>
+  );
+  const steps = {
+    "ios-safari": <>
+      {step(1, <>Tap <b>•••</b> next to the address bar at the bottom of Safari.</>, <ShotSafariBar />, "See a Share button instead? Tap it and skip to step 3.")}
+      {step(2, <>Tap <b>Share</b>.</>, <ShotSafariMenu />)}
+      {step(3, <>Scroll down and tap <b>Add to Home Screen</b>.</>, <ShotShareSheet />)}
+      {step(4, <>Keep <b>Open as Web App</b> on, then tap <b>Add</b>.</>, <ShotWebAppAdd />)}
+      {step(5, <>Open DRIFT from the new icon and tap <b>Turn on notifications</b>.</>, <ShotIcon />)}
+      {down("••• is down here")}
+    </>,
+    "ios-chrome": <>
+      {step(1, <>Tap the <b>Share</b> button in the address bar at the top.</>, <ShotChromeIosBar />)}
+      {step(2, <>Tap <b>Add to Home Screen</b>. You may need to scroll or tap <b>More</b>.</>, <ShotShareSheet />)}
+      {step(3, <>Tap <b>Add</b>, then open DRIFT from the new icon and turn on notifications.</>, <ShotIcon />)}
+    </>,
+    "ios-other": <>
+      {step(1, <>This browser can't add DRIFT to your Home Screen. Open <b>driftplowing.com</b> in <b>Safari</b>.</>, copyBtn("Safari"))}
+      {step(2, <>In Safari, tap <b>•••</b> → <b>Share</b> → <b>Add to Home Screen</b> → <b>Add</b>.</>, <ShotSafariBar />)}
+    </>,
+    inapp: <>
+      {step(1, <>You're in the Facebook or Instagram browser, which can't do this. Tap <b>{isIOS() ? "•••" : "⋮"}</b> at the top and choose <b>{isIOS() ? "Open in Safari" : "Open in Chrome"}</b>.</>, copyBtn(isIOS() ? "Safari" : "Chrome"))}
+      {step(2, <>Then tap this button again for the next steps.</>)}
+    </>,
+    samsung: <>
+      {step(1, <>Tap the <b>menu</b> button at the bottom right.</>, <ShotSamsungBar />)}
+      {step(2, <>Tap <b>Add page to</b>.</>, <ShotSamsungMenu />)}
+      {step(3, <>Tap <b>Home screen</b>, then <b>Add</b>.</>, <ShotSamsungTo />)}
+      {step(4, <>Open DRIFT from the new icon and tap <b>Turn on notifications</b>.</>, <ShotIcon />)}
+      {down("Menu is down here")}
+    </>,
+    "android-chrome": <>
+      {step(1, <>Tap <b>⋮</b> at the top right of Chrome.</>, <ShotAndroidBar />)}
+      {step(2, <>Tap <b>Add to Home screen</b> (or <b>Install app</b>).</>, <ShotAndroidMenu />)}
+      {step(3, <>Tap <b>Install</b>, then open DRIFT from the new icon.</>, <ShotInstall />)}
+    </>,
+    "android-firefox": <>
+      {step(1, <>Tap <b>⋮</b> (top or bottom right).</>, <ShotAndroidBar />)}
+      {step(2, <>Tap <b>Add app to Home screen</b> (or <b>Install</b>).</>, <ShotAndroidMenu label="Add app to Home screen" />)}
+      {step(3, <>Tap <b>Add</b>, then open DRIFT from the new icon.</>, <ShotInstall word="Add" />)}
+    </>,
+    desktop: <>
+      {step(1, <>Open <b>driftplowing.com</b> on your phone and tap <b>Add DRIFT to your Home Screen</b> there.</>, copyBtn("a text to yourself"))}
+    </>,
+  }[kind];
   return (
     <Sheet onClose={onClose}>
+      <style>{`@keyframes nudgeDown{0%,100%{transform:translateY(0)}50%{transform:translateY(5px)}}`}</style>
       <h3 style={{ ...H(24), margin: "0 0 4px" }}>Add DRIFT to your Home Screen</h3>
-      <p style={{ ...sub, marginBottom: 8 }}>It opens full screen like a normal app, one tap away{ios ? ", and on iPhone it's needed for notifications" : ""}. Takes 20 seconds.</p>
-      {inApp ? <>
-        {step(1, <>You're in the Facebook browser, which can't do this. Tap <b>{ios ? "⋯" : "⋮"}</b> at the top and choose <b>{ios ? "Open in Safari" : "Open in Chrome"}</b>.</>)}
-        {step(2, <>Then come back to this button and follow the steps.</>)}
-        <button onClick={copyLink} style={{ ...miniBtn, width: "100%", minHeight: 44, marginTop: 4 }}>
-          <Icon e="link" s={15} /> {copied ? "Link copied — paste it in " + (ios ? "Safari" : "Chrome") : "Or copy the link"}</button>
-      </> : ios ? <>
-        {step(1, <>Tap the <b>Share</b> button <span style={{ display: "inline-flex", verticalAlign: "-3px", color: C.plow }}><Icon e="share" s={17} /></span> {/CriOS/.test(navigator.userAgent) ? "at the top right" : "at the bottom of Safari"}.</>)}
-        {step(2, <>Scroll down and tap <b>Add to Home Screen</b>.</>)}
-        {step(3, <>Tap <b>Add</b>, then open DRIFT from the new snowflake icon.</>)}
-        {step(4, <>In the app, tap <b>Turn on notifications</b> and allow them.</>)}
-      </> : <>
-        {step(1, <>Tap the <b>⋮</b> menu at the top right of Chrome.</>)}
-        {step(2, <>Tap <b>Install app</b> or <b>Add to Home screen</b>, then <b>Install</b>.</>)}
-        {step(3, <>Open DRIFT from the new icon and tap <b>Turn on notifications</b>.</>)}
-      </>}
+      <p style={{ ...sub, marginBottom: 6 }}>It opens full screen like a regular app, one tap away{kind.startsWith("ios") ? ", and on iPhone it's how notifications work" : ""}. Takes about 20 seconds.</p>
+      {steps}
       <div style={{ marginTop: 12 }}><Btn full kind="dark" onClick={onClose}>Got it</Btn></div>
     </Sheet>
   );
@@ -6681,8 +6808,10 @@ function DriverReferral({ onBack }) {
 // ============================================================
 // AUTH SCREEN — real sign up / log in (Supabase)
 // ============================================================
-function AuthScreen({ auth, onDemo, initialRole, signInOnly, title, onBack, initialMode }) {
-  const [mode, setMode] = useState(signInOnly ? "signin" : initialMode || "signup"); // signup | signin | forgot
+function AuthScreen({ auth, onDemo, initialRole, signInOnly, title, subtitle, onBack, initialMode, onGuest }) {
+  const [mode, setMode] = useState(signInOnly ? "signin" : initialMode || "signup"); // signup | signin | forgot | code
+  const [codeSent, setCodeSent] = useState(false);
+  const [code, setCode] = useState("");
   const [role, setRole] = useState(initialRole || "customer"); // customer | driver
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -6693,6 +6822,21 @@ function AuthScreen({ auth, onDemo, initialRole, signInOnly, title, onBack, init
 
   const submit = async () => {
     setErr(""); setInfo("");
+    if (mode === "code") {   // sign in with a 6-digit code (accounts made at checkout have no password)
+      if (!/.+@.+\..+/.test(email.trim())) { setErr("Enter your email."); return; }
+      setBusy(true);
+      if (!codeSent) {
+        const r = await auth.sendEmailCode({ email: email.trim() });
+        setBusy(false);
+        if (r?.error) { setErr(/rate|seconds/i.test(r.error.message || "") ? "Wait a minute, then send a new code." : r.error.message || "Couldn't send the code."); return; }
+        setCodeSent(true); setInfo(`We sent a 6-digit code to ${email.trim()}. Check spam too.`);
+        return;
+      }
+      const r = await auth.verifyEmailCode(email.trim(), code.replace(/\D/g, ""));
+      setBusy(false);
+      if (r?.error) setErr(/expired|invalid/i.test(r.error.message || "") ? "That code didn't work. Check it, or send a new one." : r.error.message);
+      return;
+    }
     if (mode === "forgot") {
       if (!/.+@.+\..+/.test(email.trim())) { setErr("Enter the email you signed up with."); return; }
       setBusy(true);
@@ -6741,7 +6885,8 @@ function AuthScreen({ auth, onDemo, initialRole, signInOnly, title, onBack, init
               : title ? title : mode === "signup" ? (role === "driver" ? <>Plow for <span style={{ color: C.amber }}>DRIFT</span></> : <>Create your <span style={{ color: C.amber }}>account</span></>)
               : <>Welcome <span style={{ color: C.amber }}>back</span></>}</h1>
           <div style={{ font: `400 16px/1.5 ${FB}`, color: C.mist }}>
-            {mode === "forgot" ? "Enter your email and we'll send you a link to set a new one."
+            {subtitle && mode !== "forgot" ? subtitle : mode === "forgot" ? "Enter your email and we'll send you a link to set a new one."
+              : mode === "code" ? "We'll email you a 6-digit code. No password needed."
               : mode === "signup" ? (role === "driver" ? "Create your account, then see open jobs and what they pay before any paperwork." : "It takes about a minute.") : "Sign in to your DRIFT account."}</div>
         </div>
 
@@ -6760,11 +6905,19 @@ function AuthScreen({ auth, onDemo, initialRole, signInOnly, title, onBack, init
 
         <div style={{ display: "grid", gap: 11 }}>
           {mode === "signup" && field({ value: name, onChange: (e) => setName(e.target.value), placeholder: "Full name" })}
-          {field({ value: email, onChange: (e) => setEmail(e.target.value), placeholder: "Email", type: "email", inputMode: "email", autoComplete: "email" })}
-          {mode !== "forgot" && field({ value: password, onChange: (e) => setPassword(e.target.value), placeholder: "Password", type: "password",
+          {field({ value: email, onChange: (e) => setEmail(e.target.value), placeholder: "Email", type: "email", inputMode: "email", autoComplete: "email",
+            onKeyDown: (e) => { if (e.key === "Enter" && mode === "code") submit(); } })}
+          {mode === "code" && codeSent && field({ value: code, onChange: (e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6)), placeholder: "6-digit code",
+            inputMode: "numeric", autoComplete: "one-time-code", "aria-label": "6-digit code", autoFocus: true, onKeyDown: (e) => { if (e.key === "Enter") submit(); } })}
+          {mode !== "forgot" && mode !== "code" && field({ value: password, onChange: (e) => setPassword(e.target.value), placeholder: "Password", type: "password",
             autoComplete: mode === "signup" ? "new-password" : "current-password",
             onKeyDown: (e) => { if (e.key === "Enter") submit(); } })}
         </div>
+        {mode === "signin" && !signInOnly && (
+          <button onClick={() => { setErr(""); setInfo(""); setCodeSent(false); setMode("code"); }}
+            style={{ marginTop: 12, width: "100%", minHeight: 46, borderRadius: 12, background: C.slate, border: `1px solid ${C.line}`, cursor: "pointer",
+              color: C.ice, font: `600 14px ${FB}` }}>No password? Email me a sign-in code</button>
+        )}
         {mode === "signin" && (
           <button onClick={() => { setErr(""); setInfo(""); setMode("forgot"); }}
             style={{ alignSelf: "flex-end", marginTop: 8, background: "none", border: "none", cursor: "pointer",
@@ -6776,10 +6929,20 @@ function AuthScreen({ auth, onDemo, initialRole, signInOnly, title, onBack, init
 
         <div style={{ marginTop: 16 }}>
           <Btn full onClick={submit} disabled={busy}>
-            {busy ? "One moment…" : mode === "forgot" ? "Email me a reset link" : mode === "signup" ? "Create account" : "Sign in"}</Btn>
+            {busy ? "One moment…" : mode === "forgot" ? "Email me a reset link" : mode === "code" ? (codeSent ? "Sign in" : "Email me a code") : mode === "signup" ? "Create account" : "Sign in"}</Btn>
         </div>
+        {mode === "code" && (
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
+            {codeSent ? <button onClick={() => { setCodeSent(false); setCode(""); setInfo(""); }} style={{ background: "none", border: "none", cursor: "pointer", color: C.mist, font: `600 13px ${FB}`, padding: 8 }}>Send a new code</button> : <span />}
+            <button onClick={() => { setErr(""); setInfo(""); setMode("signin"); }} style={{ background: "none", border: "none", cursor: "pointer", color: C.mist, font: `600 13px ${FB}`, padding: 8 }}>Use a password</button>
+          </div>
+        )}
+        {onGuest && (
+          <button onClick={onGuest} style={{ width: "100%", marginTop: 10, background: "transparent", border: "none", cursor: "pointer",
+            color: C.amber, font: `600 14px ${FB}`, padding: 8 }}>New to DRIFT? Map your driveway</button>
+        )}
 
-        {mode === "forgot" ? <button onClick={() => { setErr(""); setInfo(""); setMode("signin"); }}
+        {mode === "code" ? null : mode === "forgot" ? <button onClick={() => { setErr(""); setInfo(""); setMode("signin"); }}
           style={{ width: "100%", marginTop: 14, background: "transparent", border: "none", cursor: "pointer",
             color: C.mist, font: `600 13px ${FB}`, padding: 8 }}>Back to sign in</button>
         : !signInOnly && <button onClick={() => { setErr(""); setInfo(""); setMode(mode === "signup" ? "signin" : "signup"); }}
@@ -6851,6 +7014,7 @@ function Shell({ startEntered = false }) {
   const [notifOpen, setNotifOpen] = useState(false);
   const [legalDoc, setLegalDoc] = useState(null); // landing-page footer → document reader
   const [entered, setEntered] = useState(DRIVE_INTENT || startEntered); // false = show the marketing homepage first
+  const [homeScreenGuest, setHomeScreenGuest] = useState(false);       // opened from the Home Screen icon, chose "new here"
   const [wantAuth, setWantAuth] = useState(false); // guest tapped "Sign in"
   const guestSeen = useRef(false);                 // keep the guest's screen up while their new account loads
   const stateRef = useRef(state); stateRef.current = state;
@@ -7059,6 +7223,13 @@ function Shell({ startEntered = false }) {
         borderTopColor: C.amber, animation: "spin .7s linear infinite" }} />
       <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>;
+  }
+  // Opened from the Home Screen icon and not signed in: straight to a quick email-code sign-in
+  // (not the marketing page), with a way in for someone new.
+  if (supabaseEnabled && !auth.session && !bypass && !DRIVE_INTENT && !homeScreenGuest && isStandalone()) {
+    return <AuthScreen auth={auth} initialMode="code" title={<>Welcome to <span style={{ color: C.amber }}>DRIFT</span></>}
+      subtitle="Enter your email and we'll send you a code to open your account."
+      onGuest={() => { setHomeScreenGuest(true); setEntered(true); }} />;
   }
   // Marketing homepage: the public front door for anyone not signed in yet.
   if (!auth.session && !bypass && !entered) {
