@@ -85,3 +85,13 @@ export const reportIssue = (jobId, kind, note, release = false) => pay("report-i
 export async function marketStats() {
   try { const r = await fetch("/api/pay?action=market"); return r.ok ? await r.json() : null; } catch { return null; }
 }
+
+// Customer: raise the offer while waiting for a driver (+5 / +10 / +15 / +20).
+export async function raiseOffer(jobId, add) {
+  return pay("raise", { jobId, add });
+}
+
+// Owner: refund part or all of a charged job; optionally take it back from the driver.
+export async function refundJob(jobId, amount, fromDriver, note) {
+  return pay("refund", { jobId, amount, fromDriver: !!fromDriver, note });
+}

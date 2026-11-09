@@ -15,11 +15,12 @@ import { supabaseEnabled } from "./lib/supabase.js";
 import { recordLegalAcceptance, loadProperties, replaceProperties, rateJob, pushDriverLocation, driverHeartbeat, subscribeToDriverLocation, createJobFromOrder, patchJob, sendMessage, subscribeToMessages, loadMessages,
   updateMyProfile, rowToOrder, fetchJob, listOpenJobs, listScheduledJobs, listMyQueue, queuePosition, lastCompletedJob, subscribeOpenJobs, claimJob, getProfile, profileToDriver, setDriverStatus, becomeDriver, cancelJob, expireJob, subscribeToJob, loadActiveJob, loadAccountStats, loadReviews, listFavorites, addFavorite, removeFavorite, setSnowAlerts, listRegulars, driverYear, saveJobMiles } from "./lib/db.js";
 import { STRIPE_ENABLED, STRIPE_PK, getStripe, startHold, confirmHold, cancelJobPaid, completeJobPaid, arriveAtJob, confirmJobDone, disputeJob, stayOnline, releasePayout, tipJob, connectSession, connectStatus, connectDashboard, authedFetch, announceJob,
-  schedClaim, schedBackout, schedCheckin, schedStart, schedTick, previewJobs, reportIssue, marketStats } from "./lib/payments.js";
+  schedClaim, schedBackout, schedCheckin, schedStart, schedTick, previewJobs, reportIssue, marketStats, raiseOffer } from "./lib/payments.js";
 import { LEVELS, driverLevel, nextLevel, mileageRate } from "./lib/levels.js";
 import { uploadJobPhoto, uploadDriverDoc, myDriverDocs, signedUrl } from "./lib/photos.js";
 import { unlockRinger, startRing, stopRing, keepAwake, isStandalone, isIOS, canPromptInstall, promptInstall,
   onInstallChange, pushSupported, enablePush, pushEnabled, localAlert } from "./lib/alerts.js";
+import { track, setTrackUser, logError } from "./lib/track.js";
 import { loadConnectAndInitialize } from "@stripe/connect-js/pure";
 import { ConnectComponentsProvider, ConnectAccountOnboarding, ConnectNotificationBanner } from "@stripe/react-connect-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
@@ -410,6 +411,7 @@ function persistNewJob(dispatch, order, userId) {
     .then((res) => {
       const row = res?.data;
       if (!row?.id) {
+        logError(res?.error?.message || "Booking wasn't saved", "sending a booking");
         dispatch({ type: "CLEAR_ORDER" });
         dispatch({ type: "TOAST", msg: res?.error?.message ? `Couldn't send your request — ${res.error.message}` : "Couldn't send your request. Check your connection and try again." });
         return;
@@ -424,7 +426,8 @@ function persistNewJob(dispatch, order, userId) {
         expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : null,
         quote: { ...order.quote, riderTotal: Number(row.price), driverPay: Number(row.driver_pay) } } });
     })
-    .catch(() => {
+    .catch((e) => {
+      logError(e, "sending a booking");
       dispatch({ type: "CLEAR_ORDER" });
       dispatch({ type: "TOAST", msg: "Couldn't send your request. Check your connection and try again." });
     });
@@ -1459,6 +1462,7 @@ function Onboarding() {
 
   const go = (n) => setStep(n);
   const setV = (k, v) => setValid((s) => ({ ...s, [k]: v }));
+  useEffect(() => { track("map_start"); }, []);
 
   const finish = () => {
     const fp = state.userId ? state.profile : profile; // signed-in users reuse their account details
@@ -1473,6 +1477,7 @@ function Onboarding() {
     };
     try { localStorage.removeItem("drift.prefill"); } catch { /* ignore */ }
     dispatch({ type: "ONBOARD_DONE", profile: fp, property });
+    track("map_done");
     dispatch({ type: "TOAST", msg: `Welcome${fp?.name ? ", " + fp.name.split(" ")[0] : ""}! You're all set.` });
   };
 
@@ -2879,6 +2884,7 @@ function RiderTracking() {
         <div style={{ font: `400 15.5px/1.4 ${FB}`, color: C.mist, marginTop: 8 }}>{line}</div>
       </div>
       {LIVE && <JobAlertsPrompt jobKey={o.jobId} ready={!!o.jobId && !needsCard} />}
+      {LIVE && finding && !needsCard && <RaiseOfferCard o={o} leftMs={leftMs} dibsMs={dibsMs} />}
 
       {/* driver checked in but never finished */}
       {LIVE && o.confirmAskedAt && !o.disputedAt && (
@@ -2999,6 +3005,49 @@ function RiderTracking() {
 }
 
 // A scheduled plow: when it is, who's on it, and the card hold.
+// Still waiting after a few minutes: one tap to raise the offer (drivers nearby get an alert about it).
+function RaiseOfferCard({ o, leftMs, dibsMs }) {
+  const { dispatch } = useStore();
+  const [since, setSince] = useState(() => Date.now());
+  const [busy, setBusy] = useState(null);
+  const [, tick] = useState(0);
+  useEffect(() => { const iv = setInterval(() => tick((x) => x + 1), 15000); return () => clearInterval(iv); }, []);
+  const offer = Math.round(Number(o.quote?.offer || 0));
+  const waited = Date.now() - since >= 5 * 60000 || (leftMs != null && leftMs <= 4 * 60000);
+  if (!o.jobId || dibsMs > 0 || !offer || !waited || offer >= 500) return null;
+  const raise = async (add) => {
+    setBusy(add);
+    try {
+      const { job } = await raiseOffer(o.jobId, add);
+      const newOffer = Math.round(Number(job.offer));
+      dispatch({ type: "ORDER_STATE", patch: {
+        quote: { ...o.quote, offer: newOffer, baseAmount: newOffer, riderTotal: Number(job.price), driverPay: Number(job.driver_pay) },
+        expiresAt: job.expires_at ? new Date(job.expires_at).getTime() : o.expiresAt } });
+      dispatch({ type: "TOAST", msg: `Offer raised to $${newOffer} — drivers nearby were alerted` });
+      setSince(Date.now());
+    } catch (e) { dispatch({ type: "TOAST", msg: e.message }); }
+    setBusy(null);
+  };
+  const adds = [5, 10, 15].filter((a) => offer + a <= 500);
+  return (
+    <div style={{ marginTop: 14, background: C.slate, border: `1px solid ${C.amber}66`, borderRadius: 18, padding: 16 }}>
+      <div style={{ font: `600 16px ${FB}`, color: C.ice }}>No driver yet</div>
+      <div style={{ font: `400 14px/1.45 ${FB}`, color: C.mist, marginTop: 4 }}>
+        Drivers nearby may be busy. Raising your ${offer} offer gets you noticed first, and they get an alert about it.</div>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${adds.length}, 1fr)`, gap: 8, marginTop: 12 }}>
+        {adds.map((a) => (
+          <button key={a} onClick={() => raise(a)} disabled={!!busy} style={{ minHeight: 56, borderRadius: 14, cursor: busy ? "default" : "pointer",
+            border: a === 10 ? "none" : `1px solid ${C.line}`, background: a === 10 ? C.amber : C.night2, color: a === 10 ? C.onAmber : C.ice,
+            opacity: busy && busy !== a ? .5 : 1, display: "grid", placeItems: "center", padding: "6px 4px" }}>
+            <span style={{ font: `700 17px ${FB}` }}>{busy === a ? "…" : `+$${a}`}</span>
+            <span style={{ font: `500 12px ${FB}`, opacity: .8 }}>${offer + a + 15} total</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // Right after booking: ask to turn on notifications (and add DRIFT to the Home Screen)
 // so they hear when the plow is coming. Opens once per job; after that it's a small banner.
 function JobAlertsPrompt({ jobKey, ready = true, scheduled = false }) {
@@ -5247,6 +5296,7 @@ function DriverDrive() {
     if (v) unlockRinger();   // this tap lets the phone ring later on its own
     keepAwake(v);            // keep the screen on while online
     if (LIVE) setDriverStatus(state.userId, { is_online: v });
+    if (v) track("online");
     dispatch({ type: "TOAST", msg: v ? "You're online — requests will pop up here" : "You're offline" });
   };
   // First tap wins — the database decides, so two drivers can never get the same job.
@@ -6739,6 +6789,7 @@ function Shell({ startEntered = false }) {
         if ((gp.phone && !prof.phone) || (gp.name && !prof.name)) updateMyProfile(uid, { ...(gp.phone && !prof.phone ? { phone: gp.phone } : {}), ...(gp.name && !prof.name ? { name: gp.name } : {}) });
       }
       const me = profileToDriver(prof);
+      setTrackUser(uid, role); track("active");
       dispatch({ type: "HYDRATE_USER", userId: uid, role, isDriver: !!prof.is_driver,
         driver: me && { ...me, tools: prof.tools || [] },
         profile: { name: prof.name || "", phone: prof.phone || "", email: prof.email || auth.user.email || "" },

@@ -17,13 +17,13 @@
 import {
   stripe, admin, HttpError, cents, requireUser, getJob, updateJob, getProfile,
   updateProfile, readJson, send, driverPayoutsReady, payDriverForJob, markAuthorized, announceJob,
-  onlineFavorites, onlineElites, FIRST_DIBS_MINUTES, ELITE_DIBS_MINUTES, ownerIds, pushTo, announceScheduled, announceOpenScheduled, fmtWindow, fmtTime, JOB_KIND,
+  onlineFavorites, onlineElites, FIRST_DIBS_MINUTES, ELITE_DIBS_MINUTES, ownerIds, pushTo, logServerError, driversFor, announceScheduled, announceOpenScheduled, fmtWindow, fmtTime, JOB_KIND,
 } from "./_lib.js";
 import { snowCheck } from "./_weather.js";
 
 const OPEN = ["requested", "scheduled"];
 const NO_STRIPE_OK = ["announce", "tick", "sched-claim", "sched-backout", "sched-checkin", "sched-start", "market", "preview-jobs", "report-issue", "release-job",
-  "arrive", "confirm-done", "dispute", "stay-online", "release-payout", "resolve-dispute"];
+  "arrive", "confirm-done", "dispute", "stay-online", "release-payout", "resolve-dispute", "raise"];
 const H = 3600e3, MIN = 60e3;
 const FREE_BACKOUT_HOURS = 3;     // drivers can drop a scheduled job for free until 3 hrs before
 const CHECKIN_DEADLINE_MIN = 45;  // ...and must check in by 45 min before the window
@@ -94,7 +94,7 @@ export default async function handler(req, res) {
     return send(res, 200, await fn(user, body, req));
   } catch (e) {
     const status = e.status || (e.type?.startsWith?.("Stripe") ? 402 : 500);
-    if (status >= 500) console.error(`[pay:${action}]`, e);
+    if (status >= 500) { console.error(`[pay:${action}]`, e); await logServerError(`pay:${action}`, e); }
     return send(res, status, { error: e.message || "Something went wrong" });
   }
 }
@@ -163,6 +163,100 @@ const ACTIONS = {
         exclusive_until: new Date(Date.now() + (favs.length ? FIRST_DIBS_MINUTES : ELITE_DIBS_MINUTES) * 60 * 1000).toISOString() });
     }
     return { sent: await announceJob(job), exclusiveUntil: job.exclusive_until || null };
+  },
+
+  // Customer raises their offer while still waiting for a driver. With a card hold,
+  // a new hold for the higher total replaces the old one (the old one is released).
+  async raise(user, { jobId, add }) {
+    const job = await getJob(jobId);
+    if (job.customer_id !== user.id) throw new HttpError(403, "Not your job");
+    if (job.status !== "requested" || job.driver_id) throw new HttpError(409, "A driver already took this job");
+    const inc = Math.round(Number(add));
+    if (![5, 10, 15, 20].includes(inc)) throw new HttpError(400, "Pick +$5, +$10, +$15 or +$20");
+    if (job.payment_status === "pending") throw new HttpError(409, "Hold your card first, then you can raise your offer");
+    const offer = Math.round(Number(job.offer)) + inc;
+    if (offer > 500) throw new HttpError(400, "Offers top out at $500");
+    const price = offer + 15, driverPay = Math.round(offer * 0.8) + 10;
+    const patch = {
+      offer, price, driver_pay: driverPay, platform_fee: price - driverPay, offer_raised_at: new Date().toISOString(),
+      quote: { ...(job.quote || {}), offer, baseAmount: offer, riderTotal: price, driverPay },
+      expires_at: new Date(Math.max(new Date(job.expires_at).getTime() || 0, Date.now() + 10 * MIN)).toISOString(),
+    };
+    let newPi = null, oldPi = null;
+    if (job.payment_status === "authorized" && job.payment_intent_id) {
+      if (!stripe) throw new HttpError(503, "Payments aren't set up on the server yet");
+      oldPi = await stripe.paymentIntents.retrieve(job.payment_intent_id);
+      const pm = job.payment_method_id || (typeof oldPi.payment_method === "string" ? oldPi.payment_method : oldPi.payment_method?.id);
+      const declined = new HttpError(402, "Your card didn't approve the higher amount. Your current offer is still live.");
+      if (!pm || !oldPi.customer) throw declined;
+      try {
+        newPi = await stripe.paymentIntents.create({
+          amount: cents(price), currency: "usd", customer: oldPi.customer, payment_method: pm,
+          capture_method: "manual", confirm: true, off_session: true, payment_method_types: ["card"],
+          description: oldPi.description || `DRIFT snow removal — ${job.address || "job"}`, transfer_group: `job_${job.id}`,
+          metadata: { job_id: job.id, customer_id: user.id, kind: "job" },
+        }, { idempotencyKey: `raise-${job.id}-${cents(price)}` });
+      } catch { throw declined; }
+      if (newPi.status !== "requires_capture") { try { await stripe.paymentIntents.cancel(newPi.id); } catch { /* ignore */ } throw declined; }
+      patch.payment_intent_id = newPi.id; patch.payment_method_id = pm;
+    }
+    // Only if it's still waiting — a driver may have accepted a second ago.
+    const { data: updated } = await admin.from("jobs").update(patch).eq("id", job.id).eq("status", "requested").is("driver_id", null).select().maybeSingle();
+    if (!updated) {
+      if (newPi) { try { await stripe.paymentIntents.cancel(newPi.id); } catch { /* ignore */ } }
+      throw new HttpError(409, "A driver just took your job at your original offer");
+    }
+    if (oldPi) { try { await stripe.paymentIntents.cancel(oldPi.id); } catch (e) { await logServerError("raise: release old hold", e, { jobId: job.id }); } }
+    // Tell online drivers nearby about the better offer.
+    try {
+      const ids = (await driversFor(updated)).map((d) => d.id);
+      if (ids.length) await pushTo(ids, { title: `Offer raised · $${driverPay}`, body: `${JOB_KIND[updated.job_type] || "Snow job"}${updated.address ? " · " + updated.address : ""} — open DRIFT to accept`,
+        tag: `job-${updated.id}`, url: `/?offer=${updated.id}` });
+    } catch { /* alerts are best effort */ }
+    return { job: updated };
+  },
+
+  // Owner: refund part or all of a charged job. Optionally take it back from the driver's payout
+  // (reverses the transfer if they've been paid, or lowers the payout if they haven't).
+  async refund(user, { jobId, amount, fromDriver, note }) {
+    if (!(await ownerIds()).includes(user.id)) throw new HttpError(403, "Owners only");
+    const job = await getJob(jobId);
+    if (!job.payment_intent_id || !["captured", "refunded"].includes(job.payment_status)) throw new HttpError(409, "Only charged jobs can be refunded");
+    const r2 = (v) => Math.round(Number(v || 0) * 100) / 100;
+    const left = r2(Number(job.price) - Number(job.refunded_amount || 0));
+    const amt = r2(amount);
+    if (!(amt >= 1) || amt > left) throw new HttpError(400, left >= 1 ? `Refund between $1 and $${left}` : "This job is already fully refunded");
+    await stripe.refunds.create({ payment_intent: job.payment_intent_id, amount: cents(amt), reason: "requested_by_customer",
+      metadata: { job_id: job.id, kind: "owner_refund" } }, { idempotencyKey: `refund-${job.id}-${cents(job.refunded_amount)}-${cents(amt)}` });
+    const refunded = r2(Number(job.refunded_amount || 0) + amt);
+    const patch = { refunded_amount: refunded, refunded_at: new Date().toISOString(),
+      ...(refunded >= Number(job.price) ? { payment_status: "refunded" } : {}) };
+    const lines = [`$${amt} refunded${note ? ": " + String(note).slice(0, 200) : ""}`];
+    let warning = null;
+    if (fromDriver) {
+      if (job.transfer_id) {
+        const back = r2(Math.min(amt, Number(job.driver_pay) - Number(job.driver_clawback || 0)));
+        if (back > 0) {
+          try {
+            await stripe.transfers.createReversal(job.transfer_id, { amount: cents(back), metadata: { job_id: job.id, kind: "refund_clawback" } },
+              { idempotencyKey: `clawback-${job.id}-${cents(job.driver_clawback)}-${cents(back)}` });
+            patch.driver_clawback = r2(Number(job.driver_clawback || 0) + back);
+            lines.push(`$${back} taken back from the driver`);
+          } catch (e) {
+            warning = `Refunded, but couldn't take it back from the driver: ${e.message}`;
+            lines.push("driver clawback failed");
+          }
+        }
+      } else if (["none", "owed", "held"].includes(job.payout_status)) {
+        const back = r2(Math.min(amt, Number(job.driver_pay)));
+        patch.driver_pay = r2(Number(job.driver_pay) - back);
+        lines.push(`driver payout lowered by $${back}`);
+      }
+    }
+    patch.refund_note = [job.refund_note, `${new Date().toLocaleDateString("en-US", { timeZone: "America/Chicago" })}: ${lines.join(", ")}`].filter(Boolean).join("\n").slice(0, 2000);
+    const updated = await updateJob(job.id, patch);
+    try { await pushTo([job.customer_id], { title: `DRIFT refunded $${amt}`, body: "It'll show on your card in 5–10 business days.", tag: `refund-${job.id}`, url: "/" }); } catch { /* ignore */ }
+    return { job: updated, warning };
   },
 
   // ---------- 2. cancel / expire: release the hold ----------
@@ -663,7 +757,9 @@ async function chargeForJob(job) {
       }
     } catch (second) {
       console.error("[pay:complete] re-charge failed", second.message);
+      await logServerError("charge (re-try)", second, { jobId: job.id });
     }
+    await logServerError("charge", first, { jobId: job.id });
     return { payment_status: "failed" };
   }
 }
@@ -683,6 +779,7 @@ async function settleDriver(job, driverId) {
     return await updateJob(job.id, { payout_status: "paid", transfer_id: t.id });
   } catch (e) {
     console.error("[pay:complete] transfer failed", e.message);
+    await logServerError("driver payout", e, { jobId: job.id, userId: driverId });
     return await updateJob(job.id, { payout_status: "owed" });
   }
 }

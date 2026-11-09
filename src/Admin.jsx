@@ -4,7 +4,7 @@
 import React, { Suspense, lazy, useEffect, useState } from "react";
 import { C, FD, FB, FM } from "./theme.js";
 import Icon from "./Icon.jsx";
-import { authedFetch, releasePayout, resolveDispute } from "./lib/payments.js";
+import { authedFetch, releasePayout, resolveDispute, refundJob } from "./lib/payments.js";
 const LiveMap = lazy(() => import("./PropertyMap.jsx").then((m) => ({ default: m.LiveMap })));
 
 async function api(action, body) {
@@ -198,6 +198,175 @@ function Watch() {
   );
 }
 
+// ---------- who was active each day (visitors, signed-in customers, drivers) ----------
+function Activity() {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => { api("activity", { days: 14 }).then(setD).catch((e) => setErr(e.message)); }, []);
+  if (err) return <p style={{ color: C.danger, font: `500 14px ${FB}` }}>{err}</p>;
+  if (!d) return <p style={{ color: C.mist }}>Loading activity…</p>;
+  const t = d.days[d.days.length - 1], y = d.days[d.days.length - 2] || {};
+  const vs = (k) => `${y[k] ?? 0} yesterday`;
+  const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(170px,1fr))", gap: 12 };
+  return (
+    <section>
+      <h2 style={{ font: `700 20px ${FD}`, margin: "0 0 12px", color: C.ice }}>Today</h2>
+      <div style={grid}>
+        <Tile label="Visitors" value={t.visitors} sub={vs("visitors")} />
+        <Tile label="Customers active" value={t.customers} sub={vs("customers")} tone="amber" />
+        <Tile label="Drivers active" value={t.drivers} sub={`${t.online} went online · ${y.drivers ?? 0} yesterday`} tone="info" />
+        <Tile label="Bookings" value={t.bookings} sub={vs("bookings")} tone="good" />
+        <Tile label="Sign-ups" value={t.signups} sub={vs("signups")} />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 12, marginTop: 12 }}>
+        <DayBars title="Visitors per day" days={d.days} field="visitors" />
+        <DayBars title="Signed-in people active per day" days={d.days} field="active" color={C.plow} />
+        <DayBars title="Drivers online per day" days={d.days} field="online" color={C.push} />
+      </div>
+      <p style={{ font: `400 12.5px/1.5 ${FB}`, color: C.mistDim, margin: "10px 0 0" }}>
+        Visitors = phones that opened the site or app (each counted once a day). Active = signed-in customers or drivers who opened the app. Counting started when this update went live.</p>
+    </section>
+  );
+}
+
+// ---------- booking funnel: where people drop off, and which links bring bookings ----------
+function Funnel() {
+  const [n, setN] = useState(14);
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => { setD(null); api("activity", { days: n }).then(setD).catch((e) => setErr(e.message)); }, [n]);
+  const STEPS = [["visited", "Visited"], ["started", "Started mapping a driveway"], ["mapped", "Finished mapping"], ["signedUp", "Made an account"], ["booked", "Booked a plow"], ["completed", "Got plowed"]];
+  const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : "—");
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <h2 style={{ font: `700 20px ${FD}`, margin: 0, color: C.ice }}>Booking funnel</h2>
+        <div style={{ display: "flex", gap: 6 }}>
+          {[[7, "7 days"], [14, "14 days"], [30, "30 days"], [60, "60 days"]].map(([k, l]) => (
+            <button key={k} onClick={() => setN(k)} style={{ ...btn(), background: n === k ? C.amber : C.night2, color: n === k ? C.onAmber : C.ice }}>{l}</button>
+          ))}
+        </div>
+      </div>
+      {err ? <p style={{ color: C.danger }}>{err}</p> : !d ? <p style={{ color: C.mist }}>Loading…</p> : <>
+        <div style={card()}>
+          {STEPS.map(([k, label], i) => {
+            const v = d.funnel[k] || 0, top = Math.max(1, d.funnel.visited || 0, ...STEPS.map(([s]) => d.funnel[s] || 0));
+            const prev = i ? d.funnel[STEPS[i - 1][0]] || 0 : null;
+            return (
+              <div key={k} style={{ padding: "10px 0", borderTop: i ? `1px solid ${C.lineSoft}` : "none" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline" }}>
+                  <div style={{ font: `500 14px ${FB}`, color: C.ice }}>{label}</div>
+                  <div style={{ font: `700 18px ${FD}`, color: C.ice }}>{v}
+                    {prev != null && <span style={{ font: `500 12px ${FB}`, color: C.mistDim, marginLeft: 8 }}>{pct(v, prev)} of previous step</span>}</div>
+                </div>
+                <div style={{ height: 8, borderRadius: 6, background: C.night2, marginTop: 7, overflow: "hidden" }}>
+                  <div style={{ width: `${(v / top) * 100}%`, height: "100%", background: i >= 4 ? C.push : C.amber, borderRadius: 6 }} />
+                </div>
+              </div>
+            );
+          })}
+          <p style={{ font: `400 12.5px/1.5 ${FB}`, color: C.mistDim, margin: "8px 0 0" }}>
+            The first three steps count phones; the last three count customer accounts. Started counting when this update went live, so early numbers are low.</p>
+        </div>
+        <Table rows={d.sources} cols={[
+          ["Link", (r) => <b>{r.source}</b>], ["Visited", (r) => r.visited], ["Started mapping", (r) => r.started], ["Mapped", (r) => r.mapped],
+          ["Accounts", (r) => r.signedUp], ["Booked", (r) => r.booked], ["Got plowed", (r) => r.completed],
+          ["Visit → booked", (r) => pct(r.booked, r.visited)],
+        ]} />
+      </>}
+    </div>
+  );
+}
+
+// ---------- errors: crashes in the app + failed charges and payouts ----------
+function Errors() {
+  const [n, setN] = useState(7);
+  const [d, setD] = useState(null);
+  const [open, setOpen] = useState(null);
+  useEffect(() => { setD(null); api("errors", { days: n }).then(setD).catch((e) => setD({ error: e.message })); }, [n]);
+  return (
+    <div style={{ display: "grid", gap: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <h2 style={{ font: `700 20px ${FD}`, margin: 0, color: C.ice }}>Errors{d?.total != null ? ` (${d.total})` : ""}</h2>
+        <div style={{ display: "flex", gap: 6 }}>
+          {[[1, "Today"], [7, "7 days"], [30, "30 days"]].map(([k, l]) => (
+            <button key={k} onClick={() => setN(k)} style={{ ...btn(), background: n === k ? C.amber : C.night2, color: n === k ? C.onAmber : C.ice }}>{l}</button>
+          ))}
+        </div>
+      </div>
+      <p style={{ font: `400 13px/1.5 ${FB}`, color: C.mist, margin: 0 }}>
+        <b style={{ color: C.ice }}>Server</b> errors are failed charges, payouts and crashes on DRIFT's side, so look at those first. <b style={{ color: C.ice }}>App</b> errors happened on someone's phone. Send me anything that keeps showing up.</p>
+      {!d ? <p style={{ color: C.mist }}>Loading…</p> : d.error ? <p style={{ color: C.danger }}>{d.error}</p> : d.groups.length === 0 ? (
+        <div style={card()}><div style={{ font: `600 15px ${FB}`, color: C.push }}>No errors in this period.</div></div>
+      ) : d.groups.map((g, i) => (
+        <div key={i} style={{ ...card(), padding: 14 }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 220 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }}>
+                <Chip tone={g.kind === "server" ? "bad" : "warn"}>{g.kind === "server" ? "Server" : "App"}</Chip>
+                <span style={{ font: `500 12.5px ${FB}`, color: C.mistDim }}>{g.count}× · {g.users} {g.users === 1 ? "person" : "people"} · last {date(g.lastAt)}</span>
+              </div>
+              <div style={{ font: `500 14px/1.4 ${FM}`, color: C.ice, wordBreak: "break-word" }}>{g.message}</div>
+            </div>
+            <button onClick={() => setOpen(open === i ? null : i)} style={btn()}>{open === i ? "Hide" : "Details"}</button>
+          </div>
+          {open === i && (
+            <pre style={{ marginTop: 10, padding: 12, background: C.night2, borderRadius: 10, font: `400 12px/1.5 ${FM}`, color: C.mist,
+              whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: 320, overflow: "auto" }}>
+              {[g.sample.url && `Page: ${g.sample.url}`, g.sample.role && `Who: ${g.sample.role}`, g.sample.ua && `Phone: ${g.sample.ua}`, g.sample.detail].filter(Boolean).join("\n\n")}</pre>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------- refund a charged job ----------
+function RefundSheet({ job, onClose, onDone }) {
+  const left = Math.round((Number(job.price) - Number(job.refunded_amount || 0)) * 100) / 100;
+  const [amount, setAmount] = useState(String(left));
+  const [fromDriver, setFromDriver] = useState(false);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const amt = Math.round(Number(amount) * 100) / 100;
+  const go = async () => {
+    setBusy(true); setErr(null);
+    try { const r = await refundJob(job.id, amt, fromDriver, note); onDone(r.job, r.warning); }
+    catch (e) { setErr(e.message); setBusy(false); }
+  };
+  const input = { ...search(), maxWidth: "none", marginBottom: 0, boxSizing: "border-box" };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: C.scrim, zIndex: 50, display: "grid", placeItems: "center", padding: 20 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ ...card(), maxWidth: 440, width: "100%" }}>
+        <h3 style={{ font: `700 20px ${FD}`, margin: "0 0 4px", color: C.ice }}>Refund this job</h3>
+        <p style={{ font: `400 13.5px/1.5 ${FB}`, color: C.mist, margin: "0 0 14px" }}>
+          {job.customer || "Customer"} · {job.address || "—"} · paid {money(job.price)}{Number(job.refunded_amount) ? `, ${money(job.refunded_amount)} already refunded` : ""}. Tips aren't included.</p>
+        <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+          {[["Full", left], ["Half", Math.round(left * 50) / 100], ["$10", Math.min(10, left)]].map(([l, v]) => (
+            <button key={l} onClick={() => setAmount(String(v))} style={{ ...btn(), background: amt === v ? C.amber : C.night2, color: amt === v ? C.onAmber : C.ice }}>{l}</button>
+          ))}
+        </div>
+        <label style={{ font: `500 13px ${FB}`, color: C.mist }}>Amount ($)
+          <input value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))} inputMode="decimal" style={{ ...input, marginTop: 4 }} /></label>
+        <label style={{ display: "flex", gap: 10, alignItems: "flex-start", margin: "14px 0", cursor: "pointer" }}>
+          <input type="checkbox" checked={fromDriver} onChange={(e) => setFromDriver(e.target.checked)} style={{ marginTop: 3 }} />
+          <span style={{ font: `400 14px/1.45 ${FB}`, color: C.ice }}>Take it out of the driver's pay
+            <span style={{ display: "block", font: `400 12.5px ${FB}`, color: C.mistDim }}>For their mistakes (missed area, damage). Leave unchecked to cover it from DRIFT's cut.</span></span>
+        </label>
+        <label style={{ font: `500 13px ${FB}`, color: C.mist }}>Reason (just for your records)
+          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. walkway was missed" style={{ ...input, marginTop: 4 }} /></label>
+        {err && <p style={{ color: C.danger, font: `500 13.5px ${FB}`, margin: "10px 0 0" }}>{err}</p>}
+        <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+          <button onClick={onClose} style={btn()}>Cancel</button>
+          <button onClick={go} disabled={busy || !(amt >= 1) || amt > left} style={{ ...btn("amber"), opacity: busy || !(amt >= 1) || amt > left ? .5 : 1 }}>
+            {busy ? "Refunding…" : `Refund ${amt >= 1 ? money(amt) : ""}`}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Overview() {
   const [d, setD] = useState(null);
   const [range, setRange] = useState("last30");
@@ -209,6 +378,7 @@ function Overview() {
   const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(190px,1fr))", gap: 12 };
   return (
     <div style={{ display: "grid", gap: 22 }}>
+      <Activity />
       <Issues />
       <Watch />
       <section>
@@ -221,7 +391,7 @@ function Overview() {
           </div>
         </div>
         <div style={grid}>
-          <Tile label="Customers paid" value={money(m.gross)} sub={`${m.jobs} charged job${m.jobs === 1 ? "" : "s"} · + ${money(m.tips)} tips`} />
+          <Tile label="Customers paid" value={money(m.gross)} sub={`${m.jobs} charged job${m.jobs === 1 ? "" : "s"} · + ${money(m.tips)} tips${m.refunds ? ` · ${money(m.refunds)} refunded` : ""}`} />
           <Tile label="Paid to drivers" value={money(m.driverPay)} sub="80% of offers + call-out fees (tips go to drivers too)" tone="info" />
           <Tile label="DRIFT revenue" value={money(m.driftRevenue)} sub="$5 fee + 20% of each offer" tone="amber" />
           <Tile label="Stripe fees (est.)" value={money(m.stripeFeesEst)} sub="2.9% + 30¢ per charge — exact in Stripe" />
@@ -603,6 +773,8 @@ function Customers() {
 function Jobs() {
   const [rows, setRows] = useState(null);
   const [photos, setPhotos] = useState(null);
+  const [refund, setRefund] = useState(null);
+  const [notice, setNotice] = useState(null);
   useEffect(() => { api("jobs").then((d) => setRows(d.jobs)).catch((e) => setRows({ error: e.message })); }, []);
   const showPhotos = async (j) => { setPhotos({ loading: true }); try { setPhotos(await api("job-photos", { id: j.id })); } catch (e) { setPhotos({ error: e.message }); } };
   if (!rows) return <p style={{ color: C.mist }}>Loading…</p>;
@@ -615,10 +787,17 @@ function Jobs() {
         ["Address", (j) => j.address || "—"],
         ["Status", (j) => <Chip tone={statusTone(j.status)}>{j.status}</Chip>],
         ["Payment", (j) => <Chip tone={statusTone(j.payment_status)}>{j.payment_status}</Chip>],
-        ["Total", (j) => money(j.price)], ["Driver", (j) => money(j.driver_pay)], ["DRIFT", (j) => money(j.platform_fee)],
+        ["Total", (j) => money(j.price)], ["Driver pay", (j) => money(j.driver_pay)], ["DRIFT", (j) => money(j.platform_fee)],
         ["Tip", (j) => money(j.tip)],
+        ["Refunded", (j) => Number(j.refunded_amount) ? <span title={j.refund_note || ""}>{money(j.refunded_amount)}</span> : "—"],
+        ["Refund", (j) => ["captured", "refunded"].includes(j.payment_status) && Number(j.price) - Number(j.refunded_amount || 0) >= 1
+          ? <button onClick={() => setRefund(j)} style={btn()}>Refund</button> : "—"],
         ["Photos", (j) => j.photoCount ? <button onClick={() => showPhotos(j)} style={btn()}>{j.photoCount} photo{j.photoCount === 1 ? "" : "s"}</button> : "—"],
       ]} />
+      {notice && <div style={{ ...card(), marginTop: 12, borderColor: C.amber, font: `500 14px ${FB}`, color: C.ice }}>{notice}</div>}
+      {refund && <RefundSheet job={refund} onClose={() => setRefund(null)} onDone={(job, warning) => {
+        setRows((rs) => rs.map((r) => (r.id === job.id ? { ...r, ...job } : r))); setRefund(null);
+        setNotice(warning || `Refunded. ${job.refund_note?.split("\n").pop() || ""}`); }} />}
       {photos && (
         <div onClick={() => setPhotos(null)} style={{ position: "fixed", inset: 0, background: C.scrim, zIndex: 50, display: "grid", placeItems: "center", padding: 20 }}>
           <div onClick={(e) => e.stopPropagation()} style={{ ...card(), maxWidth: 900, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
@@ -648,7 +827,7 @@ export default function AdminApp({ email, onSignOut }) {
   const [tab, setTab] = useState("overview");
   const [allowed, setAllowed] = useState(null); // null checking · true · false
   useEffect(() => { api("summary").then(() => setAllowed(true)).catch((e) => setAllowed(e.status === 403 ? false : true)); }, []);
-  const tabs = [["overview", "Overview"], ["live", "Live map"], ["drivers", "Drivers"], ["customers", "Customers"], ["jobs", "Jobs"], ["sources", "Sources"]];
+  const tabs = [["overview", "Overview"], ["live", "Live map"], ["funnel", "Funnel"], ["drivers", "Drivers"], ["customers", "Customers"], ["jobs", "Jobs"], ["sources", "Sources"], ["errors", "Errors"]];
   return (
     <div style={{ minHeight: "100vh", background: C.night, color: C.ice, fontFamily: FB }}>
       <header style={{ position: "sticky", top: 0, zIndex: 20, background: C.glass, backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderBottom: `1px solid ${C.line}` }}>
@@ -685,6 +864,8 @@ export default function AdminApp({ email, onSignOut }) {
         {allowed && tab === "customers" && <Customers />}
         {allowed && tab === "jobs" && <Jobs />}
         {allowed && tab === "sources" && <Sources />}
+        {allowed && tab === "funnel" && <Funnel />}
+        {allowed && tab === "errors" && <Errors />}
       </main>
     </div>
   );

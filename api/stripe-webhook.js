@@ -8,7 +8,7 @@
 //   Events: payment_intent.amount_capturable_updated, payment_intent.canceled,
 //           payment_intent.payment_failed, charge.refunded, charge.dispute.created
 // Then copy its signing secret (whsec_...) into Vercel as STRIPE_WEBHOOK_SECRET.
-import { stripe, admin, markAuthorized, send } from "./_lib.js";
+import { stripe, admin, markAuthorized, send, logServerError } from "./_lib.js";
 
 export const config = { api: { bodyParser: false } }; // signature check needs the raw body
 
@@ -76,6 +76,7 @@ export default async function handler(req, res) {
     }
   } catch (e) {
     console.error("[webhook]", event.type, e);
+    await logServerError(`stripe webhook: ${event.type}`, e);
     return send(res, 500, { error: "Handler failed" }); // Stripe will retry
   }
   return send(res, 200, { received: true });

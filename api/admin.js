@@ -37,6 +37,20 @@ async function all(table, select, build) {
   return data || [];
 }
 
+// Same as all(), but pages past the API's 1,000-row limit.
+async function allPages(table, select, build) {
+  const out = [];
+  for (let from = 0; from < 50000; from += 1000) {
+    let q = admin.from(table).select(select);
+    if (build) q = build(q);
+    const { data, error } = await q.range(from, from + 999);
+    if (error) throw new HttpError(500, error.message);
+    out.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  return out;
+}
+
 async function signed(bucket, path) {
   if (!path) return null;
   const { data } = await admin.storage.from(bucket).createSignedUrl(path, 60 * 10);
@@ -48,24 +62,26 @@ const ACTIONS = {
   async summary() {
     const [profiles, jobs, openIssues] = await Promise.all([
       all("profiles", "id, role, is_driver, is_online, suspended, payouts_ready, created_at"),
-      all("jobs", "id, status, payment_status, payout_status, price, driver_pay, platform_fee, tip, created_at, completed_at"),
+      all("jobs", "id, status, payment_status, payout_status, price, driver_pay, platform_fee, tip, refunded_amount, driver_clawback, created_at, completed_at"),
       all("job_issues", "id", (q) => q.eq("status", "open")).catch(() => []),
     ]);
     const now = Date.now(), day = 864e5;
     const since = (j, days) => new Date(j.created_at).getTime() > now - days * day;
     const drivers = profiles.filter((p) => p.is_driver);
     const customers = profiles.filter((p) => !p.is_driver);
-    const paid = jobs.filter((j) => j.payment_status === "captured");
+    const paid = jobs.filter((j) => ["captured", "refunded"].includes(j.payment_status));
     const done = jobs.filter((j) => j.status === "completed");
 
     const money = (list) => {
-      const gross = list.reduce((s, j) => s + num(j.price), 0);
+      // Refunds come off what customers paid; anything taken back from a driver comes off driver pay.
+      const gross = list.reduce((s, j) => s + num(j.price) - num(j.refunded_amount), 0);
       const tips = list.reduce((s, j) => s + num(j.tip), 0);
-      const driverPay = list.reduce((s, j) => s + num(j.driver_pay), 0);
-      const drift = list.reduce((s, j) => s + num(j.platform_fee), 0);
+      const driverPay = list.reduce((s, j) => s + num(j.driver_pay) - num(j.driver_clawback), 0);
+      const drift = gross - driverPay;
+      const refunds = list.reduce((s, j) => s + num(j.refunded_amount), 0);
       const fees = list.reduce((s, j) => s + stripeFee(num(j.price)) + stripeFee(num(j.tip)), 0);
       return { gross: round2(gross), tips: round2(tips), driverPay: round2(driverPay), driftRevenue: round2(drift),
-        stripeFeesEst: round2(fees), profitEst: round2(drift - fees), jobs: list.length };
+        stripeFeesEst: round2(fees), profitEst: round2(drift - fees), refunds: round2(refunds), jobs: list.length };
     };
 
     let stripeBalance = null;
@@ -113,7 +129,7 @@ const ACTIONS = {
     const iso = new Date(start).toISOString();
     const [profiles, jobs] = await Promise.all([
       all("profiles", "is_driver, created_at", (q) => q.gte("created_at", iso)),
-      all("jobs", "status, payment_status, price, tip, platform_fee, created_at, completed_at", (q) => q.gte("created_at", iso)),
+      all("jobs", "status, payment_status, price, tip, platform_fee, driver_pay, refunded_amount, driver_clawback, created_at, completed_at", (q) => q.gte("created_at", iso)),
     ]);
     const key = (t) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(t));
     const rows = {};
@@ -123,7 +139,9 @@ const ACTIONS = {
       const r = rows[key(j.created_at)]; if (r) r.jobs += 1;
       if (j.status === "completed" && j.completed_at) {
         const c = rows[key(j.completed_at)];
-        if (c) { c.completed += 1; if (j.payment_status === "captured") { c.gross = round2(c.gross + num(j.price) + num(j.tip)); c.drift = round2(c.drift + num(j.platform_fee)); } }
+        if (c) { c.completed += 1; if (["captured", "refunded"].includes(j.payment_status)) {
+          const paid = num(j.price) - num(j.refunded_amount);
+          c.gross = round2(c.gross + paid + num(j.tip)); c.drift = round2(c.drift + paid - (num(j.driver_pay) - num(j.driver_clawback))); } }
       }
     }
     return { days: Object.values(rows) };
@@ -289,12 +307,76 @@ const ACTIONS = {
   // ---------- jobs ----------
   async jobs() {
     const [jobs, people] = await Promise.all([
-      all("jobs", "id, status, job_type, address, offer, price, driver_pay, platform_fee, tip, payment_status, payout_status, customer_id, driver_id, created_at, completed_at, payment_intent_id, photos", (q) => q.order("created_at", { ascending: false }).limit(150)),
+      all("jobs", "id, status, job_type, address, offer, price, driver_pay, platform_fee, tip, payment_status, payout_status, customer_id, driver_id, created_at, completed_at, payment_intent_id, transfer_id, photos, refunded_amount, driver_clawback, refund_note", (q) => q.order("created_at", { ascending: false }).limit(150)),
       all("profiles", "id, name, email"),
     ]);
     const name = (id) => { const p = people.find((x) => x.id === id); return p ? (p.name || p.email) : null; };
     return { jobs: jobs.map((j) => ({ ...j, customer: name(j.customer_id), driver: name(j.driver_id),
       photoCount: (j.photos?.before?.length || 0) + (j.photos?.after?.length || 0) })) };
+  },
+
+  // ---------- errors: app crashes and failed charges/payouts, grouped ----------
+  async errors({ days } = {}) {
+    const n = Math.min(Math.max(Number(days) || 7, 1), 30);
+    const rows = await all("app_errors", "id, created_at, kind, user_id, role, message, detail, url, ua",
+      (q) => q.gte("created_at", new Date(Date.now() - n * 864e5).toISOString()).order("created_at", { ascending: false }).limit(1000));
+    const groups = {};
+    for (const r of rows) {
+      const k = `${r.kind}|${r.message}`;
+      const g = (groups[k] ||= { kind: r.kind, message: r.message, count: 0, users: new Set(), lastAt: r.created_at, firstAt: r.created_at, sample: r });
+      g.count += 1; if (r.user_id) g.users.add(r.user_id); g.firstAt = r.created_at;
+    }
+    return { days: n, total: rows.length,
+      groups: Object.values(groups).map((g) => ({ ...g, users: g.users.size,
+        sample: { detail: g.sample.detail, url: g.sample.url, ua: g.sample.ua, role: g.sample.role } }))
+        .sort((a, b) => new Date(b.lastAt) - new Date(a.lastAt)) };
+  },
+
+  // ---------- who was active each day + the booking funnel ----------
+  async activity({ days } = {}) {
+    const n = Math.min(Math.max(Number(days) || 14, 7), 60);
+    const key = (t) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(t));
+    const startDay = key(Date.now() - (n - 1) * 864e5);
+    const startIso = new Date(Date.now() - n * 864e5).toISOString();  // a little extra; rows are bucketed by Duluth day below
+    const [events, jobs, profiles] = await Promise.all([
+      allPages("app_events", "day, name, anon_id, user_id, role, source", (q) => q.gte("day", startDay)),
+      allPages("jobs", "customer_id, status, created_at, completed_at", (q) => q.gte("created_at", startIso)),
+      allPages("profiles", "id, is_driver, ref_source, created_at"),
+    ]);
+    const rows = {};
+    for (let i = n - 1; i >= 0; i--) { const k = key(Date.now() - i * 864e5); rows[k] = { day: k, visitors: new Set(), customers: new Set(), drivers: new Set(), online: new Set(), bookings: 0, signups: 0 }; }
+    const who = (e) => e.user_id || e.anon_id;
+    for (const e of events) {
+      const r = rows[e.day]; if (!r) continue;
+      if (e.name === "visit") r.visitors.add(e.anon_id);
+      if (e.name === "active") r[e.role === "driver" ? "drivers" : "customers"].add(who(e));
+      if (e.name === "online") r.online.add(who(e));
+    }
+    for (const j of jobs) { const r = rows[key(j.created_at)]; if (r) r.bookings += 1; }
+    for (const p of profiles) { const r = rows[key(p.created_at)]; if (r) r.signups += 1; }
+    const dayRows = Object.values(rows).map((r) => ({ day: r.day, visitors: r.visitors.size, customers: r.customers.size,
+      drivers: r.drivers.size, online: r.online.size, active: r.customers.size + r.drivers.size, bookings: r.bookings, signups: r.signups }));
+
+    // Funnel over the period: how many people reached each step, overall and by link source.
+    const refOf = Object.fromEntries(profiles.map((p) => [p.id, p.ref_source || null]));
+    const steps = () => ({ visited: new Set(), started: new Set(), mapped: new Set(), signedUp: new Set(), booked: new Set(), completed: new Set() });
+    const total = steps(), bySource = {};
+    const src = (s) => (bySource[s || "(no link)"] ||= steps());
+    const add = (step, id, source) => { total[step].add(id); src(source)[step].add(id); };
+    for (const e of events) {
+      if (e.name === "visit") add("visited", e.anon_id, e.source);
+      if (e.name === "map_start") add("started", e.anon_id, e.source);
+      if (e.name === "map_done") add("mapped", e.anon_id, e.source);
+    }
+    for (const p of profiles) if (!p.is_driver && key(p.created_at) >= startDay) add("signedUp", p.id, p.ref_source);
+    for (const j of jobs) {
+      if (key(j.created_at) < startDay) continue;
+      add("booked", j.customer_id, refOf[j.customer_id]);
+      if (j.status === "completed") add("completed", j.customer_id, refOf[j.customer_id]);
+    }
+    const size = (s) => Object.fromEntries(Object.entries(s).map(([k, v]) => [k, v.size]));
+    return { days: dayRows, funnel: size(total),
+      sources: Object.entries(bySource).map(([source, s]) => ({ source, ...size(s) })).sort((a, b) => b.visited - a.visited || b.booked - a.booked) };
   },
 
   // ---------- where sign-ups come from (?ref= links) ----------

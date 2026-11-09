@@ -32,6 +32,18 @@ export class HttpError extends Error {
 
 export const cents = (dollars) => Math.round(Number(dollars || 0) * 100);
 
+// Save a server-side failure (failed charge, payout, crash) to the owner dashboard's error list.
+// Never throws: logging must not break the request.
+export async function logServerError(where, e, { jobId = null, userId = null } = {}) {
+  try {
+    if (!admin) return;
+    await admin.from("app_errors").insert({
+      kind: "server", message: String(e?.message || e || "Unknown error").slice(0, 500), user_id: userId,
+      detail: [`where: ${where}`, jobId && `job: ${jobId}`, e?.stack].filter(Boolean).join("\n").slice(0, 4000),
+    });
+  } catch { /* ignore */ }
+}
+
 // Who is calling? Verifies the Supabase session token the app sends.
 export async function requireUser(req) {
   if (!admin) throw new HttpError(503, "Server isn't connected to the database yet");
@@ -142,7 +154,7 @@ export function inZone(driver, job) {
 }
 const ZONE_COLS = "id, home_lat, home_lng, home_radius_mi";
 // Drivers to alert about a job: active (and online, unless anyOnline=false), not the customer, zone covers it.
-async function driversFor(job, { online = true } = {}) {
+export async function driversFor(job, { online = true } = {}) {
   let q = admin.from("profiles").select(ZONE_COLS + ", jobs_count, rating, ratings_count, late_cancels")
     .eq("is_driver", true).eq("suspended", false);
   if (online) q = q.eq("is_online", true);

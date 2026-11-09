@@ -37,7 +37,10 @@ function Root() {
   useEffect(() => {
     if (inApp) return
     const idle = window.requestIdleCallback || ((f) => setTimeout(f, 2500))
-    const id = idle(() => { loadApp(); import('./lib/alerts.js').then((m) => m.registerServiceWorker()) }, { timeout: 5000 })
+    const id = idle(() => {
+      loadApp(); import('./lib/alerts.js').then((m) => m.registerServiceWorker())
+      import('./lib/track.js').then((m) => { m.installErrorHandlers(); m.track('visit') }).catch(() => {})
+    }, { timeout: 5000 })
     return () => { try { (window.cancelIdleCallback || clearTimeout)(id) } catch { /* ignore */ } }
   }, [inApp])
   if (inApp) return <Suspense fallback={<Blank />}><AppRoot startEntered={!startInApp} /></Suspense>
