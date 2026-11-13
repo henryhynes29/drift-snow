@@ -6465,9 +6465,30 @@ function PayoutSetupSheet({ onClose, askType }) {
 }
 
 function PayoutOnboarding({ choice, onClose }) {
+  const [attempt, setAttempt] = useState(0);
+  const [err, setErr] = useState("");
+  if (err) return (
+    <div style={{ padding: "8px 0 4px" }}>
+      <div style={{ font: `600 15px/1.4 ${FB}`, color: C.ice, marginBottom: 6 }}>Payout setup couldn't start</div>
+      <div style={{ font: `400 14px/1.5 ${FB}`, color: C.mist, marginBottom: 16 }}>{err}</div>
+      <Btn full onClick={() => { setErr(""); setAttempt((a) => a + 1); }}>Try again</Btn>
+    </div>
+  );
+  return <PayoutOnboardingFrame key={attempt} choice={choice} onClose={onClose} onError={setErr} />;
+}
+
+function PayoutOnboardingFrame({ choice, onClose, onError }) {
+  const fail = (e, where) => {
+    const msg = (e && (e.message || e.type)) || String(e || "Unknown error");
+    try { logError(e instanceof Error ? e : new Error(msg), `payout setup: ${where}`); } catch { /* ignore */ }
+    onError(msg);
+  };
   const [instance] = useState(() => loadConnectAndInitialize({
     publishableKey: STRIPE_PK,
-    fetchClientSecret: () => connectSession(choice),
+    fetchClientSecret: async () => {
+      try { return await connectSession(choice); }
+      catch (e) { fail(e, "server"); throw e; }
+    },
     appearance: {
       overlays: "dialog",
       variables: { colorPrimary: C.amber, colorBackground: C.night2, colorText: C.ice,
@@ -6478,7 +6499,7 @@ function PayoutOnboarding({ choice, onClose }) {
   return (
     <ConnectComponentsProvider connectInstance={instance}>
       <ConnectNotificationBanner />
-      <ConnectAccountOnboarding onExit={onClose} />
+      <ConnectAccountOnboarding onExit={onClose} onLoadError={({ error }) => fail(error, "stripe")} />
     </ConnectComponentsProvider>
   );
 }
