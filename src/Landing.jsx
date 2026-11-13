@@ -23,7 +23,7 @@ const CITY_PAGES = [["Duluth", "snow-plowing-duluth-mn"], ["Superior", "snow-rem
 const GUIDE_PAGES = [
   ["What plowing costs in Duluth", "snow-plowing-cost-duluth", "Per-storm prices by driveway size, and why hills and deep snow cost more."],
   ["Duluth's 24-hour sidewalk rule", "guides/duluth-sidewalk-snow-rules", "How much you have to clear, by when, and what happens if you don't."],
-  ["Winter parking & snow emergencies", "guides/duluth-winter-parking", "Alternate-side changeover, free lots, and how to stay out of the impound lot."]];
+  ["Winter parking & snow emergencies", "guides/duluth-winter-parking", "This week's side of the street, the 2026–27 odd/even calendar, and what to do in a snow emergency."]];
 const EX = estimateTotal(650); // the 2-car example used on this page
 const DRV = Math.round(EX.offer * 0.8) + 10; // driver: 80% of the offer + the $10 call-out
 
@@ -761,7 +761,7 @@ export default function Landing({ onStart, onLegal }) {
           .lp-nav-links{display:none!important}
         }
         @media(max-width:640px){
-          .lp-section{padding:76px 20px!important}
+          .lp-section{padding:58px 20px!important}
           .lp-steps{grid-template-columns:1fr!important}
           .lp-svcs{grid-template-columns:1fr 1fr!important}
           .lp-svc-hero{grid-column:1 / -1!important}

@@ -132,6 +132,7 @@
     .live b{font-size:34px}
     .fleet{padding:22px}
   }
+[hidden]{display:none!important}
 </style>
 </head>
 <body>
@@ -320,7 +321,9 @@
   // Live numbers from the app (hidden if they can't load)
   fetch("/api/pay?action=market").then(function (r) { return r.ok ? r.json() : null; }).then(function (m) {
     if (!m || m.openNow == null) return;
-    $("m-open").textContent = (m.openNow || 0) + (m.openScheduled || 0);
+    var open = (m.openNow || 0) + (m.openScheduled || 0);
+    if (!open) return;   // between storms: don't show "0 jobs / $0"
+    $("m-open").textContent = open;
     $("m-pay").textContent = "$" + (m.openPay || 0).toLocaleString("en-US");
     $("live").hidden = false; $("livecap").hidden = false;
   }).catch(function () {});

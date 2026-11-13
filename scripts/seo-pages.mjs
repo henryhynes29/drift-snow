@@ -67,7 +67,8 @@ h3{font-size:18px;margin:0 0 6px}
 .prices{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .price{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:18px}
 .price .k{font-weight:600;font-size:15px}.price .h{font-size:13px;color:var(--mist);margin-top:2px}
-.price .v{font-family:var(--fd);font-weight:900;font-size:38px;line-height:1;margin-top:14px;color:var(--ice)}
+.price .v{font-family:var(--fd);font-weight:900;font-size:38px;line-height:1;margin-top:14px;color:var(--ice);white-space:nowrap}
+.prose table{width:100%;border-collapse:collapse;margin:10px 0 16px;font-size:15px}.prose th,.prose td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);color:#C9D3DE}.prose th{color:var(--ice);font-weight:600;font-size:13px;text-transform:uppercase;letter-spacing:.04em}
 .price.hot{border-color:rgba(255,176,32,.5);background:linear-gradient(160deg,rgba(255,176,32,.12),var(--panel) 60%)}.price.hot .v{color:var(--amber)}
 .fine{font-size:13.5px;color:var(--dim);margin-top:14px;max-width:760px}
 .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
@@ -111,7 +112,7 @@ footer a{display:block;color:var(--mist);text-decoration:none;margin:6px 0}foote
 .callout{border-left:3px solid var(--amber);background:var(--panel);border-radius:0 14px 14px 0;padding:14px 18px;margin:18px 0}.callout p{margin:0!important}
 .toc{margin:0;padding:0;list-style:none;color:var(--mist)}.toc li{margin:7px 0;font-size:14.5px}.toc a{color:var(--ice);text-decoration:none}.toc a:hover{color:var(--amber)}
 @media (max-width:860px){.prices,.svcs{grid-template-columns:1fr 1fr}.steps{grid-template-columns:1fr 1fr}.local{grid-template-columns:1fr}.side{position:static}.fgrid{grid-template-columns:1fr 1fr}}
-@media (max-width:560px){.navlinks{display:none}.btn{width:100%}.ctas .btn{width:100%}.steps{grid-template-columns:1fr}h1{font-size:clamp(44px,13vw,64px)}}
+@media (max-width:560px){.navlinks{display:none}.btn{width:100%}.ctas .btn{width:100%}.steps{grid-template-columns:1fr}h1{font-size:clamp(44px,13vw,64px)}.price{padding:15px}.price .v{font-size:clamp(25px,7.6vw,34px);white-space:nowrap}}
 `;
 
 const isDriver = (p) => p.audience === "driver";

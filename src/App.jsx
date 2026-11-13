@@ -1989,7 +1989,7 @@ function RiderHome({ go }) {
 
       {/* One notice at a time, most important first: hazards → get the app → snow forecast. */}
       {rebookCard}
-      {!hazardNotice && <AppSetupCard role="rider" onShown={setSetupShown} />}
+      {!hazardNotice && (isLive(state) || !supabaseEnabled) && <AppSetupCard role="rider" onShown={setSetupShown} />}
       {!hazardNotice && !setupShown && (supabaseEnabled ? <LiveSnowBanner /> : <StormBanner />)}
       {hazardNotice && (
         <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "12px 12px 12px 14px", borderRadius: 14, marginBottom: 12,
@@ -2876,7 +2876,7 @@ function RiderTracking() {
       : "Sent to plows near you — usually under 2 minutes")
     : shownArrived ? `${first} is clearing ${o.property?.label?.toLowerCase() === "home" ? "your driveway" : (o.property?.label || "your property")}`
     : ahead > 0 ? `${first} is finishing ${ahead} job${ahead > 1 ? "s" : ""} first, then heading to you`
-    : liveEta ? `${first} is ${miText(liveEta.mi)} away` : `${first} is on the way`;
+    : liveEta ? `${first} is ${miText(liveEta.mi)} away` : `${first} accepted and is heading to you`;
 
   return (
     <section style={{ paddingTop: 10, paddingBottom: 28 }}>
@@ -2885,7 +2885,7 @@ function RiderTracking() {
         <div style={{ display: "flex", alignItems: "center", gap: 7, font: `500 12px ${FM}`, letterSpacing: ".1em", textTransform: "uppercase",
           color: finding ? C.amber : shownArrived ? C.push : C.plow }}>
           <span style={{ width: 7, height: 7, borderRadius: "50%", background: "currentColor", animation: "pulse 1.6s ease-in-out infinite" }} />
-          {finding ? "Finding a driver" : shownArrived ? "On site" : "On the way"}</div>
+          {finding ? "Finding a driver" : shownArrived ? "On site" : big === "On the way" ? "Driver assigned" : "On the way"}</div>
         <div style={{ font: `800 ${finding || shownArrived || !/min$/.test(big) ? 42 : 64}px/.92 ${FD}`, textTransform: "uppercase", letterSpacing: ".005em", color: C.ice, marginTop: 8 }}>{big}</div>
         <div style={{ font: `400 15.5px/1.4 ${FB}`, color: C.mist, marginTop: 8 }}>{line}</div>
       </div>
@@ -4440,7 +4440,8 @@ function DriverOnboarding() {
           <p style={{ ...sub, maxWidth: 300, margin: "0 auto 16px", textAlign: "center", fontSize: 15 }}>
             Turn on when the snow flies. Take the jobs you want. You're your own boss.
           </p>
-          <div style={{ font: `500 12px ${FM}`, letterSpacing: ".08em", textTransform: "uppercase", color: C.mist, textAlign: "center", marginBottom: 8 }}>Right now in Duluth</div>
+          {market && (market.openNow || 0) + (market.openScheduled || 0) > 0 &&
+            <div style={{ font: `500 12px ${FM}`, letterSpacing: ".08em", textTransform: "uppercase", color: C.mist, textAlign: "center", marginBottom: 8 }}>Right now in Duluth</div>}
           <DemandStrip m={market} style={{ marginBottom: 12 }} />
           <div style={{ display: "grid", gap: 10, marginBottom: S.xl }}>
             {[["cash", "80% of every offer + $10 per job", "The call-out fee and all tips are yours"],
@@ -4588,7 +4589,10 @@ const kindLabel = (k) => (JOB_TYPES[k] || JOB_TYPES.driveway).label;
 function DemandStrip({ m, style }) {
   if (!m) return <Skeleton h={74} r={16} />;
   const open = (m.openNow || 0) + (m.openScheduled || 0);
-  const cells = [[open, open === 1 ? "open job now" : "open jobs now"], [`$${(m.openPay || 0).toLocaleString()}`, "waiting to be earned"], ["80%", "+ $10 call-out per job"]];
+  // Between storms there's nothing open — show what's always true instead of "0 jobs / $0".
+  const cells = open > 0
+    ? [[open, open === 1 ? "open job now" : "open jobs now"], [`$${(m.openPay || 0).toLocaleString()}`, "waiting to be earned"], ["80%", "+ $10 call-out per job"]]
+    : [["6", "towns in the Twin Ports"], ["$0", "to sign up"], ["80%", "+ $10 call-out per job"]];
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", background: C.slate, border: `1px solid ${C.line}`, borderRadius: 16, ...style }}>
       {cells.map(([v, l], i) => (
