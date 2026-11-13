@@ -7251,6 +7251,7 @@ function Shell({ startEntered = false }) {
   // (not the marketing page), with a way in for someone new.
   if (supabaseEnabled && !auth.session && !bypass && !DRIVE_INTENT && !homeScreenGuest && isStandalone()) {
     const drv = SIGNIN_PARAM === "driver" || WAS_DRIVER();
+    driveIntentPending = drv;   // signing in here as a driver opens the driver side, whatever the account last used
     return <AuthScreen auth={auth} initialMode="code" initialRole={drv ? "driver" : "customer"}
       title={drv ? <>Driver <span style={{ color: C.amber }}>sign in</span></> : <>Welcome to <span style={{ color: C.amber }}>DRIFT</span></>}
       subtitle={drv ? "Enter your email and we'll send you a 6-digit code. No password needed." : "Customers and drivers: enter your email and we'll send you a code to open your account."}
@@ -7269,6 +7270,7 @@ function Shell({ startEntered = false }) {
   if (guestMode && (DRIVE_INTENT || wantAuth || signinIntent || state.role === "driver")) {
     const signingIn = wantAuth || signinIntent;
     const drv = DRIVE_INTENT || state.role === "driver" || (signinIntent && (SIGNIN_PARAM === "driver" || WAS_DRIVER()));
+    driveIntentPending = drv;   // driver sign-in → driver side; customer sign-in → the account's usual side
     return <>{SkipButton}<AuthScreen key={signingIn ? "in" : "up"} auth={auth} onDemo={DEMO_OK ? () => setBypass(true) : undefined}
       initialRole={drv ? "driver" : "customer"} initialMode={signingIn ? "signin" : "signup"}
       title={signingIn && drv ? <>Driver <span style={{ color: C.amber }}>sign in</span></> : undefined}
