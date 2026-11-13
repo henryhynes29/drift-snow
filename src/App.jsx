@@ -337,6 +337,12 @@ const ADMIN_ROUTE = typeof window !== "undefined" && ["admin", "ops"].some((k) =
 // Came from the "Drive with DRIFT" page (/?drive=1): open straight into driver sign-up.
 const DRIVE_INTENT = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("drive") === "1";
 let driveIntentPending = DRIVE_INTENT; // applied once, on the first account load
+// Straight to sign-in: /?signin=1 (anyone) or /?signin=driver (driver wording). Phones that
+// have been signed in as a driver before also open to driver sign-in once signed out, so a
+// driver who gets logged out never has to hunt for the way back in.
+const WAS_DRIVER = () => { try { return localStorage.getItem("drift.wasDriver") === "1"; } catch { return false; } };
+const SIGNIN_PARAM = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("signin") : null;
+const SIGNIN_INTENT = typeof window !== "undefined" && !DRIVE_INTENT && (!!SIGNIN_PARAM || WAS_DRIVER());
 // The demo (fake driver "Marcus", fake card, Skip buttons) only exists when there's
 // no real backend, or when someone opens the site with ?demo=1 on purpose.
 const DEMO_OK = typeof window !== "undefined" && (!supabaseEnabled || (new URLSearchParams(window.location.search).get("demo") === "1"
@@ -6812,7 +6818,7 @@ function DriverReferral({ onBack }) {
 // ============================================================
 // AUTH SCREEN — real sign up / log in (Supabase)
 // ============================================================
-function AuthScreen({ auth, onDemo, initialRole, signInOnly, title, subtitle, onBack, initialMode, onGuest }) {
+function AuthScreen({ auth, onDemo, initialRole, signInOnly, title, subtitle, onBack, initialMode, onGuest, onDriveSignup }) {
   const [mode, setMode] = useState(signInOnly ? "signin" : initialMode || "signup"); // signup | signin | forgot | code
   const [codeSent, setCodeSent] = useState(false);
   const [code, setCode] = useState("");
@@ -6886,10 +6892,10 @@ function AuthScreen({ auth, onDemo, initialRole, signInOnly, title, subtitle, on
           </div>
           <h1 style={{ ...H(36), margin: "28px 0 8px", color: C.ice }}>
             {mode === "forgot" ? <>Reset your <span style={{ color: C.amber }}>password</span></>
-              : title ? title : mode === "signup" ? (role === "driver" ? <>Plow for <span style={{ color: C.amber }}>DRIFT</span></> : <>Create your <span style={{ color: C.amber }}>account</span></>)
+              : title && mode !== "signup" ? title : mode === "signup" ? (role === "driver" ? <>Plow for <span style={{ color: C.amber }}>DRIFT</span></> : <>Create your <span style={{ color: C.amber }}>account</span></>)
               : <>Welcome <span style={{ color: C.amber }}>back</span></>}</h1>
           <div style={{ font: `400 16px/1.5 ${FB}`, color: C.mist }}>
-            {subtitle && mode !== "forgot" ? subtitle : mode === "forgot" ? "Enter your email and we'll send you a link to set a new one."
+            {subtitle && mode !== "forgot" && mode !== "signup" ? subtitle : mode === "forgot" ? "Enter your email and we'll send you a link to set a new one."
               : mode === "code" ? "We'll email you a 6-digit code. No password needed."
               : mode === "signup" ? (role === "driver" ? "Create your account, then see open jobs and what they pay before any paperwork." : "It takes about a minute.") : "Sign in to your DRIFT account."}</div>
         </div>
@@ -6944,6 +6950,10 @@ function AuthScreen({ auth, onDemo, initialRole, signInOnly, title, subtitle, on
         {onGuest && (
           <button onClick={onGuest} style={{ width: "100%", marginTop: 10, background: "transparent", border: "none", cursor: "pointer",
             color: C.amber, font: `600 14px ${FB}`, padding: 8 }}>New to DRIFT? Map your driveway</button>
+        )}
+        {onDriveSignup && (
+          <button onClick={onDriveSignup} style={{ width: "100%", marginTop: 2, background: "transparent", border: "none", cursor: "pointer",
+            color: C.mist, font: `600 14px ${FB}`, padding: 8 }}>Have a plow? Sign up to drive</button>
         )}
 
         {mode === "code" ? null : mode === "forgot" ? <button onClick={() => { setErr(""); setInfo(""); setMode("signin"); }}
@@ -7017,7 +7027,8 @@ function Shell({ startEntered = false }) {
   const [bypass, setBypass] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [legalDoc, setLegalDoc] = useState(null); // landing-page footer → document reader
-  const [entered, setEntered] = useState(DRIVE_INTENT || startEntered); // false = show the marketing homepage first
+  const [signinIntent, setSigninIntent] = useState(SIGNIN_INTENT); // open on the sign-in screen
+  const [entered, setEntered] = useState(DRIVE_INTENT || SIGNIN_INTENT || startEntered); // false = show the marketing homepage first
   const [homeScreenGuest, setHomeScreenGuest] = useState(false);       // opened from the Home Screen icon, chose "new here"
   const [wantAuth, setWantAuth] = useState(false); // guest tapped "Sign in"
   const guestSeen = useRef(false);                 // keep the guest's screen up while their new account loads
@@ -7025,7 +7036,14 @@ function Shell({ startEntered = false }) {
   // Automated tests only (never set in Vercel): lets a test finish onboarding without a map.
   useEffect(() => { if (import.meta.env.VITE_E2E && typeof window !== "undefined") window.__driftDispatch = dispatch; }, []);
   // Tidy the address bar so a refresh doesn't re-trigger driver sign-up.
-  useEffect(() => { if (DRIVE_INTENT && typeof window !== "undefined") window.history.replaceState(null, "", window.location.pathname); }, []);
+  useEffect(() => { if ((DRIVE_INTENT || SIGNIN_PARAM) && typeof window !== "undefined") window.history.replaceState(null, "", window.location.pathname); }, []);
+  // A driver who signs out (or gets signed out) lands back on driver sign-in, not the customer map.
+  const hadUser = useRef(false);
+  useEffect(() => {
+    if (state.userId) { hadUser.current = true; return; }
+    if (hadUser.current && !auth.session && WAS_DRIVER()) { setSigninIntent(true); setEntered(true); }
+    hadUser.current = false;
+  }, [state.userId, auth.session]);
   // Re-render everything when the theme flips (Account → Appearance, or the phone's setting in Auto).
   const [, setThemeTick] = useState(0);
   useEffect(() => onThemeChange(() => { restyleStatics(); setThemeTick(t => t + 1); }), []);
@@ -7096,6 +7114,7 @@ function Shell({ startEntered = false }) {
         if ((gp.phone && !prof.phone) || (gp.name && !prof.name)) updateMyProfile(uid, { ...(gp.phone && !prof.phone ? { phone: gp.phone } : {}), ...(gp.name && !prof.name ? { name: gp.name } : {}) });
       }
       const me = profileToDriver(prof);
+      if (role === "driver") { try { localStorage.setItem("drift.wasDriver", "1"); } catch { /* private mode */ } }
       setTrackUser(uid, role); track("active");
       dispatch({ type: "HYDRATE_USER", userId: uid, role, isDriver: !!prof.is_driver,
         driver: me && { ...me, tools: prof.tools || [] },
@@ -7231,9 +7250,12 @@ function Shell({ startEntered = false }) {
   // Opened from the Home Screen icon and not signed in: straight to a quick email-code sign-in
   // (not the marketing page), with a way in for someone new.
   if (supabaseEnabled && !auth.session && !bypass && !DRIVE_INTENT && !homeScreenGuest && isStandalone()) {
-    return <AuthScreen auth={auth} initialMode="code" title={<>Welcome to <span style={{ color: C.amber }}>DRIFT</span></>}
-      subtitle="Enter your email and we'll send you a code to open your account."
-      onGuest={() => { setHomeScreenGuest(true); setEntered(true); }} />;
+    const drv = SIGNIN_PARAM === "driver" || WAS_DRIVER();
+    return <AuthScreen auth={auth} initialMode="code" initialRole={drv ? "driver" : "customer"}
+      title={drv ? <>Driver <span style={{ color: C.amber }}>sign in</span></> : <>Welcome to <span style={{ color: C.amber }}>DRIFT</span></>}
+      subtitle={drv ? "Enter your email and we'll send you a 6-digit code. No password needed." : "Customers and drivers: enter your email and we'll send you a code to open your account."}
+      onGuest={drv ? undefined : () => { setHomeScreenGuest(true); setEntered(true); }}
+      onDriveSignup={drv ? undefined : () => { window.location.href = "/?drive=1"; }} />;
   }
   // Marketing homepage: the public front door for anyone not signed in yet.
   if (!auth.session && !bypass && !entered) {
@@ -7244,10 +7266,18 @@ function Shell({ startEntered = false }) {
   // Customers can map their driveway and see their price before making an account
   // (they sign up at checkout). Drivers, and anyone who taps "Sign in", get the sign-in screen.
   const guestMode = supabaseEnabled && !auth.session && !bypass;
-  if (guestMode && (DRIVE_INTENT || wantAuth || state.role === "driver")) {
-    return <>{SkipButton}<AuthScreen auth={auth} onDemo={DEMO_OK ? () => setBypass(true) : undefined}
-      initialRole={DRIVE_INTENT || state.role === "driver" ? "driver" : "customer"} initialMode={wantAuth ? "signin" : "signup"}
-      onBack={DRIVE_INTENT ? undefined : () => { setWantAuth(false); if (state.role === "driver") dispatch({ type: "ROLE", role: "rider" }); }} /></>;
+  if (guestMode && (DRIVE_INTENT || wantAuth || signinIntent || state.role === "driver")) {
+    const signingIn = wantAuth || signinIntent;
+    const drv = DRIVE_INTENT || state.role === "driver" || (signinIntent && (SIGNIN_PARAM === "driver" || WAS_DRIVER()));
+    return <>{SkipButton}<AuthScreen key={signingIn ? "in" : "up"} auth={auth} onDemo={DEMO_OK ? () => setBypass(true) : undefined}
+      initialRole={drv ? "driver" : "customer"} initialMode={signingIn ? "signin" : "signup"}
+      title={signingIn && drv ? <>Driver <span style={{ color: C.amber }}>sign in</span></> : undefined}
+      subtitle={signingIn && drv ? "Welcome back. Sign in to see open jobs and go online." : undefined}
+      onBack={DRIVE_INTENT ? undefined : () => {
+        setWantAuth(false);
+        if (signinIntent) { setSigninIntent(false); if (!startEntered) setEntered(false); }
+        if (state.role === "driver") dispatch({ type: "ROLE", role: "rider" });
+      }} /></>;
   }
   if (guestMode) guestSeen.current = true;
 

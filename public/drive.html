@@ -32,7 +32,9 @@
   nav .wrap{display:flex;align-items:center;justify-content:space-between;height:60px}
   .logo{display:flex;align-items:center;gap:10px;font-family:var(--fd);font-weight:900;font-size:24px;letter-spacing:.04em}
   .mark{width:32px;height:32px;border-radius:9px;background:var(--amber);color:var(--onAmber);display:grid;place-items:center}
-  .signin{font-weight:600;font-size:15px;color:var(--mist);padding:10px 4px}
+  .signin{font-weight:600;font-size:15px;color:var(--ice);padding:9px 16px;border:1px solid var(--line);border-radius:999px;text-decoration:none}
+  .have-acct{margin:16px 0 0;font-size:15px;color:var(--mist)}
+  .have-acct a{color:var(--amber);font-weight:600}
   .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:58px;padding:0 30px;border-radius:999px;
     background:var(--amber);color:var(--onAmber);font-weight:700;font-size:17px;letter-spacing:-.01em;border:none;cursor:pointer;transition:transform .15s}
   .btn:active{transform:scale(.97)}
@@ -140,7 +142,7 @@
   <a class="logo" href="/"><span class="mark">
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v20M4.9 6l14.2 12M4.9 18L19.1 6M9 3.5l3 2.5 3-2.5M9 20.5l3-2.5 3 2.5"/></svg>
   </span>DRIFT</a>
-  <a class="signin" data-app href="/?drive=1">Sign in</a>
+  <a class="signin" data-app href="/?signin=driver">Driver sign in</a>
 </div></nav>
 
 <header class="hero"><div class="snow"></div><div class="wrap" style="position:relative">
@@ -151,6 +153,7 @@
     <a class="btn" data-app href="/?drive=1">See open jobs and pay</a>
     <a class="btn ghost" href="#calc">What could I make?</a>
   </div>
+  <p class="have-acct">Already driving with DRIFT? <a data-app href="/?signin=driver">Sign in</a></p>
   <div class="live" id="live" hidden>
     <div class="hot"><b id="m-open">—</b><span>open jobs right now</span></div>
     <div><b id="m-pay">—</b><span>waiting to be earned</span></div>
@@ -301,7 +304,7 @@
   var ref = new URLSearchParams(location.search).get("ref");
   if (ref) {
     ref = ref.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 40);
-    document.querySelectorAll("a[data-app]").forEach(function (a) { a.href = "/?drive=1&ref=" + encodeURIComponent(ref); });
+    document.querySelectorAll("a[data-app]").forEach(function (a) { a.href = a.getAttribute("href") + "&ref=" + encodeURIComponent(ref); });
   }
 
   // Calculator

@@ -41,10 +41,12 @@ try {
 } catch { /* private mode */ }
 // A link from a sign-in / password-reset email carries tokens in the URL — open the app for those too.
 const authLink = /access_token=|type=recovery|error_description=/.test(window.location.hash) || q.has('code')
-const appRoute = window.location.pathname !== '/' || authLink || ['drive', 'admin', 'ops', 'demo', 'reset', 'job', 'offer', 'route', 'go', 'rebook'].some((k) => q.has(k))
+const appRoute = window.location.pathname !== '/' || authLink || ['drive', 'signin', 'admin', 'ops', 'demo', 'reset', 'job', 'offer', 'route', 'go', 'rebook'].some((k) => q.has(k))
 // Opened from the Home Screen icon: always the app, never the marketing page.
 const standalone = window.matchMedia?.('(display-mode: standalone)').matches || window.navigator.standalone === true || q.get('source') === 'app'
-const startInApp = appRoute || standalone || hasSession()
+// A phone that's been used as a driver goes straight to driver sign-in if it got signed out.
+const wasDriver = (() => { try { return localStorage.getItem('drift.wasDriver') === '1' } catch { return false } })()
+const startInApp = appRoute || standalone || hasSession() || (wasDriver && window.location.pathname === '/')
 
 const Blank = () => <div style={{ minHeight: '100vh', background: '#07090D' }} />
 

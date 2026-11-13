@@ -799,7 +799,10 @@ export default function Landing({ onStart, onLegal }) {
             <a className="lp-link" href="/learn/" style={{ textDecoration: "none" }}>Learn</a>
             <button className="lp-link" onClick={goDrive}>Drive with us</button>
           </div>
-          <Btn onClick={onStart} style={{ padding: "10px 18px", fontSize: 14 }}>Get started</Btn>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <a className="lp-link" href="/?signin=1" style={{ textDecoration: "none", fontWeight: 600, whiteSpace: "nowrap" }}>Sign in</a>
+            <Btn onClick={onStart} style={{ padding: "10px 18px", fontSize: 14 }}>Get started</Btn>
+          </div>
         </div>
       </nav>
 
@@ -1048,6 +1051,7 @@ export default function Landing({ onStart, onLegal }) {
           <div style={{ display: "flex", gap: "12px 26px", flexWrap: "wrap" }}>
             <button className="lp-link" onClick={onStart}>Get a plow</button>
             <button className="lp-link" onClick={goDrive}>Drive with DRIFT</button>
+            <a className="lp-link" href="/?signin=driver">Driver sign in</a>
             {[["customerTerms", "Terms"], ["customerRelease", "Release & Waiver"], ["driverAgreement", "Driver Agreement"], ["privacy", "Privacy"]].map(([id, label]) => (
               <button key={id} className="lp-link" onClick={() => onLegal && onLegal(id)}>{label}</button>
             ))}
