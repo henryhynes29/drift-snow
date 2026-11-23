@@ -296,6 +296,49 @@ const ACTIONS = {
     return { ok: true };
   },
 
+  // ---------- manual payouts (Venmo / Cash App / Apple Pay) ----------
+  // Drivers who chose an app instead of bank. Stripe collected their earnings;
+  // the owner sends them out by hand each week and marks them paid here.
+  async "manual-payouts"() {
+    const [drivers, jobs, logs] = await Promise.all([
+      all("profiles", "id, name, email, phone, payout_method, payout_handle",
+        (q) => q.eq("is_driver", true).neq("payout_method", "bank")),
+      all("jobs", "driver_id, status, payout_status, driver_pay, tip, completed_at",
+        (q) => q.not("driver_id", "is", null).eq("status", "completed")),
+      all("manual_payouts", "driver_id, amount, method, marked_paid_at",
+        (q) => q.order("marked_paid_at", { ascending: false })).catch(() => []),
+    ]);
+    const rows = drivers.map((d) => {
+      const mine = jobs.filter((j) => j.driver_id === d.id);
+      const owed = mine.filter((j) => ["owed", "held"].includes(j.payout_status));
+      const lastLog = logs.find((l) => l.driver_id === d.id);
+      return {
+        id: d.id, name: d.name || d.email || "Driver", phone: d.phone || null,
+        method: d.payout_method, handle: d.payout_handle || null,
+        owed: round2(owed.reduce((s, j) => s + num(j.driver_pay) + num(j.tip), 0)),
+        owedJobs: owed.length,
+        paidToDate: round2(logs.filter((l) => l.driver_id === d.id).reduce((s, l) => s + num(l.amount), 0)),
+        lastPaidAt: lastLog?.marked_paid_at || null,
+      };
+    }).sort((a, b) => b.owed - a.owed);
+    return { drivers: rows, totalOwed: round2(rows.reduce((s, r) => s + r.owed, 0)) };
+  },
+
+  // Mark one driver's held earnings as paid out by hand, and log it.
+  async "mark-paid"({ id, amount, method, handle, reference }, user) {
+    if (!id) throw new HttpError(400, "Missing driver");
+    const through = new Date().toISOString();
+    // Flip their completed+owed jobs to paid via the DB function, then log it.
+    const { error: fe } = await admin.rpc("mark_manual_paid", { p_driver: id, p_through: through });
+    if (fe) throw new HttpError(500, fe.message);
+    const { error } = await admin.from("manual_payouts").insert({
+      driver_id: id, amount: num(amount), method: method || null, handle: handle || null,
+      reference: reference || null, marked_paid_at: through, paid_by: user?.id || null,
+    });
+    if (error) throw new HttpError(500, error.message);
+    return { ok: true };
+  },
+
   // ---------- customers ----------
   async customers() {
     const [people, jobs] = await Promise.all([

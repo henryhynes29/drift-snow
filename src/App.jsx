@@ -6575,6 +6575,80 @@ function PayoutOnboardingFrame({ choice, onClose, onError }) {
   );
 }
 
+// ---- Payout method (bank is the Stripe default; Venmo/CashApp/Apple Pay are
+// paid out manually each week by DRIFT, so the driver just saves their handle) ----
+const PAYOUT_METHODS = [
+  { id: "bank", label: "Bank (automatic)", icon: "bank", hint: "Weekly, straight to your bank through Stripe", handle: null },
+  { id: "venmo", label: "Venmo", icon: "cash", hint: "Paid weekly by DRIFT to your Venmo", handle: "@username or phone" },
+  { id: "cashapp", label: "Cash App", icon: "cash", hint: "Paid weekly by DRIFT to your $Cashtag", handle: "$Cashtag" },
+  { id: "applepay", label: "Apple Pay", icon: "mobile", hint: "Paid weekly by DRIFT to your Apple Pay", handle: "Phone or email" },
+];
+const payoutMethodDef = (id) => PAYOUT_METHODS.find((m) => m.id === id) || PAYOUT_METHODS[0];
+function payoutMethodSub(driver) {
+  const m = payoutMethodDef(driver?.payoutMethod || "bank");
+  if (m.id === "bank") return "Weekly to your bank (Stripe)";
+  return driver?.payoutHandle ? `${m.label} · ${driver.payoutHandle}` : `${m.label} · add your handle`;
+}
+
+function PayoutMethodSheet({ onClose }) {
+  const { state, dispatch } = useStore();
+  const d = state.driver || {};
+  const [method, setMethod] = useState(d.payoutMethod || "bank");
+  const [handle, setHandle] = useState(d.payoutHandle || "");
+  const [saving, setSaving] = useState(false);
+  const def = payoutMethodDef(method);
+  const needsHandle = method !== "bank";
+  const ready = !needsHandle || handle.trim().length >= 2;
+  const save = async () => {
+    setSaving(true);
+    const patch = { payout_method: method, payout_handle: needsHandle ? handle.trim() : null };
+    if (isLive(state)) {
+      const { error } = await updateMyProfile(state.userId, patch);
+      if (error) { setSaving(false); dispatch({ type: "TOAST", msg: `Couldn't save — ${error.message}` }); return; }
+    }
+    dispatch({ type: "DRIVER_PATCH", patch: { payoutMethod: method, payoutHandle: needsHandle ? handle.trim() : "" } });
+    setSaving(false);
+    dispatch({ type: "TOAST", msg: method === "bank" ? "Payouts set to your bank" : `${def.label} payout saved` });
+    onClose();
+  };
+  return (
+    <Sheet onClose={onClose}>
+      <h3 style={{ ...H(24), margin: "0 0 4px" }}>Payout method</h3>
+      <p style={{ ...sub, margin: "0 0 16px" }}>Bank payouts land weekly through Stripe. Prefer an app? Save your handle and DRIFT sends your weekly earnings there.</p>
+      <div style={{ display: "grid", gap: 8 }}>
+        {PAYOUT_METHODS.map((m) => {
+          const on = method === m.id;
+          return (
+            <button key={m.id} type="button" onClick={() => setMethod(m.id)}
+              style={{ display: "flex", gap: 12, alignItems: "flex-start", textAlign: "left", cursor: "pointer",
+                padding: "13px 14px", borderRadius: 14, background: on ? C.amber + "14" : C.slate,
+                border: `1.5px solid ${on ? C.amber : C.line}`, WebkitTapHighlightColor: "transparent" }}>
+              <span style={{ color: on ? C.amber : C.mist, display: "flex", marginTop: 1 }}><Icon e={m.icon} s={20} /></span>
+              <span style={{ flex: 1 }}>
+                <span style={{ display: "block", font: `600 15px ${FB}`, color: C.ice }}>{m.label}</span>
+                <span style={{ display: "block", font: `400 13px/1.4 ${FB}`, color: C.mist, marginTop: 2 }}>{m.hint}</span>
+              </span>
+              {on && <Icon e="check" s={16} color={C.amber} />}
+            </button>
+          );
+        })}
+      </div>
+      {needsHandle && (
+        <div style={{ marginTop: 14 }}>
+          <label style={{ font: `600 13px ${FB}`, color: C.mist }}>Your {def.label} handle</label>
+          <input value={handle} onChange={(e) => setHandle(e.target.value)} placeholder={def.handle}
+            autoComplete="off" style={{ ...inp, marginTop: 6 }} />
+          <p style={{ font: `400 12.5px/1.45 ${FB}`, color: C.mistDim, margin: "8px 0 0" }}>
+            Double-check this — it's where your money goes. DRIFT pays {def.label} out by hand each week, so it can take a little longer than bank payouts.</p>
+        </div>
+      )}
+      <div style={{ marginTop: 16 }}>
+        <Btn full kind="good" disabled={!ready || saving} onClick={save}>{saving ? "Saving…" : "Save payout method"}</Btn>
+      </div>
+    </Sheet>
+  );
+}
+
 function DriverEarnings({ onReferral }) {
   const { state, dispatch } = useStore();
   const LIVE = isLive(state);
@@ -6719,6 +6793,7 @@ function DriverAccount({ onReferral }) {
   const [reviewsOpen, setReviewsOpen] = useState(false);
   const [zoneOpen, setZoneOpen] = useState(false);
   const [regularsOpen, setRegularsOpen] = useState(false);
+  const [payMethodOpen, setPayMethodOpen] = useState(false);
   const LIVE = isLive(state);
   const [fresh, setFresh] = useState(null); // latest rating / jobs from the database
   useEffect(() => { if (LIVE) getProfile(state.userId).then(({ data }) => data && setFresh(profileToDriver(data))); }, [LIVE, state.userId]);
@@ -6759,7 +6834,9 @@ function DriverAccount({ onReferral }) {
         {LIVE && <ListRow icon="star" tint={C.amber} title="Your reviews"
           sub={d.reviews ? `${d.rating} average · ${d.reviews} review${d.reviews === 1 ? "" : "s"}` : "What customers say will show here"}
           onClick={() => setReviewsOpen(true)} />}
-        {LIVE && STRIPE_ENABLED && <ListRow icon="bank" tint={C.push} title="Payouts and tax forms" sub="Bank, payout history and 1099s in Stripe" onClick={openPayouts} last />}
+        {LIVE && STRIPE_ENABLED && <ListRow icon="bank" tint={C.push} title="Payouts and tax forms" sub="Bank, payout history and 1099s in Stripe" onClick={openPayouts} />}
+        <ListRow icon="cash" tint={C.plow} title="Payout method"
+          sub={payoutMethodSub(state.driver)} onClick={() => setPayMethodOpen(true)} last />
       </ListGroup>
 
       {/* your share — one flat rate, no tiers */}
@@ -6836,6 +6913,7 @@ function DriverAccount({ onReferral }) {
       {editOpen && <ProfileSheet driver onClose={() => setEditOpen(false)} />}
       {zoneOpen && <HomeZoneSheet onClose={() => setZoneOpen(false)} />}
       {regularsOpen && <RegularsSheet onClose={() => setRegularsOpen(false)} />}
+      {payMethodOpen && <PayoutMethodSheet onClose={() => setPayMethodOpen(false)} />}
       {reviewsOpen && <ReviewsSheet userId={state.userId} name="" rating={d.rating} count={d.reviews || 0} onClose={() => setReviewsOpen(false)} />}
 
       {auth?.isConfigured && auth?.session && (

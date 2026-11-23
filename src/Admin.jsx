@@ -839,11 +839,76 @@ function Jobs() {
   );
 }
 
+// ---- Manual payouts: drivers on Venmo/Cash App/Apple Pay, paid by hand ----
+const METHOD_LABEL = { venmo: "Venmo", cashapp: "Cash App", applepay: "Apple Pay", bank: "Bank" };
+function Payouts() {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(null); // driver id being marked
+  const load = () => api("manual-payouts").then(setD).catch((e) => setErr(e.message));
+  useEffect(() => { load(); }, []);
+  const markPaid = async (row) => {
+    if (!window.confirm(`Mark ${money(row.owed)} as paid to ${row.name} via ${METHOD_LABEL[row.method] || row.method} (${row.handle || "no handle"})?`)) return;
+    const reference = window.prompt("Optional reference / transaction note (leave blank to skip):", "") || "";
+    setBusy(row.id);
+    try { await api("mark-paid", { id: row.id, amount: row.owed, method: row.method, handle: row.handle, reference }); await load(); }
+    catch (e) { alert(`Couldn't mark paid: ${e.message}`); }
+    finally { setBusy(null); }
+  };
+  if (err) return <section><div style={card()}><p style={{ color: C.danger, margin: 0 }}>{err}</p></div></section>;
+  if (!d) return <section><div style={card()}><p style={{ color: C.mist, margin: 0 }}>Loading payouts…</p></div></section>;
+  const rows = d.drivers || [];
+  return (
+    <section>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+        <Tile label="Owed via apps" value={money(d.totalOwed)} tone={d.totalOwed > 0 ? "amber" : "good"} />
+        <Tile label="Drivers on apps" value={rows.length} />
+      </div>
+      <div style={card()}>
+        <h3 style={{ font: `700 16px ${FD}`, margin: "0 0 4px", color: C.ice }}>Manual payouts</h3>
+        <p style={{ font: `400 13px/1.5 ${FB}`, color: C.mist, margin: "0 0 14px" }}>
+          These drivers chose Venmo, Cash App or Apple Pay. Their earnings were collected in Stripe — send their weekly total by hand to the handle shown, then mark it paid.</p>
+        {!rows.length ? (
+          <p style={{ color: C.mistDim, font: `400 14px ${FB}`, margin: 0 }}>No drivers on manual payout methods yet.</p>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
+              <thead><tr>
+                <th style={th()}>Driver</th><th style={th()}>Method</th><th style={th()}>Send to</th>
+                <th style={th()}>Owed</th><th style={th()}>Jobs</th><th style={th()}>Paid to date</th>
+                <th style={th()}>Last paid</th><th style={th()}></th>
+              </tr></thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id}>
+                    <td style={td()}>{r.name}{r.phone ? <div style={{ font: `400 12px ${FB}`, color: C.mistDim }}>{r.phone}</div> : null}</td>
+                    <td style={td()}><Chip tone="info">{METHOD_LABEL[r.method] || r.method}</Chip></td>
+                    <td style={{ ...td(), fontFamily: FB, color: r.handle ? C.ice : C.danger }}>{r.handle || "no handle saved"}</td>
+                    <td style={{ ...td(), font: `700 15px ${FD}`, color: r.owed > 0 ? C.amber : C.mist }}>{money(r.owed)}</td>
+                    <td style={td()}>{r.owedJobs}</td>
+                    <td style={td()}>{money(r.paidToDate)}</td>
+                    <td style={td()}>{r.lastPaidAt ? day(r.lastPaidAt) : "—"}</td>
+                    <td style={td()}>
+                      <button disabled={r.owed <= 0 || busy === r.id || !r.handle} onClick={() => markPaid(r)}
+                        style={{ ...btn("good"), opacity: (r.owed <= 0 || !r.handle) ? 0.4 : 1, cursor: (r.owed <= 0 || !r.handle) ? "default" : "pointer" }}>
+                        {busy === r.id ? "Saving…" : "Mark paid"}</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export default function AdminApp({ email, onSignOut }) {
   const [tab, setTab] = useState("overview");
   const [allowed, setAllowed] = useState(null); // null checking · true · false
   useEffect(() => { api("summary").then(() => setAllowed(true)).catch((e) => setAllowed(e.status === 403 ? false : true)); }, []);
-  const tabs = [["overview", "Overview"], ["live", "Live map"], ["funnel", "Funnel"], ["drivers", "Drivers"], ["customers", "Customers"], ["jobs", "Jobs"], ["sources", "Sources"], ["errors", "Errors"]];
+  const tabs = [["overview", "Overview"], ["live", "Live map"], ["funnel", "Funnel"], ["drivers", "Drivers"], ["payouts", "Payouts"], ["customers", "Customers"], ["jobs", "Jobs"], ["sources", "Sources"], ["errors", "Errors"]];
   return (
     <div style={{ minHeight: "100vh", background: C.night, color: C.ice, fontFamily: FB }}>
       <header style={{ position: "sticky", top: 0, zIndex: 20, background: C.glass, backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderBottom: `1px solid ${C.line}` }}>
@@ -877,6 +942,7 @@ export default function AdminApp({ email, onSignOut }) {
         {allowed && tab === "overview" && <Overview />}
         {allowed && tab === "live" && <LiveBoard />}
         {allowed && tab === "drivers" && <Drivers />}
+        {allowed && tab === "payouts" && <Payouts />}
         {allowed && tab === "customers" && <Customers />}
         {allowed && tab === "jobs" && <Jobs />}
         {allowed && tab === "sources" && <Sources />}

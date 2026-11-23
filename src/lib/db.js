@@ -244,7 +244,8 @@ export function profileToDriver(p) {
   if (!p) return null;
   return { id: p.id, name: p.name || "Your driver", truck: p.truck || "Plow truck",
     tools: p.tools || [], rating: p.rating == null ? null : Number(p.rating).toFixed(1), reviews: p.ratings_count || 0, jobs: p.jobs_count || 0, tier: p.tier || "",
-    lateCancels: p.late_cancels || 0, home: p.home_lat != null ? { lat: p.home_lat, lng: p.home_lng } : null, homeRadius: p.home_radius_mi ?? null };
+    lateCancels: p.late_cancels || 0, home: p.home_lat != null ? { lat: p.home_lat, lng: p.home_lng } : null, homeRadius: p.home_radius_mi ?? null,
+    payoutMethod: p.payout_method || "bank", payoutHandle: p.payout_handle || "" };
 }
 
 // Switch a driver online/offline (and mark them as a driver after they sign the
@@ -487,7 +488,7 @@ export async function loadMyAcceptances(userId, version) {
 export async function updateMyProfile(userId, patch) {
   if (!supabaseEnabled || !isUuid(userId)) return { data: null };
   const allowed = {};
-  for (const k of ["name", "phone", "truck", "tools", "ref_source", "home_lat", "home_lng", "home_radius_mi"]) if (k in patch) allowed[k] = patch[k];
+  for (const k of ["name", "phone", "truck", "tools", "ref_source", "home_lat", "home_lng", "home_radius_mi", "payout_method", "payout_handle"]) if (k in patch) allowed[k] = patch[k];
   return supabase.from("profiles").update(allowed).eq("id", userId);
 }
 
