@@ -4612,23 +4612,18 @@ function DriverOnboarding() {
       {step === 4 && (
         <Fade k="d4">
           <Eyebrow color={C.push}>Step 4 · Get paid</Eyebrow>
-          <h2 style={h2}>Where should we send it?</h2>
-          <p style={sub}>{LIVE_ONB ? "Payouts go to your bank through Stripe. Set it up any time in the Earnings tab — Stripe collects your bank and W-9 details, DRIFT never sees them."
-            : "Payouts run through Stripe Connect. Cash out the same day."}</p>
-          {!LIVE_ONB && <>
-          <div style={{ margin: "16px 0", borderRadius: 16, padding: 18, position: "relative", overflow: "hidden",
-            background: C.slate, border: `1px solid ${C.push}44` }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-              <span style={{ font: `700 11px ${FB}`, letterSpacing: ".01em", color: C.push }}>Payout account</span>
-              <span style={{ fontSize: 19 }}><Icon e="bank" s={19} /></span>
+          <h2 style={h2}>How do you want to get paid?</h2>
+          <p style={sub}>Choose Venmo, Cash App or Apple Pay in the Earnings tab after setup and add your handle. DRIFT pays you weekly — you keep 80% of every offer, the full ${CALLOUT_FEE} call-out and 100% of tips.</p>
+          <div style={{ margin: "16px 0", borderRadius: 16, padding: 18, background: C.slate, border: `1px solid ${C.push}44` }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <span style={{ color: C.push, display: "flex" }}><Icon e="cash" s={20} /></span>
+              <div style={{ font: `600 14px ${FB}`, color: C.ice }}>Venmo · Cash App · Apple Pay</div>
             </div>
-            <div style={{ font: `700 20px ${FB}`, letterSpacing: ".08em", color: C.ice }}>•••• •••• 6789</div>
-            <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 6 }}>{name || "Your name"} · Checking</div>
+            <p style={{ font: `400 13px/1.45 ${FB}`, color: C.mist, margin: "8px 0 0" }}>
+              Set your payout method in the Earnings tab once you're set up. Bank direct deposit is coming soon.</p>
           </div>
-          <UploadRow k="w9" label="W-9 tax form" hint="Required for 1099 contractors" />
-          </>}
           <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "14px 0", font: `500 13px ${FB}`, color: C.mistDim }}>
-            <span><Icon e="lock" s={14} /></span> Bank details handled by Stripe · we never see them
+            <span><Icon e="lock" s={14} /></span> You'll get a 1099 for taxes · handle your own filing
           </div>
           <div style={{ position: "sticky", bottom: 16 }}>
             <Btn full kind="good" onClick={finish} disabled={saving}>{saving ? "Saving…" : LIVE_ONB ? "Finish setup" : "Finish — start earning"}</Btn>
@@ -6578,54 +6573,62 @@ function PayoutOnboardingFrame({ choice, onClose, onError }) {
 // ---- Payout method (bank is the Stripe default; Venmo/CashApp/Apple Pay are
 // paid out manually each week by DRIFT, so the driver just saves their handle) ----
 const PAYOUT_METHODS = [
-  { id: "bank", label: "Bank (automatic)", icon: "bank", hint: "Weekly, straight to your bank through Stripe", handle: null },
   { id: "venmo", label: "Venmo", icon: "cash", hint: "Paid weekly by DRIFT to your Venmo", handle: "@username or phone" },
   { id: "cashapp", label: "Cash App", icon: "cash", hint: "Paid weekly by DRIFT to your $Cashtag", handle: "$Cashtag" },
   { id: "applepay", label: "Apple Pay", icon: "mobile", hint: "Paid weekly by DRIFT to your Apple Pay", handle: "Phone or email" },
+  { id: "bank", label: "Bank / direct deposit", icon: "bank", hint: "Coming soon — automatic weekly deposits", handle: "Routing + account", comingSoon: true },
 ];
 const payoutMethodDef = (id) => PAYOUT_METHODS.find((m) => m.id === id) || PAYOUT_METHODS[0];
 function payoutMethodSub(driver) {
-  const m = payoutMethodDef(driver?.payoutMethod || "bank");
-  if (m.id === "bank") return "Weekly to your bank (Stripe)";
-  return driver?.payoutHandle ? `${m.label} · ${driver.payoutHandle}` : `${m.label} · add your handle`;
+  const method = driver?.payoutMethod || "bank";
+  const m = payoutMethodDef(method);
+  // "bank" is the stored default but it's Coming soon, so an un-set driver needs to pick one.
+  if (method === "bank" || !driver?.payoutHandle) return "Tap to choose how you get paid";
+  return `${m.label} · ${driver.payoutHandle}`;
 }
 
 function PayoutMethodSheet({ onClose }) {
   const { state, dispatch } = useStore();
   const d = state.driver || {};
-  const [method, setMethod] = useState(d.payoutMethod || "bank");
+  // Start on the driver's saved method if it's a real (selectable) one, else the first app method.
+  const savedReal = PAYOUT_METHODS.find((m) => m.id === d.payoutMethod && !m.comingSoon);
+  const [method, setMethod] = useState(savedReal ? savedReal.id : PAYOUT_METHODS[0].id);
   const [handle, setHandle] = useState(d.payoutHandle || "");
   const [saving, setSaving] = useState(false);
   const def = payoutMethodDef(method);
-  const needsHandle = method !== "bank";
-  const ready = !needsHandle || handle.trim().length >= 2;
+  const ready = handle.trim().length >= 2 && !def.comingSoon;
   const save = async () => {
+    if (def.comingSoon) return;
     setSaving(true);
-    const patch = { payout_method: method, payout_handle: needsHandle ? handle.trim() : null };
+    const patch = { payout_method: method, payout_handle: handle.trim() };
     if (isLive(state)) {
       const { error } = await updateMyProfile(state.userId, patch);
       if (error) { setSaving(false); dispatch({ type: "TOAST", msg: `Couldn't save — ${error.message}` }); return; }
     }
-    dispatch({ type: "DRIVER_PATCH", patch: { payoutMethod: method, payoutHandle: needsHandle ? handle.trim() : "" } });
+    dispatch({ type: "DRIVER_PATCH", patch: { payoutMethod: method, payoutHandle: handle.trim() } });
     setSaving(false);
-    dispatch({ type: "TOAST", msg: method === "bank" ? "Payouts set to your bank" : `${def.label} payout saved` });
+    dispatch({ type: "TOAST", msg: `${def.label} payout saved` });
     onClose();
   };
   return (
     <Sheet onClose={onClose}>
-      <h3 style={{ ...H(24), margin: "0 0 4px" }}>Payout method</h3>
-      <p style={{ ...sub, margin: "0 0 16px" }}>Bank payouts land weekly through Stripe. Prefer an app? Save your handle and DRIFT sends your weekly earnings there.</p>
+      <h3 style={{ ...H(24), margin: "0 0 4px" }}>How you get paid</h3>
+      <p style={{ ...sub, margin: "0 0 16px" }}>Pick where your earnings go and save your handle. DRIFT sends your weekly earnings there — nothing to set up, no Stripe account needed.</p>
       <div style={{ display: "grid", gap: 8 }}>
         {PAYOUT_METHODS.map((m) => {
           const on = method === m.id;
+          const soon = !!m.comingSoon;
           return (
-            <button key={m.id} type="button" onClick={() => setMethod(m.id)}
-              style={{ display: "flex", gap: 12, alignItems: "flex-start", textAlign: "left", cursor: "pointer",
-                padding: "13px 14px", borderRadius: 14, background: on ? C.amber + "14" : C.slate,
+            <button key={m.id} type="button" disabled={soon} onClick={() => !soon && setMethod(m.id)}
+              style={{ display: "flex", gap: 12, alignItems: "flex-start", textAlign: "left", cursor: soon ? "default" : "pointer",
+                padding: "13px 14px", borderRadius: 14, background: on ? C.amber + "14" : C.slate, opacity: soon ? 0.55 : 1,
                 border: `1.5px solid ${on ? C.amber : C.line}`, WebkitTapHighlightColor: "transparent" }}>
               <span style={{ color: on ? C.amber : C.mist, display: "flex", marginTop: 1 }}><Icon e={m.icon} s={20} /></span>
               <span style={{ flex: 1 }}>
-                <span style={{ display: "block", font: `600 15px ${FB}`, color: C.ice }}>{m.label}</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ font: `600 15px ${FB}`, color: C.ice }}>{m.label}</span>
+                  {soon && <span style={{ font: `600 10.5px ${FB}`, letterSpacing: ".04em", textTransform: "uppercase", color: C.mist, background: C.night2, borderRadius: 6, padding: "2px 7px" }}>Coming soon</span>}
+                </span>
                 <span style={{ display: "block", font: `400 13px/1.4 ${FB}`, color: C.mist, marginTop: 2 }}>{m.hint}</span>
               </span>
               {on && <Icon e="check" s={16} color={C.amber} />}
@@ -6633,19 +6636,46 @@ function PayoutMethodSheet({ onClose }) {
           );
         })}
       </div>
-      {needsHandle && (
+      {!def.comingSoon && (
         <div style={{ marginTop: 14 }}>
           <label style={{ font: `600 13px ${FB}`, color: C.mist }}>Your {def.label} handle</label>
           <input value={handle} onChange={(e) => setHandle(e.target.value)} placeholder={def.handle}
             autoComplete="off" style={{ ...inp, marginTop: 6 }} />
           <p style={{ font: `400 12.5px/1.45 ${FB}`, color: C.mistDim, margin: "8px 0 0" }}>
-            Double-check this — it's where your money goes. DRIFT pays {def.label} out by hand each week, so it can take a little longer than bank payouts.</p>
+            Double-check this — it's where your money goes. DRIFT sends your {def.label} payout by hand each week.</p>
         </div>
       )}
       <div style={{ marginTop: 16 }}>
         <Btn full kind="good" disabled={!ready || saving} onClick={save}>{saving ? "Saving…" : "Save payout method"}</Btn>
       </div>
     </Sheet>
+  );
+}
+
+// The payout banner in the Earnings tab: shows the driver's chosen app payout
+// method (or prompts them to pick one) and opens the method sheet. No Stripe
+// onboarding button — earnings are paid out by DRIFT each week.
+function PayoutMethodBanner() {
+  const { state } = useStore();
+  const d = state.driver || {};
+  const [open, setOpen] = useState(false);
+  const hasMethod = d.payoutHandle && (d.payoutMethod || "bank") !== "bank";
+  const def = payoutMethodDef(d.payoutMethod || "bank");
+  return (
+    <div style={{ background: C.slate, border: `1px solid ${hasMethod ? C.push : C.amber}55`, borderRadius: 16, padding: S.lg, marginBottom: S.md }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+        <span style={{ color: hasMethod ? C.push : C.amber, display: "flex" }}><Icon e="cash" s={20} /></span>
+        <div style={{ flex: 1 }}>
+          <div style={{ font: `700 15px ${FB}`, color: C.ice }}>{hasMethod ? "Payouts are set" : "Set up your payout"}</div>
+          <div style={{ font: `400 13px ${FB}`, color: C.mist, marginTop: 2 }}>
+            {hasMethod ? `${def.label} · ${d.payoutHandle}` : "Choose Venmo, Cash App or Apple Pay and add your handle."}</div>
+        </div>
+      </div>
+      <Btn full kind={hasMethod ? "dark" : "good"} onClick={() => setOpen(true)}>{hasMethod ? "Change payout method" : "Choose how you get paid"}</Btn>
+      <p style={{ font: `400 13px ${FB}`, color: C.mistDim, textAlign: "center", margin: "10px 0 0" }}>
+        You keep 80% of every offer, the full ${CALLOUT_FEE} call-out and 100% of tips. DRIFT pays you weekly.</p>
+      {open && <PayoutMethodSheet onClose={() => setOpen(false)} />}
+    </div>
   );
 }
 
@@ -6730,43 +6760,8 @@ function DriverEarnings({ onReferral }) {
 
       <TaxCard />
 
-      {/* payouts: real Stripe setup for signed-in drivers, demo card otherwise */}
-      {isLive(state) && STRIPE_ENABLED ? <PayoutsCard /> : (
-      !isLive(state) && STRIPE_ENABLED && !state.driver.stripeAccountId ? (
-        <div style={{ background: C.slate, border: `1px solid ${C.plow}55`,
-          borderRadius: 16, padding: S.lg, marginBottom: S.md }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-            <span style={{ fontSize: 22 }}><Icon e="bank" s={22} /></span>
-            <div style={{ font: `700 15px ${FB}`, color: C.ice }}>Set up your payouts</div>
-          </div>
-          <p style={{ font: `500 13px ${FB}`, color: C.mist, margin: "0 0 14px" }}>
-            Connect a bank account through Stripe to get paid — takes about 2 minutes. You keep 80% of every offer, the full ${CALLOUT_FEE} call-out fee, and all tips — deposited automatically.
-          </p>
-          <Btn full kind="dark" onClick={() => {
-            dispatch({ type: "TOAST", msg: "Sign in with a driver account to set up payouts" });
-          }}>Connect bank with Stripe ›</Btn>
-          <p style={{ font: `500 13px ${FB}`, color: C.mistDim, textAlign: "center", marginTop: 10 }}>
-            Secured by Stripe · we never see your bank details
-          </p>
-        </div>
-      ) : LIVE ? null : (
-        <div style={{ background: C.night2, border: `1px solid ${C.line}`, borderRadius: 16, padding: S.lg, marginBottom: S.md }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: S.md }}>
-            <div>
-              <div style={{ font: `700 14px ${FB}`, color: C.ice }}>Available now</div>
-              <div style={{ font: `500 13px ${FB}`, color: C.mist, marginTop: 2 }}>Stripe Connect · same-day</div>
-            </div>
-            <div style={{ font: `800 31px ${FD}`, textTransform: "uppercase", color: C.push }}>${e.week}</div>
-          </div>
-          <Btn full kind="good" onClick={() => dispatch({ type: "TOAST", msg: `$${e.week} sent — arrives in seconds` })}>
-            Cash out instantly
-          </Btn>
-          <p style={{ font: `500 13px ${FB}`, color: C.mistDim, textAlign: "center", marginTop: 10 }}>
-            $0.50 instant fee · free if you wait for Tuesday deposit
-          </p>
-        </div>
-      )
-      )}
+      {/* payouts: choose an app method (Venmo/Cash App/Apple Pay); DRIFT pays weekly */}
+      <PayoutMethodBanner />
 
       {/* referral CTA (demo only until referrals are real) */}
       {!LIVE && <Card onClick={onReferral} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
@@ -6834,7 +6829,6 @@ function DriverAccount({ onReferral }) {
         {LIVE && <ListRow icon="star" tint={C.amber} title="Your reviews"
           sub={d.reviews ? `${d.rating} average · ${d.reviews} review${d.reviews === 1 ? "" : "s"}` : "What customers say will show here"}
           onClick={() => setReviewsOpen(true)} />}
-        {LIVE && STRIPE_ENABLED && <ListRow icon="bank" tint={C.push} title="Payouts and tax forms" sub="Bank, payout history and 1099s in Stripe" onClick={openPayouts} />}
         <ListRow icon="cash" tint={C.plow} title="Payout method"
           sub={payoutMethodSub(state.driver)} onClick={() => setPayMethodOpen(true)} last />
       </ListGroup>
@@ -6884,10 +6878,10 @@ function DriverAccount({ onReferral }) {
       </Card>}
 
       {!LIVE && <Card style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}><span style={{ fontSize: 20 }}><Icon e="bank" s={20} /></span>
-          <div><div style={{ font: `700 13px ${FB}` }}>Payout account</div>
-            <div style={{ font: `500 13px ${FB}`, color: C.mist }}>Stripe Connect · ···6789</div></div></div>
-        <Chip color={C.good}>Linked</Chip>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}><span style={{ fontSize: 20 }}><Icon e="cash" s={20} /></span>
+          <div><div style={{ font: `700 13px ${FB}` }}>Payout method</div>
+            <div style={{ font: `500 13px ${FB}`, color: C.mist }}>Venmo · Cash App · Apple Pay</div></div></div>
+        <Chip color={C.mist}>Choose one</Chip>
       </Card>}
 
       {/* referral entry (demo only) */}
