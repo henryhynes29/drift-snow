@@ -150,6 +150,62 @@ function withOffer(q, offer) {
     low: o < (q.standardOffer || 0) };
 }
 
+// ---- Promo codes (first-plow discounts) -----------------------------------
+// A promo takes a percentage off the CUSTOMER'S OFFER only. It is absorbed
+// entirely by DRIFT's cut: the driver's pay (80% of the FULL offer + $10
+// call-out) is unchanged, and the discount comes straight out of the $5 fee +
+// 20% platform share. One use per customer, their first completed plow.
+//
+// IMPORTANT: the database recomputes price/driver_pay from the offer server-side
+// (see supabase migration add-promo.sql). Until that migration is run, the app
+// SHOWS the discount but the server still captures full price. The job row
+// carries promo + source so the server can honor it once the column exists.
+const PROMOS = {
+  FOX21: { pct: 0.15, label: "FOX21 · 15% off your first plow", source: "fox21", firstOnly: true },
+};
+const normPromo = (c) => (c || "").trim().toUpperCase();
+const promoDef = (c) => PROMOS[normPromo(c)] || null;
+
+function rememberPromo(code) {
+  const def = promoDef(code);
+  if (!def) return;
+  try {
+    localStorage.setItem("drift.promo", normPromo(code));
+    if (!localStorage.getItem("drift.promo.at")) localStorage.setItem("drift.promo.at", new Date().toISOString());
+    if (def.source && !localStorage.getItem("drift.source")) localStorage.setItem("drift.source", def.source);
+  } catch { /* private mode: the ?code= param still carries it this session */ }
+}
+function storedPromo() {
+  try { return promoDef(localStorage.getItem("drift.promo")) ? normPromo(localStorage.getItem("drift.promo")) : null; }
+  catch { return null; }
+}
+function promoUsed() {
+  try { return localStorage.getItem("drift.promo.used") === "1"; } catch { return false; }
+}
+function markPromoUsed() {
+  try { localStorage.setItem("drift.promo.used", "1"); } catch { /* ignore */ }
+}
+// Is a promo currently usable for THIS customer? first-plow promos are gone once used.
+function activePromo(hasPriorJobs) {
+  const code = storedPromo();
+  if (!code) return null;
+  const def = promoDef(code);
+  if (!def) return null;
+  if (def.firstOnly && (promoUsed() || hasPriorJobs)) return null;
+  return { code, ...def };
+}
+// Apply a promo to a priced quote: discount the OFFER, hold driver pay steady,
+// absorb it from the platform take. Returns a new quote with discount fields.
+function applyPromo(q, promo) {
+  if (!q || !promo) return q;
+  const discount = Math.round((q.offer || 0) * promo.pct);
+  if (discount <= 0) return q;
+  const riderTotal = Math.max(0, (q.riderTotal || 0) - discount);
+  return { ...q, promoCode: promo.code, promoPct: promo.pct, discount,
+    riderTotal, platformFee: Math.max(0, riderTotal - (q.driverPay || 0)),
+    fee: Math.max(0, riderTotal - (q.driverPay || 0)), platformNet: Math.max(0, riderTotal - (q.driverPay || 0)) };
+}
+
 // Flat DRIFT fee on every order — the platform's flat take on top of the driver's
 // price. 100% yours, never shared with the driver. One number to tune your fee.
 
@@ -309,12 +365,15 @@ const AdminApp = React.lazy(() => import("./Admin.jsx"));
 // ---- Deep links: notification taps + home-screen shortcuts ----------------
 // ?job=<id> (customer job) · ?offer=<id> (driver: a new request) · ?route=1
 // (driver: scheduled route / check-in) · ?go=book|jumpstart|drive · ?rebook=1
-const deepLink = { job: null, offer: null, route: false, go: null, rebook: false, stay: false, confirm: null };
+const deepLink = { job: null, offer: null, route: false, go: null, rebook: false, stay: false, confirm: null, code: null };
 const linkListeners = new Set();
 function readLink(search) {
   const q = new URLSearchParams(search || "");
   Object.assign(deepLink, { job: q.get("job"), offer: q.get("offer"), route: q.has("route"), go: q.get("go"), rebook: q.has("rebook"),
-    stay: q.has("stay"), confirm: q.get("confirm") });
+    stay: q.has("stay"), confirm: q.get("confirm"), code: q.get("code") });
+  // A promo code in the URL (e.g. /fox21 → /?go=book&code=FOX21) is captured once
+  // and remembered, so it survives sign-in and the mapping flow before checkout.
+  rememberPromo(q.get("code"));
 }
 if (typeof window !== "undefined") {
   readLink(window.location.search);
@@ -1832,7 +1891,11 @@ function RiderHome({ go }) {
     return () => { on = false; };
   }, []);
   const qRec = quoteJob({ jobType, sqft, linearFt, property: prop, salt, depth });
-  const q = offer == null ? qRec : withOffer(qRec, offer);
+  const qBase = offer == null ? qRec : withOffer(qRec, offer);
+  // First-plow promo (e.g. FOX21). Discounts the offer, driver pay untouched,
+  // one use per customer. Suppressed once they have a completed plow.
+  const promo = activePromo((state.history || []).length > 0);
+  const q = promo ? applyPromo(qBase, promo) : qBase;
   const tierId = (qRec.tiers.find(t => t.offer === q.offer) || {}).id || "custom";
   // One-tap extras (dig-out, jump-start, quick sidewalk) book at the Standard
   // suggestion so their totals match what they used to cost. Price shown on the button.
@@ -1908,6 +1971,7 @@ function RiderHome({ go }) {
 
   const request = () => {
     const order = buildOrder();
+    if (order.quote?.promoCode) markPromoUsed(); // first-plow promo spent on this booking
     dispatch({ type: "REQUEST", order });
     // With payments on, the card sheet explains the next step instead.
     if (!(isLive(state) && STRIPE_ENABLED)) dispatch({ type: "TOAST", msg: schedAt ? `Scheduled for ${schedAt.label}` : `Offer sent — finding a nearby ${q.tool.toLowerCase()}` });
@@ -1932,6 +1996,7 @@ function RiderHome({ go }) {
   const onAuthorized = (paymentIntentId) => {
     setPayOpen(false);
     const order = buildOrder({ paymentIntentId });
+    if (order.quote?.promoCode) markPromoUsed(); // first-plow promo spent on this booking
     dispatch({ type: "REQUEST", order });
     dispatch({ type: "TOAST", msg: `Card authorized — finding a nearby ${q.tool.toLowerCase()}` });
     notify(dispatch, { kind: "job", title: "Card authorized", body: `We'll only charge $${q.riderTotal} once ${prop?.label || "your property"} is plowed.`, role: "rider" });
@@ -2211,6 +2276,9 @@ function RiderHome({ go }) {
                       <Row label="Your offer to the driver" value={`$${q.offer}`} />
                       <Row label="Call-out fee (all to your driver)" value={`$${CALLOUT_FEE}`} />
                       <Row label="DRIFT booking fee" value={`$${DRIFT_FEE}`} />
+                      {q.discount > 0 && (
+                        <Row label={`${q.promoCode} — first plow (−${Math.round((q.promoPct || 0) * 100)}%)`} value={`−$${q.discount}`} />
+                      )}
                       <div style={{ height: 1, background: C.line, margin: "8px 0" }} />
                       <Row label="Total" value={`$${q.riderTotal}`} big />
                       <div style={{ font: `400 12.5px/1.45 ${FB}`, color: C.mistDim, marginTop: 6 }}>
@@ -3366,6 +3434,9 @@ function RiderReceipt() {
           <Row label="Your offer" value={`$${q.offer}`} />
           <Row label="Driver call-out fee" value={`$${q.calloutFee || CALLOUT_FEE}`} />
           <Row label="DRIFT booking fee" value={`$${q.driftFee || DRIFT_FEE}`} />
+          {q.discount > 0 && (
+            <Row label={`${q.promoCode} — first plow (−${Math.round((q.promoPct || 0) * 100)}%)`} value={`−$${q.discount}`} />
+          )}
           <div style={{ height: 1, background: C.line, margin: "8px 0" }} />
         </>}
         <Row label={q.offer != null ? "Total" : jtR.label} value={`$${q.riderTotal}`} big />

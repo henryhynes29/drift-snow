@@ -13,8 +13,8 @@
 // Entity: Drift Plowing LLC (Minnesota file no. 1680237400021, filed Oct 20, 2026).
 // ============================================================
 
-export const LEGAL_VERSION = "2026-11-08.1";
-export const LEGAL_UPDATED = "November 8, 2026";
+export const LEGAL_VERSION = "2026-11-23.1";
+export const LEGAL_UPDATED = "November 23, 2026";
 export const ENTITY = "Drift Plowing LLC, a Minnesota limited liability company"; // doing business as DRIFT
 export const EMAIL = "driftplowing@gmail.com";
 export const VENUE = "St. Louis County, Minnesota";
@@ -34,7 +34,7 @@ export const DOCS = {
         `When a Driver accepts your offer, the agreement to do that job — at the price you offered — is between you and that Driver. DRIFT is not a party to it and is not responsible for the Driver's performance, conduct, or work.`,
       ] },
       { h: "2. No insurance, no vetting, no guarantees", loud: true, p: [
-        `DRIFT DOES NOT PROVIDE INSURANCE OF ANY KIND for Customers, Drivers, property, vehicles, or jobs. DRIFT DOES NOT VERIFY OR REPRESENT THAT ANY DRIVER IS INSURED, LICENSED, BACKGROUND-CHECKED, BONDED, EXPERIENCED, OR QUALIFIED. You decide whether to book a Driver, and you're free to ask a Driver about their coverage directly.`,
+        `DRIFT DOES NOT PROVIDE INSURANCE OF ANY KIND for Customers, Drivers, property, vehicles, or jobs. Drivers self-certify to DRIFT that they carry commercial general liability insurance for their snow-removal work. THIS IS THE DRIVER'S OWN STATEMENT. DRIFT DOES NOT VERIFY IT, does not collect or review Drivers' policies, and DOES NOT REPRESENT OR GUARANTEE THAT ANY DRIVER IS ACTUALLY INSURED, LICENSED, BACKGROUND-CHECKED, BONDED, EXPERIENCED, OR QUALIFIED. You decide whether to book a Driver, and you're free to ask a Driver for proof of their coverage directly.`,
         `DRIFT does not guarantee that a Driver will be available, will accept, will arrive at any particular time, or will complete a job, or that any surface will be free of snow or ice. Arrival times are estimates. Plowing does not remove ice and can leave ridges, packed snow, and slippery surfaces, and snow can refreeze or drift back.`,
         `If DRIFT ever chooses to give a refund, credit, or goodwill payment, it is voluntary and at our sole discretion. It is not insurance, not an admission of fault or responsibility, and it doesn't obligate us to do the same again.`,
       ] },
@@ -153,7 +153,8 @@ export const DOCS = {
         `You provide and pay for your own vehicle, plow, fuel, maintenance, phone, and tools. You're responsible for keeping them safe, legal, registered, and in good repair.`,
       ] },
       { h: "7. Insurance is your responsibility — DRIFT provides none", loud: true, p: [
-        `DRIFT DOES NOT PROVIDE ANY INSURANCE FOR YOU, YOUR VEHICLE, YOUR EQUIPMENT, YOUR HELPERS, OR YOUR WORK, AND DRIFT DOES NOT TELL CUSTOMERS THAT YOU ARE INSURED. Whether to carry insurance, and what kind, is your decision and your responsibility.`,
+        `DRIFT DOES NOT PROVIDE ANY INSURANCE FOR YOU, YOUR VEHICLE, YOUR EQUIPMENT, YOUR HELPERS, OR YOUR WORK. Whether to carry insurance is your responsibility.`,
+        `WHEN YOU AGREE TO THIS AGREEMENT, YOU SELF-CERTIFY THAT YOU CARRY COMMERCIAL GENERAL LIABILITY INSURANCE COVERING YOUR SNOW-REMOVAL WORK, THAT IT IS CURRENT, AND THAT YOU WILL KEEP IT IN FORCE WHILE YOU TAKE JOBS ON DRIFT. This is your own certification. DRIFT does not verify it, does not collect or review your policy, and does not guarantee to Customers that it is accurate or in force. You agree to provide proof of coverage if DRIFT asks, and to stop taking jobs if your coverage lapses.`,
         `Be aware: many personal auto policies exclude snowplowing and business use, which can leave you personally responsible for an accident or damage. Talk to a licensed insurance agent about general liability and commercial auto coverage.`,
       ] },
       { h: "8. Laws and safety", p: [
@@ -256,7 +257,7 @@ export const DOCS = {
 // Plain-English summary shown on the customer's consent screen (above the checkbox).
 export const CUSTOMER_KEY_POINTS = [
   ["plowtruck", "DRIFT is an app, not a plow company", "Independent local operators do the work. They aren't DRIFT employees, and the job is between you and them."],
-  ["shield", "No insurance or vetting from DRIFT", "DRIFT doesn't insure anyone and doesn't check drivers' insurance, licenses, or backgrounds."],
+  ["shield", "No insurance or vetting from DRIFT", "DRIFT doesn't insure anyone. Drivers self-certify their own commercial coverage; DRIFT doesn't verify it, licenses, or backgrounds."],
   ["pin", "Mark your hazards", "You're responsible for your property. Anything you don't mark — wells, covers, edging, rocks — is at your risk."],
   ["warning", "You release DRIFT", "You accept the risks of winter property care and give up claims against DRIFT, including for its own ordinary negligence."],
   ["doc", "Disputes: individual arbitration", "No class actions. You can opt out of arbitration within 30 days."],
@@ -266,6 +267,7 @@ export const CUSTOMER_KEY_POINTS = [
 export const DRIVER_ACKS = [
   { id: "ic", title: "I run my own business", text: "I'm an independent contractor, not a DRIFT employee. DRIFT isn't my boss — I choose if, when, and how I work, and I can decline any job with no penalty. I'll get a 1099 and handle my own taxes." },
   { id: "ins", title: "DRIFT provides no insurance", text: "I'm solely responsible for my own liability, vehicle, equipment, and injury coverage. My personal auto policy may not cover plowing." },
+  { id: "comml", title: "I carry commercial liability insurance", text: "I certify that I hold commercial general liability insurance covering my snow-removal work, and that it is current. I'll keep it in force while I take jobs on DRIFT and provide proof on request." },
   { id: "risk", title: "I accept the risks and release DRIFT", text: "Plowing and winter driving are dangerous. I assume those risks and release DRIFT from claims — including claims based on DRIFT's own ordinary negligence." },
   { id: "indem", title: "I'll cover claims from my work", text: "I'll defend and indemnify DRIFT against claims arising from my work, my vehicle, my helpers, or damage and injuries I cause." },
   { id: "arb", title: "Disputes go to individual arbitration", text: "No class or collective actions. I can opt out of arbitration by email within 30 days." },

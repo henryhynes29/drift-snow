@@ -111,6 +111,12 @@ export async function createJobFromOrder(order, customerId) {
     instructions: p.instructions || null,
     quote: q,
     offer: q.offer ?? q.baseAmount ?? null,
+    // Promo + attribution. The server honors the discount off the offer once the
+    // add-promo migration adds these columns + trigger; the quote snapshot above
+    // also records promoCode/discount regardless.
+    promo_code: q.promoCode || null,
+    discount: q.discount || 0,
+    source: (() => { try { return localStorage.getItem("drift.source") || null; } catch { return null; } })(),
     address: p.addr || null,
     lat: center?.lat ?? null,
     lng: center?.lng ?? null,
